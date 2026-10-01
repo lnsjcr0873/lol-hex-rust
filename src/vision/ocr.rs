@@ -1,5 +1,4 @@
 use crate::data::loader::Database;
-use regex::Regex;
 use strsim::jaro_winkler;
 
 pub struct OcrScanner;
@@ -40,13 +39,40 @@ impl OcrScanner {
         false
     }
 
+    pub fn is_punctuation(c: char) -> bool {
+        c.is_whitespace()
+            || matches!(
+                c,
+                ':' | '：'
+                    | '-'
+                    | '!'
+                    | '！'
+                    | ','
+                    | '，'
+                    | '。'
+                    | '.'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '【'
+                    | '】'
+                    | '"'
+                    | '\''
+                    | '`'
+                    | '“'
+                    | '”'
+                    | '、'
+                    | '·'
+            )
+    }
+
     pub fn match_augments_from_texts(db: &Database, lines: &[String]) -> Vec<String> {
         let mut matched_ids = Vec::new();
-        let norm_re = Regex::new(r"[\s:：\-!！,，。.()\[\]【】\"'`“”、·]+").unwrap();
 
         for line in lines {
             let cleaned = Self::clean_chinese_text(line);
-            let norm = norm_re.replace_all(&cleaned, "").to_string();
+            let norm: String = cleaned.chars().filter(|c| !Self::is_punctuation(*c)).collect();
             if norm.is_empty() {
                 continue;
             }
@@ -64,7 +90,7 @@ impl OcrScanner {
             let mut best_score = 0.0;
 
             for (aid, aug) in &db.augments_map {
-                let aug_norm = norm_re.replace_all(&aug.name, "").to_string();
+                let aug_norm: String = aug.name.chars().filter(|c| !Self::is_punctuation(*c)).collect();
                 let score = jaro_winkler(&norm, &aug_norm);
                 if score > 0.82 && score > best_score {
                     best_score = score;

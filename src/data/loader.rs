@@ -75,7 +75,7 @@ impl Database {
                         // Normalize punctuation & spaces
                         let norm: String = name
                             .chars()
-                            .filter(|c| !c.is_whitespace() && !":：-!！,，。.()[]【】\"'`“”、·".contains(*c))
+                            .filter(|c| !crate::vision::OcrScanner::is_punctuation(*c))
                             .collect();
                         if !norm.is_empty() {
                             db.norm_name_to_augment_id.insert(norm, id.clone());
@@ -169,7 +169,7 @@ impl Database {
         }
         let norm: String = raw
             .chars()
-            .filter(|c| !c.is_whitespace() && !":：-!！,，。.()[]【】\"'`“”、·".contains(*c))
+            .filter(|c| !crate::vision::OcrScanner::is_punctuation(*c))
             .collect();
         if let Some(id) = self.norm_name_to_augment_id.get(&norm) {
             return Some(id.clone());
