@@ -23,6 +23,7 @@ impl LcuClient {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_millis(2500))
             .build()
             .unwrap_or_default();
 
@@ -278,9 +279,15 @@ impl LcuClient {
             }
         }
 
+        let mut page_payload = payload.clone();
+        if let Some(obj) = page_payload.as_object_mut() {
+            obj.insert("isCurrent".to_string(), Value::Bool(true));
+            obj.insert("current".to_string(), Value::Bool(true));
+        }
+
         if let Some(pid) = editable_page_id {
             let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages/{}", port, pid);
-            if let Ok(res) = self.client.put(&url).headers(headers.clone()).json(payload).send().await {
+            if let Ok(res) = self.client.put(&url).headers(headers.clone()).json(&page_payload).send().await {
                 if res.status().is_success() {
                     return true;
                 }
@@ -289,7 +296,7 @@ impl LcuClient {
 
         // Otherwise create new page
         let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages", port);
-        match self.client.post(&url).headers(headers).json(payload).send().await {
+        match self.client.post(&url).headers(headers).json(&page_payload).send().await {
             Ok(res) => res.status().is_success(),
             Err(_) => false,
         }

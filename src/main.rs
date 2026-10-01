@@ -284,4 +284,24 @@ mod tests {
         assert!(vp.width > 0);
         assert!(vp.height > 0);
     }
+
+    #[test]
+    fn test_lcu_credentials_parsing() {
+        use crate::lcu::LcuConnector;
+        // Test lockfile parsing
+        let lockfile_sample = "LeagueClient:1234:56789:my_secret_token_123:https";
+        let creds = LcuConnector::parse_lockfile(lockfile_sample);
+        assert!(creds.is_some());
+        let c = creds.unwrap();
+        assert_eq!(c.port, 56789);
+        assert_eq!(c.auth_token, "my_secret_token_123");
+
+        // Test commandline parsing
+        let cmdline_sample = "\"C:\\Riot\\LeagueClientUx.exe\" \"--app-port=51234\" \"--remoting-auth-token=token_abc_xyz\" \"--riotclient-auth-port=1234\"";
+        let cmd_creds = LcuConnector::parse_commandline(cmdline_sample);
+        assert!(cmd_creds.is_some());
+        let cc = cmd_creds.unwrap();
+        assert_eq!(cc.port, 51234);
+        assert_eq!(cc.auth_token, "token_abc_xyz");
+    }
 }

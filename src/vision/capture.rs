@@ -57,9 +57,9 @@ impl ScreenCapture {
     #[cfg(windows)]
     pub fn get_lol_window_rect() -> Option<ViewportRect> {
         use windows::core::w;
-        use windows::Win32::Foundation::{HWND, POINT, RECT};
+        use windows::Win32::Foundation::{HWND, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{
-            ClientToScreen, FindWindowW, GetClientRect, GetWindowRect, IsWindow, IsWindowVisible,
+            FindWindowW, GetWindowRect, IsWindow, IsWindowVisible,
         };
 
         unsafe {
@@ -69,22 +69,6 @@ impl ScreenCapture {
             }
 
             if hwnd != HWND::default() && IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool() {
-                let mut client_rect = RECT::default();
-                if GetClientRect(hwnd, &mut client_rect).is_ok() {
-                    let mut pt = POINT { x: client_rect.left, y: client_rect.top };
-                    let _ = ClientToScreen(hwnd, &mut pt);
-                    let w = client_rect.right - client_rect.left;
-                    let h = client_rect.bottom - client_rect.top;
-                    if w >= 640 && h >= 480 {
-                        return Some(ViewportRect {
-                            x: pt.x,
-                            y: pt.y,
-                            width: w,
-                            height: h,
-                        });
-                    }
-                }
-
                 let mut rect = RECT::default();
                 if GetWindowRect(hwnd, &mut rect).is_ok() {
                     let w = rect.right - rect.left;

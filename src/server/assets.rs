@@ -19,10 +19,12 @@ pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     match StaticAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            let content_type = HeaderValue::from_str(mime.as_ref())
+                .unwrap_or(HeaderValue::from_static("application/octet-stream"));
             Response::builder()
-                .header(header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap())
+                .header(header::CONTENT_TYPE, content_type)
                 .body(Body::from(content.data))
-                .unwrap()
+                .unwrap_or_else(|_| Response::new(Body::empty()))
         }
         None => {
             // Fallback to index.html for SPA routing
@@ -30,12 +32,12 @@ pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
                 Response::builder()
                     .header(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))
                     .body(Body::from(content.data))
-                    .unwrap()
+                    .unwrap_or_else(|_| Response::new(Body::empty()))
             } else {
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(Body::from("404 Not Found"))
-                    .unwrap()
+                    .unwrap_or_else(|_| Response::new(Body::empty()))
             }
         }
     }

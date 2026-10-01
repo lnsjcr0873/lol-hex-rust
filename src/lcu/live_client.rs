@@ -55,21 +55,37 @@ impl LiveClientDataReader {
 
         stats.is_in_game = true;
 
+        let mut active_summoner_name = String::new();
+        let mut active_riot_id = String::new();
+
         if let Some(active) = data.get("activePlayer") {
             stats.level = active.get("level").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
             stats.gold = active.get("currentGold").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            stats.hero_name = active.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            active_summoner_name = active.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            active_riot_id = active.get("riotId").and_then(|v| v.as_str()).unwrap_or("").to_string();
         }
 
         if let Some(players) = data.get("allPlayers").and_then(|v| v.as_array()) {
             let mut local_team = "";
             for p in players {
-                if let Some(active_name) = data.get("activePlayer").and_then(|a| a.get("summonerName")).and_then(|v| v.as_str()) {
-                    if p.get("summonerName").and_then(|v| v.as_str()) == Some(active_name) {
-                        local_team = p.get("team").and_then(|v| v.as_str()).unwrap_or("");
-                        if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
-                            for it in items {
-                                if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {
+                let p_summoner = p.get("summonerName").and_then(|v| v.as_str()).unwrap_or("");
+                let p_riot_id = p.get("riotId").and_then(|v| v.as_str()).unwrap_or("");
+                let is_local = (!active_summoner_name.is_empty() && p_summoner == active_summoner_name)
+                    || (!active_riot_id.is_empty() && p_riot_id == active_riot_id);
+
+                if is_local {
+                    local_team = p.get("team").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some(cname) = p.get("championName").and_then(|v| v.as_str()) {
+                        stats.hero_name = cname.to_string();
+                    } else if let Some(raw_cname) = p.get("rawChampionName").and_then(|v| v.as_str()) {
+                        let clean = raw_cname.split('_').last().unwrap_or(raw_cname);
+                        stats.hero_name = clean.to_string();
+                    }
+
+                    if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
+                        for it in items {
+                            if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {
+                                if iid > 0 {
                                     stats.current_items.push(iid.to_string());
                                 }
                             }

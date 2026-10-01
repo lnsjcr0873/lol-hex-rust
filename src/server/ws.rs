@@ -52,10 +52,14 @@ async fn handle_socket(mut socket: WebSocket, broadcaster: Arc<WsBroadcaster>) {
     loop {
         tokio::select! {
             msg = rx.recv() => {
-                if let Ok(text) = msg {
-                    if socket.send(Message::Text(text)).await.is_err() {
-                        break;
+                match msg {
+                    Ok(text) => {
+                        if socket.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
                     }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
             client_msg = socket.recv() => {

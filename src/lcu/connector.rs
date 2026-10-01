@@ -60,9 +60,52 @@ impl LcuConnector {
         None
     }
 
+    pub fn parse_commandline(cmd: &str) -> Option<LcuCredentials> {
+        let port_key = "--app-port=";
+        let token_key = "--remoting-auth-token=";
+
+        let port: u16 = if let Some(idx) = cmd.find(port_key) {
+            let rest = &cmd[idx + port_key.len()..];
+            let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            num_str.parse().ok()?
+        } else {
+            return None;
+        };
+
+        let auth_token: String = if let Some(idx) = cmd.find(token_key) {
+            let rest = &cmd[idx + token_key.len()..];
+            let token_str: String = rest
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+                .collect();
+            if token_str.is_empty() {
+                return None;
+            }
+            token_str
+        } else {
+            return None;
+        };
+
+        Some(LcuCredentials { port, auth_token })
+    }
+
     #[cfg(windows)]
     fn sniff_from_process_win32() -> Option<LcuCredentials> {
-        // Can be extended with Win32 ToolHelp32 process argument parsing if needed
+        use std::process::Command;
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"name = 'LeagueClientUx.exe'\" | Select-Object -ExpandProperty CommandLine",
+            ])
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let cmdline = String::from_utf8_lossy(&output.stdout);
+            return Self::parse_commandline(&cmdline);
+        }
         None
     }
 }

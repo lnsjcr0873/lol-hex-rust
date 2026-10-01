@@ -2,13 +2,19 @@ pub struct TextToSpeech;
 
 impl TextToSpeech {
     pub fn speak(text: &str) {
-        let message = text.to_string();
+        let clean_msg: String = text
+            .chars()
+            .filter(|c| !c.is_control() && *c != '$' && *c != '`')
+            .collect();
+        if clean_msg.trim().is_empty() {
+            return;
+        }
+
         #[cfg(windows)]
         std::thread::spawn(move || {
-            // Using PowerShell SAPI voice for lightweight, instant speech without heavy COM dependencies
             let script = format!(
                 "Add-Type -AssemblyName System.speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{}')",
-                message.replace('\'', "''")
+                clean_msg.replace('\'', "''")
             );
             let _ = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -16,7 +22,7 @@ impl TextToSpeech {
         });
         #[cfg(not(windows))]
         {
-            let _ = message;
+            let _ = clean_msg;
         }
     }
 }
