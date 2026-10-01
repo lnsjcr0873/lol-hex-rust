@@ -9,7 +9,7 @@ impl WindowTracker {
 
         unsafe {
             let fg = GetForegroundWindow();
-            if fg.0 == 0 {
+            if fg == HWND::default() {
                 return false;
             }
 

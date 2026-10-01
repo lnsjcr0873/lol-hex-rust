@@ -35,11 +35,11 @@ impl HotkeyManager {
             unsafe {
                 // HOTKEY_ID_1: '[' (VK_OEM_4 = 0xDB)
                 // HOTKEY_ID_2: ']' (VK_OEM_6 = 0xDD)
-                let _ = RegisterHotKey(HWND(0), 1, MOD_NOREPEAT, 0xDB);
-                let _ = RegisterHotKey(HWND(0), 2, MOD_NOREPEAT, 0xDD);
+                let _ = RegisterHotKey(HWND::default(), 1, MOD_NOREPEAT, 0xDB);
+                let _ = RegisterHotKey(HWND::default(), 2, MOD_NOREPEAT, 0xDD);
 
                 let mut msg = MSG::default();
-                while running.load(Ordering::SeqCst) && GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
+                while running.load(Ordering::SeqCst) && GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
                     if msg.message == WM_HOTKEY {
                         if msg.wParam.0 == 1 {
                             on_hotkey_bracket_left();
@@ -49,8 +49,8 @@ impl HotkeyManager {
                     }
                 }
 
-                let _ = UnregisterHotKey(HWND(0), 1);
-                let _ = UnregisterHotKey(HWND(0), 2);
+                let _ = UnregisterHotKey(HWND::default(), 1);
+                let _ = UnregisterHotKey(HWND::default(), 2);
             }
         });
     }

@@ -57,23 +57,24 @@ impl ScreenCapture {
     #[cfg(windows)]
     pub fn get_lol_window_rect() -> Option<ViewportRect> {
         use windows::core::w;
-        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Foundation::{HWND, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect, IsWindow, IsWindowVisible};
 
         unsafe {
-            let hwnd = FindWindowW(None, w!("League of Legends (TM) Client"));
-            if hwnd.0 != 0 && IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool() {
-                let mut rect = RECT::default();
-                if GetWindowRect(hwnd, &mut rect).is_ok() {
-                    let w = rect.right - rect.left;
-                    let h = rect.bottom - rect.top;
-                    if w >= 640 && h >= 480 {
-                        return Some(ViewportRect {
-                            x: rect.left,
-                            y: rect.top,
-                            width: w,
-                            height: h,
-                        });
+            if let Ok(hwnd) = FindWindowW(None, w!("League of Legends (TM) Client")) {
+                if hwnd != HWND::default() && IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool() {
+                    let mut rect = RECT::default();
+                    if GetWindowRect(hwnd, &mut rect).is_ok() {
+                        let w = rect.right - rect.left;
+                        let h = rect.bottom - rect.top;
+                        if w >= 640 && h >= 480 {
+                            return Some(ViewportRect {
+                                x: rect.left,
+                                y: rect.top,
+                                width: w,
+                                height: h,
+                            });
+                        }
                     }
                 }
             }
