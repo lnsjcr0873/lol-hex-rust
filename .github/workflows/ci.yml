@@ -1,0 +1,42 @@
+name: Rust CI & Release Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: Build & Test on Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo Check
+        run: cargo check --verbose
+
+      - name: Run Unit Tests
+        run: cargo test --verbose
+
+      - name: Build Release
+        run: cargo build --release --verbose
+
+      - name: Upload Release Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: HexBrain-Rust-Windows-x64
+          path: target/release/lol-hex-rust.exe

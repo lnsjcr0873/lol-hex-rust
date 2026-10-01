@@ -1,0 +1,2465 @@
+{
+  "archetypes": {
+    "AP_POKE_BURST": {
+      "id": "AP_POKE_BURST",
+      "name": "AP远程核弹流",
+      "badge": "🎯AP核弹",
+      "description": "超远距离高爆发或 Poke 消耗，依赖法强、法穿与残血斩杀",
+      "favored_tags": [
+        "AP",
+        "AP_BURST",
+        "MAGIC_PEN",
+        "MANA",
+        "SPELL_CRIT_SYNERGY"
+      ],
+      "forbidden_tags": [
+        "AD",
+        "ATTACK_SPEED",
+        "CRIT",
+        "LETHALITY",
+        "ON_HIT"
+      ],
+      "signature_items": [
+        "2508",
+        "3089",
+        "3135",
+        "4628",
+        "4645",
+        "6655"
+      ]
+    },
+    "AP_DOT_CONTROL": {
+      "id": "AP_DOT_CONTROL",
+      "name": "面具折磨控场流",
+      "badge": "🔥折磨控场",
+      "description": "持续技能灼烧、百分比最大生命值伤害与强力减速粘人",
+      "favored_tags": [
+        "AP",
+        "DOT_BURN",
+        "HEAVY_HP",
+        "PERCENT_MAX_HP",
+        "SLOW_CC"
+      ],
+      "forbidden_tags": [
+        "CRIT",
+        "LETHALITY",
+        "RAW_AD"
+      ],
+      "signature_items": [
+        "2503",
+        "3116",
+        "3151",
+        "3152",
+        "6657"
+      ]
+    },
+    "CRIT_MARKSMAN": {
+      "id": "CRIT_MARKSMAN",
+      "name": "传统暴击走A流",
+      "badge": "🏹暴击走A",
+      "description": "依靠高暴击率、暴击伤害与拉扯移速，打出持续高物理爆发",
+      "favored_tags": [
+        "AD",
+        "ARMOR_PEN",
+        "ATTACK_SPEED",
+        "CRIT",
+        "INFINITY"
+      ],
+      "forbidden_tags": [
+        "AP",
+        "DOT_BURN",
+        "HEAVY_HP",
+        "LETHALITY"
+      ],
+      "signature_items": [
+        "3031",
+        "3036",
+        "3046",
+        "3094",
+        "3508",
+        "6673",
+        "6675"
+      ]
+    },
+    "ON_HIT_ATTACK_SPEED": {
+      "id": "ON_HIT_ATTACK_SPEED",
+      "name": "攻速特效机关枪流",
+      "badge": "⚡特效攻速",
+      "description": "极致攻击速度配合百分比最大生命值与双抗混合穿透特效",
+      "favored_tags": [
+        "ATTACK_SPEED",
+        "DOUBLE_STRIKE",
+        "HYBRID",
+        "ON_HIT",
+        "PERCENT_CURRENT_HP"
+      ],
+      "forbidden_tags": [
+        "AP_BURST",
+        "LETHALITY"
+      ],
+      "signature_items": [
+        "3085",
+        "3091",
+        "3124",
+        "3153",
+        "3302",
+        "6672"
+      ]
+    },
+    "LETHALITY_ASSASSIN": {
+      "id": "LETHALITY_ASSASSIN",
+      "name": "穿甲刺客秒杀流",
+      "badge": "🗡️暗影穿甲",
+      "description": "极限固定穿透与技能急速，一套技能瞬间蒸发后排脆皮",
+      "favored_tags": [
+        "ABILITY_HASTE",
+        "AD",
+        "ARMOR_PEN",
+        "EXECUTE",
+        "LETHALITY"
+      ],
+      "forbidden_tags": [
+        "AP",
+        "ATTACK_SPEED",
+        "CRIT",
+        "HEAVY_HP"
+      ],
+      "signature_items": [
+        "3142",
+        "3814",
+        "6676",
+        "6692",
+        "6694",
+        "6695",
+        "6696"
+      ]
+    },
+    "BRUISER_FIGHTER": {
+      "id": "BRUISER_FIGHTER",
+      "name": "战士重装半肉流",
+      "badge": "⚔️重装死斗",
+      "description": "兼顾攻击力、血量、减CD与残血护盾吸血，能抗能打持续缠斗",
+      "favored_tags": [
+        "ABILITY_HASTE",
+        "AD",
+        "ARMOR_SHRED",
+        "HEAVY_HP",
+        "LIFELINE_SHIELD",
+        "SPELL_BLADE"
+      ],
+      "forbidden_tags": [
+        "AP_BURST",
+        "MAGIC_PEN"
+      ],
+      "signature_items": [
+        "3053",
+        "3074",
+        "3078",
+        "3156",
+        "3748",
+        "6333",
+        "6653"
+      ]
+    },
+    "PURE_TANK": {
+      "id": "PURE_TANK",
+      "name": "纯肉不灭铁王座",
+      "badge": "🛡️巨人体魄",
+      "description": "极致堆叠生命值、护甲魔抗与反伤，充当坚不可摧的团队前排",
+      "favored_tags": [
+        "ARMOR",
+        "HEAVY_HP",
+        "HP_STACK",
+        "IMMOLATE_BURN",
+        "MAGIC_RESIST"
+      ],
+      "forbidden_tags": [
+        "AP_BURST",
+        "ATTACK_SPEED",
+        "CRIT",
+        "LETHALITY"
+      ],
+      "signature_items": [
+        "3068",
+        "3075",
+        "3083",
+        "3084",
+        "3110",
+        "3143",
+        "4401",
+        "6664",
+        "8020"
+      ]
+    },
+    "ENCHANTER_SUPPORT": {
+      "id": "ENCHANTER_SUPPORT",
+      "name": "增益软辅护盾流",
+      "badge": "✨救赎圣音",
+      "description": "强化护盾、群体治疗、救赎加速与驱散，极致保护后排C位",
+      "favored_tags": [
+        "ABILITY_HASTE",
+        "AP",
+        "BUFF_AP_HASTE",
+        "BUFF_ON_HIT",
+        "CHAIN_HEAL",
+        "GLOBAL_HEAL",
+        "HEAL_SHIELD_BOOST",
+        "MANA_REGEN"
+      ],
+      "forbidden_tags": [
+        "CRIT",
+        "LETHALITY",
+        "ON_HIT",
+        "RAW_AD"
+      ],
+      "signature_items": [
+        "3011",
+        "3107",
+        "3190",
+        "3222",
+        "3504",
+        "6616",
+        "6645"
+      ]
+    }
+  },
+  "famous_multi_archetype_heroes": {
+    "145": {
+      "default": "AP_POKE_BURST",
+      "supported": [
+        "AP_POKE_BURST",
+        "CRIT_MARKSMAN",
+        "ON_HIT_ATTACK_SPEED"
+      ],
+      "ap_trigger_items": [
+        "3004",
+        "3089",
+        "4645",
+        "6655",
+        "6657"
+      ],
+      "crit_trigger_items": [
+        "3031",
+        "3036",
+        "3094",
+        "6675"
+      ],
+      "on_hit_trigger_items": [
+        "3124",
+        "3153",
+        "3302",
+        "6672"
+      ]
+    },
+    "110": {
+      "default": "LETHALITY_ASSASSIN",
+      "supported": [
+        "LETHALITY_ASSASSIN",
+        "ON_HIT_ATTACK_SPEED",
+        "AP_POKE_BURST"
+      ],
+      "ap_trigger_items": [
+        "3089",
+        "3115",
+        "3152",
+        "4645"
+      ],
+      "on_hit_trigger_items": [
+        "3085",
+        "3124",
+        "3153",
+        "3302"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "6692",
+        "6694",
+        "6696"
+      ]
+    },
+    "96": {
+      "default": "ON_HIT_ATTACK_SPEED",
+      "supported": [
+        "ON_HIT_ATTACK_SPEED",
+        "AP_POKE_BURST"
+      ],
+      "ap_trigger_items": [
+        "3003",
+        "3089",
+        "3116",
+        "3151",
+        "6657"
+      ],
+      "on_hit_trigger_items": [
+        "3085",
+        "3124",
+        "3153",
+        "3302"
+      ]
+    },
+    "14": {
+      "default": "PURE_TANK",
+      "supported": [
+        "PURE_TANK",
+        "LETHALITY_ASSASSIN"
+      ],
+      "tank_trigger_items": [
+        "3068",
+        "3083",
+        "3084",
+        "3748"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "3814",
+        "6692",
+        "6695"
+      ]
+    },
+    "254": {
+      "default": "BRUISER_FIGHTER",
+      "supported": [
+        "BRUISER_FIGHTER",
+        "LETHALITY_ASSASSIN"
+      ],
+      "bruiser_trigger_items": [
+        "3053",
+        "3078",
+        "6333",
+        "6653"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "6676",
+        "6695",
+        "6696"
+      ]
+    },
+    "64": {
+      "default": "BRUISER_FIGHTER",
+      "supported": [
+        "BRUISER_FIGHTER",
+        "LETHALITY_ASSASSIN"
+      ],
+      "bruiser_trigger_items": [
+        "3053",
+        "3074",
+        "6333",
+        "6653"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "6676",
+        "6695",
+        "6696"
+      ]
+    },
+    "17": {
+      "default": "AP_DOT_CONTROL",
+      "supported": [
+        "AP_DOT_CONTROL",
+        "ON_HIT_ATTACK_SPEED"
+      ],
+      "dot_trigger_items": [
+        "2503",
+        "3116",
+        "3151",
+        "6657"
+      ],
+      "on_hit_trigger_items": [
+        "3100",
+        "3115",
+        "3124"
+      ]
+    },
+    "21": {
+      "default": "CRIT_MARKSMAN",
+      "supported": [
+        "CRIT_MARKSMAN",
+        "LETHALITY_ASSASSIN",
+        "AP_DOT_CONTROL"
+      ],
+      "crit_trigger_items": [
+        "3031",
+        "3036",
+        "3094",
+        "6676"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "6692",
+        "6694",
+        "6696"
+      ],
+      "ap_trigger_items": [
+        "3089",
+        "3151",
+        "4645",
+        "6657"
+      ]
+    },
+    "15": {
+      "default": "CRIT_MARKSMAN",
+      "supported": [
+        "CRIT_MARKSMAN",
+        "LETHALITY_ASSASSIN"
+      ],
+      "crit_trigger_items": [
+        "3031",
+        "3036",
+        "3046",
+        "3508"
+      ],
+      "lethality_trigger_items": [
+        "3142",
+        "3508",
+        "6692",
+        "6696"
+      ]
+    },
+    "81": {
+      "default": "BRUISER_FIGHTER",
+      "supported": [
+        "BRUISER_FIGHTER",
+        "CRIT_MARKSMAN",
+        "AP_POKE_BURST"
+      ],
+      "bruiser_trigger_items": [
+        "3004",
+        "3078",
+        "6692"
+      ],
+      "crit_trigger_items": [
+        "3036",
+        "3508",
+        "6675"
+      ],
+      "ap_trigger_items": [
+        "3089",
+        "3100",
+        "4645"
+      ]
+    },
+    "54": {
+      "default": "PURE_TANK",
+      "supported": [
+        "PURE_TANK",
+        "AP_POKE_BURST"
+      ],
+      "tank_trigger_items": [
+        "3068",
+        "3084",
+        "3110",
+        "4401"
+      ],
+      "ap_trigger_items": [
+        "2508",
+        "3089",
+        "4645",
+        "6655"
+      ]
+    },
+    "102": {
+      "default": "BRUISER_FIGHTER",
+      "supported": [
+        "BRUISER_FIGHTER",
+        "AP_POKE_BURST"
+      ],
+      "ad_trigger_items": [
+        "3053",
+        "3078",
+        "3153",
+        "3748"
+      ],
+      "ap_trigger_items": [
+        "3089",
+        "3115",
+        "3152",
+        "4645"
+      ]
+    },
+    "57": {
+      "default": "PURE_TANK",
+      "supported": [
+        "PURE_TANK",
+        "AP_DOT_CONTROL"
+      ],
+      "tank_trigger_items": [
+        "3068",
+        "3075",
+        "3084",
+        "8020"
+      ],
+      "ap_trigger_items": [
+        "2503",
+        "3116",
+        "3151",
+        "6657"
+      ]
+    }
+  },
+  "champion_tactical_traits": {
+    "DrMundo": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC_PHYSICAL_HYBRID",
+      "name": "祖安狂人"
+    },
+    "Soraka": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "众星之子"
+    },
+    "Aatrox": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "暗裔剑魔"
+    },
+    "Vladimir": {
+      "traits": [
+        "AP_BURST",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "猩红收割者"
+    },
+    "Warwick": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "HYBRID",
+      "name": "祖安怒兽"
+    },
+    "Yuumi": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "魔法猫咪"
+    },
+    "Kayn": {
+      "traits": [
+        "ASSASSIN_BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "影流之镰"
+    },
+    "Swain": {
+      "traits": [
+        "AP_BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "诺克萨斯统领"
+    },
+    "Sylas": {
+      "traits": [
+        "AP_BURST",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "解脱者"
+    },
+    "Nami": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "唤潮鲛姬"
+    },
+    "Sona": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "琴瑟仙女"
+    },
+    "Illaoi": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "海兽祭司"
+    },
+    "Trundle": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "巨魔之王"
+    },
+    "Volibear": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "HYBRID",
+      "name": "不灭狂雷"
+    },
+    "Zac": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "生化魔人"
+    },
+    "Olaf": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "狂战士"
+    },
+    "Briar": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "狂厄蔷薇"
+    },
+    "Malphite": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "熔岩巨兽"
+    },
+    "Ornn": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "山隐之焰"
+    },
+    "Sion": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "PHYSICAL",
+      "name": "亡灵战神"
+    },
+    "Maokai": {
+      "traits": [
+        "HARD_CC",
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "扭曲树精"
+    },
+    "Leona": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "曙光女神"
+    },
+    "Nautilus": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "深海泰坦"
+    },
+    "TahmKench": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "河流之王"
+    },
+    "Rammus": {
+      "traits": [
+        "ARMOR_STACK",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "披甲龙龟"
+    },
+    "Sejuani": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "北地之怒"
+    },
+    "Shen": {
+      "traits": [
+        "SHIELD",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "暮光之眼"
+    },
+    "Singed": {
+      "traits": [
+        "AP_DOT",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "炼金术士"
+    },
+    "Amumu": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "殇之木乃伊"
+    },
+    "Alistar": {
+      "traits": [
+        "HARD_CC",
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "牛头酋长"
+    },
+    "Poppy": {
+      "traits": [
+        "ANTI_DASH",
+        "SUPER_TANK"
+      ],
+      "damage": "PHYSICAL",
+      "name": "圣锤之毅"
+    },
+    "Taric": {
+      "traits": [
+        "HIGH_HEAL",
+        "IMMUNITY",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "瓦洛兰之盾"
+    },
+    "K'Sante": {
+      "traits": [
+        "BRUISER",
+        "SUPER_TANK"
+      ],
+      "damage": "HYBRID",
+      "name": "纳祖芒荣耀"
+    },
+    "Zed": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "影流之主"
+    },
+    "Talon": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "刀锋之影"
+    },
+    "Rengar": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "傲之追猎者"
+    },
+    "KhaZix": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "虚空掠夺者"
+    },
+    "Pyke": {
+      "traits": [
+        "BURST_ASSASSIN",
+        "EXECUTE"
+      ],
+      "damage": "PHYSICAL",
+      "name": "血港鬼影"
+    },
+    "Akali": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "离群之刺"
+    },
+    "Evelynn": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "痛苦之拥"
+    },
+    "Leblanc": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "诡术妖姬"
+    },
+    "Qiyana": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "元素女皇"
+    },
+    "Fizz": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "潮汐海灵"
+    },
+    "Katarina": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "HYBRID",
+      "name": "不祥之刃"
+    },
+    "Naafiri": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "百裂冥犬"
+    },
+    "Shaco": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "HYBRID",
+      "name": "恶魔小丑"
+    },
+    "Nocturne": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "永恒梦魇"
+    },
+    "Diana": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "皎月女神"
+    },
+    "Ekko": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "时间刺客"
+    },
+    "Yone": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "HYBRID",
+      "name": "封魔剑魂"
+    },
+    "Akshan": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "影哨"
+    },
+    "Kassadin": {
+      "traits": [
+        "BURST_ASSASSIN"
+      ],
+      "damage": "MAGIC",
+      "name": "虚空行者"
+    },
+    "ChoGath": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "虚空恐惧"
+    },
+    "Braum": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "弗雷尔卓德之心"
+    },
+    "Nasus": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "PHYSICAL",
+      "name": "沙漠死神"
+    },
+    "Fiora": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "无双剑姬"
+    },
+    "Gwen": {
+      "traits": [
+        "AP_BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "灵罗娃娃"
+    },
+    "Milio": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "明烛"
+    },
+    "Senna": {
+      "traits": [
+        "HIGH_HEAL",
+        "MARKSMAN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "涤魂圣枪"
+    },
+    "Samira": {
+      "traits": [
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "沙漠玫瑰"
+    },
+    "Udyr": {
+      "traits": [
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "HYBRID",
+      "name": "兽灵行者"
+    },
+    "Galio": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "正义巨像"
+    },
+    "Skarner": {
+      "traits": [
+        "HARD_CC",
+        "SUPER_TANK"
+      ],
+      "damage": "HYBRID",
+      "name": "上古领主"
+    },
+    "Mordekaiser": {
+      "traits": [
+        "AP_BRUISER",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "铁铠冥魂"
+    },
+    "Rakan": {
+      "traits": [
+        "ENCHANTER",
+        "HIGH_HEAL"
+      ],
+      "damage": "MAGIC",
+      "name": "幻翎"
+    },
+    "Viego": {
+      "traits": [
+        "BURST_ASSASSIN",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "破败之王"
+    },
+    "BelVeth": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "虚空女皇"
+    },
+    "Garen": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "PHYSICAL",
+      "name": "德玛西亚之力"
+    },
+    "Darius": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "诺克萨斯之手"
+    },
+    "MasterYi": {
+      "traits": [
+        "BURST_ASSASSIN",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "无极剑圣"
+    },
+    "Ambessa": {
+      "traits": [
+        "BRUISER",
+        "BURST_ASSASSIN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "铁血狼母"
+    },
+    "Aurora": {
+      "traits": [
+        "AP_BURST"
+      ],
+      "damage": "MAGIC",
+      "name": "奥萝拉"
+    },
+    "Mel": {
+      "traits": [
+        "AP_BURST"
+      ],
+      "damage": "MAGIC",
+      "name": "梅尔"
+    },
+    "RenataGlasc": {
+      "traits": [
+        "ENCHANTER",
+        "HARD_CC"
+      ],
+      "damage": "MAGIC",
+      "name": "炼金男爵"
+    },
+    "Renata": {
+      "traits": [
+        "ENCHANTER",
+        "HARD_CC"
+      ],
+      "damage": "MAGIC",
+      "name": "炼金男爵"
+    },
+    "Smolder": {
+      "traits": [
+        "MARKSMAN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "斯莫德"
+    },
+    "Hwei": {
+      "traits": [
+        "AP_BURST"
+      ],
+      "damage": "MAGIC",
+      "name": "异画师"
+    },
+    "Nilah": {
+      "traits": [
+        "HIGH_HEAL",
+        "MARKSMAN"
+      ],
+      "damage": "PHYSICAL",
+      "name": "不羁之悦"
+    },
+    "KSante": {
+      "traits": [
+        "BRUISER",
+        "SUPER_TANK"
+      ],
+      "damage": "HYBRID",
+      "name": "纳祖芒荣耀"
+    },
+    "Nunu": {
+      "traits": [
+        "HARD_CC",
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "雪原双子"
+    },
+    "NunuWillump": {
+      "traits": [
+        "HARD_CC",
+        "HIGH_HEAL",
+        "SUPER_TANK"
+      ],
+      "damage": "MAGIC",
+      "name": "雪原双子"
+    },
+    "MonkeyKing": {
+      "traits": [
+        "BRUISER"
+      ],
+      "damage": "PHYSICAL",
+      "name": "齐天大圣"
+    },
+    "Wukong": {
+      "traits": [
+        "BRUISER"
+      ],
+      "damage": "PHYSICAL",
+      "name": "齐天大圣"
+    },
+    "XinZhao": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "德邦总管"
+    },
+    "JarvanIV": {
+      "traits": [
+        "BRUISER",
+        "HARD_CC"
+      ],
+      "damage": "PHYSICAL",
+      "name": "德玛西亚皇子"
+    },
+    "LeeSin": {
+      "traits": [
+        "BRUISER",
+        "HIGH_HEAL"
+      ],
+      "damage": "PHYSICAL",
+      "name": "盲僧"
+    }
+  },
+  "counter_solutions": {
+    "ANTI_HEAL": {
+      "CRIT_MARKSMAN": {
+        "items": [
+          "3033"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "敌方存在高额回复/奶妈！【凡性的提醒】提供暴击、穿甲与 40% 永久重伤，克制核心！"
+      },
+      "ON_HIT_ATTACK_SPEED": {
+        "items": [
+          "3033",
+          "6609"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "敌方续航回复过高！优先补出重伤，抑制敌方残血吸血对拼！"
+      },
+      "LETHALITY_ASSASSIN": {
+        "items": [
+          "6609"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "敌方高回复英雄阻碍秒杀！【炼金朋克链锯剑】提供攻击力、急速与致死重伤！"
+      },
+      "BRUISER_FIGHTER": {
+        "items": [
+          "6609",
+          "3075"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "近身肉搏急需重伤压制！有效限制敌方回血怪持续吸血！"
+      },
+      "AP_POKE_BURST": {
+        "items": [
+          "3165"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "敌方强力回复阵容！【莫雷洛秘典】提供法强、法穿与重伤，阻止敌方脱战回血！"
+      },
+      "AP_DOT_CONTROL": {
+        "items": [
+          "3165"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "持续灼烧完美触发长时间重伤！【莫雷洛秘典】彻底废除敌方群抬血！"
+      },
+      "ENCHANTER_SUPPORT": {
+        "items": [
+          "3165"
+        ],
+        "badge": "🚨急需重伤",
+        "reason": "敌方高额回复！【莫雷洛秘典】提供法强、技能急速与团队重伤压制！"
+      },
+      "PURE_TANK": {
+        "items": [
+          "3075"
+        ],
+        "badge": "🚨反伤重伤",
+        "reason": "敌方高回血/普攻吸血！【荆棘之甲】提供巨额护甲与挨打反伤重伤！"
+      }
+    },
+    "ANTI_TANK_ARMOR": {
+      "CRIT_MARKSMAN": {
+        "items": [
+          "3036",
+          "3153"
+        ],
+        "badge": "⚔️巨杀破甲",
+        "reason": "敌方前排护甲血量极高！【多米尼克领主的问候】提供 40% 穿甲与巨杀被动！"
+      },
+      "ON_HIT_ATTACK_SPEED": {
+        "items": [
+          "3153",
+          "3302"
+        ],
+        "badge": "⚔️切肉利器",
+        "reason": "敌方多纯肉前排！【破败+界弓】百分比当前生命值伤害切肉如割草！"
+      },
+      "LETHALITY_ASSASSIN": {
+        "items": [
+          "6692",
+          "6653"
+        ],
+        "badge": "⚔️百分比破甲",
+        "reason": "固定穿甲对高护甲衰减严重！必须出【赛瑞尔达的怨恨】补充百分比护甲穿透！"
+      },
+      "BRUISER_FIGHTER": {
+        "items": [
+          "6653",
+          "3748"
+        ],
+        "badge": "⚔️碎甲前锋",
+        "reason": "【黑色切割者】最高削减敌方 30% 全队护甲，克制多坦克集群！"
+      }
+    },
+    "ANTI_TANK_MR": {
+      "AP_POKE_BURST": {
+        "items": [
+          "3135"
+        ],
+        "badge": "🧙法穿破魔",
+        "reason": "敌方已出魔抗装备！【虚空之杖】40% 深度法穿，让爆发伤害不打折扣！"
+      },
+      "AP_DOT_CONTROL": {
+        "items": [
+          "3135",
+          "8020"
+        ],
+        "badge": "🧙法穿破魔",
+        "reason": "敌方魔抗堆叠过高！【虚空之杖】是法系对抗多魔抗肉装的唯一解！"
+      },
+      "ENCHANTER_SUPPORT": {
+        "items": [
+          "8020",
+          "3135"
+        ],
+        "badge": "🧙辅助破魔",
+        "reason": "【深渊面具】范围削弱敌方魔抗，显著放大己方法系队友输出！"
+      },
+      "PURE_TANK": {
+        "items": [
+          "8020"
+        ],
+        "badge": "🧙削魔光环",
+        "reason": "【深渊面具】范围削弱敌方 25 魔抗，同时大幅增强自身与队友法术伤害！"
+      }
+    },
+    "ALL_AD_DEFENSE": {
+      "CRIT_MARKSMAN": {
+        "items": [
+          "3026",
+          "6333"
+        ],
+        "badge": "🛡️克制菜刀队",
+        "reason": "敌方全物理阵容！【守护天使/死亡之舞】提供高额护甲与复活，容错率拉满！"
+      },
+      "ON_HIT_ATTACK_SPEED": {
+        "items": [
+          "3026",
+          "6333"
+        ],
+        "badge": "🛡️克制菜刀队",
+        "reason": "敌方全物理阵容！【守护天使/死亡之舞】提供高额护甲与容错，防止被集火秒杀！"
+      },
+      "LETHALITY_ASSASSIN": {
+        "items": [
+          "6333",
+          "3026"
+        ],
+        "badge": "🛡️克制菜刀队",
+        "reason": "敌方纯 AD 菜刀队！【死亡之舞】流血延缓与击杀回血，团战无限收割！"
+      },
+      "BRUISER_FIGHTER": {
+        "items": [
+          "6333",
+          "3110",
+          "3075"
+        ],
+        "badge": "🛡️物理铁壁",
+        "reason": "敌方为纯 AD 阵容！堆叠护甲收益极高，彻底碾压敌方菜刀队！"
+      },
+      "AP_POKE_BURST": {
+        "items": [
+          "3157"
+        ],
+        "badge": "🛡️护甲金身",
+        "reason": "敌方全物理输出！【中娅沙漏】提供高额护甲与 2.5 秒金身凝滞，物理刺客绝望！"
+      },
+      "AP_DOT_CONTROL": {
+        "items": [
+          "3157",
+          "3110"
+        ],
+        "badge": "🛡️护甲金身",
+        "reason": "敌方全 AD 无脑堆护甲即可！沙漏金身规避第一波爆发！"
+      },
+      "ENCHANTER_SUPPORT": {
+        "items": [
+          "3190",
+          "3157",
+          "3110"
+        ],
+        "badge": "🛡️军团铁壁",
+        "reason": "敌方纯物理菜刀队！【鸟盾/沙漏】提供护甲与团队护盾，防止进场蒸发！"
+      },
+      "PURE_TANK": {
+        "items": [
+          "3143",
+          "3110",
+          "3075",
+          "3068"
+        ],
+        "badge": "🛡️物理铁壁",
+        "reason": "敌方全 AD 阵容！【兰顿之兆+冰心+反甲】减攻速、降暴伤、反伤护甲拉满，站立不败！"
+      }
+    },
+    "ALL_AP_DEFENSE": {
+      "CRIT_MARKSMAN": {
+        "items": [
+          "3156",
+          "3139"
+        ],
+        "badge": "🔮抵御轰炸",
+        "reason": "敌方全 AP 魔法阵容！【饮魔刀】魔法护盾 + 【水银弯刀】解控魔抗双保险！"
+      },
+      "ON_HIT_ATTACK_SPEED": {
+        "items": [
+          "3091",
+          "3156",
+          "3139"
+        ],
+        "badge": "🔮攻速魔抗",
+        "reason": "敌方全法系轰炸！【智慧末刃+饮魔刀】既提供高额魔抗与法术护盾，又大幅强化攻速特效输出！"
+      },
+      "LETHALITY_ASSASSIN": {
+        "items": [
+          "3156",
+          "3814"
+        ],
+        "badge": "🔮抵御轰炸",
+        "reason": "敌方全法系输出！【饮魔刀】救命法术护盾，防止进场瞬间被秒！"
+      },
+      "BRUISER_FIGHTER": {
+        "items": [
+          "3156",
+          "4401",
+          "3065"
+        ],
+        "badge": "🔮魔法屏障",
+        "reason": "敌方全法系阵容！【自然之力+饮魔刀】获得巨额魔抗与移速，直接顶着技能冲阵！"
+      },
+      "AP_POKE_BURST": {
+        "items": [
+          "3102",
+          "8020"
+        ],
+        "badge": "🔮法术护盾",
+        "reason": "敌方全 AP 阵容！【女妖面纱】抵挡关键开团法术，提升魔抗对拼优势！"
+      },
+      "AP_DOT_CONTROL": {
+        "items": [
+          "8020",
+          "3102"
+        ],
+        "badge": "🔮法抗屏障",
+        "reason": "敌方纯法系！【深渊面具】既加魔抗又削敌方魔抗，一石二鸟！"
+      },
+      "ENCHANTER_SUPPORT": {
+        "items": [
+          "3190",
+          "3222",
+          "3102"
+        ],
+        "badge": "🔮魔法护盾",
+        "reason": "敌方全 AP 轰炸！【鸟盾/坩埚】解控与群体魔抗护盾，全面保护队友！"
+      },
+      "PURE_TANK": {
+        "items": [
+          "6665",
+          "4401",
+          "8020",
+          "3065"
+        ],
+        "badge": "🔮魔抗堡垒",
+        "reason": "敌方为全 AP 阵容！【败魔】充能魔法护盾 + 【自然之力】受到法伤叠移速魔抗，肉到绝望！"
+      }
+    },
+    "ANTI_BURST_ASSASSIN": {
+      "CRIT_MARKSMAN": {
+        "items": [
+          "6673",
+          "3026"
+        ],
+        "badge": "🛡️防秒救命",
+        "reason": "敌方高爆发刺客突脸！【不朽盾弓】提供残血巨额护盾，防止瞬间蒸发！"
+      },
+      "ON_HIT_ATTACK_SPEED": {
+        "items": [
+          "6673",
+          "3026",
+          "6333"
+        ],
+        "badge": "🛡️防秒救命",
+        "reason": "敌方刺客高危突脸！【不朽盾弓/复活甲】残血高额护盾与复活，大幅提升生存率！"
+      },
+      "AP_POKE_BURST": {
+        "items": [
+          "3157"
+        ],
+        "badge": "⏳凝滞保命",
+        "reason": "敌方刺客高危威胁！【中娅沙漏】规避劫、狮子狗、男刀等致命大招！"
+      },
+      "AP_DOT_CONTROL": {
+        "items": [
+          "3157"
+        ],
+        "badge": "⏳凝滞保命",
+        "reason": "敌方刺客突脸！【中娅沙漏】2.5秒无敌规避爆发，为持续灼烧争取生机！"
+      },
+      "LETHALITY_ASSASSIN": {
+        "items": [
+          "3814",
+          "6333"
+        ],
+        "badge": "🛡️免控免秒",
+        "reason": "【夜之锋刃】法术护盾挡先手技能，【死亡之舞】延缓爆发伤害！"
+      },
+      "BRUISER_FIGHTER": {
+        "items": [
+          "3053",
+          "6333"
+        ],
+        "badge": "🛡️血怒救命",
+        "reason": "敌方高爆发刺客！【血手+死舞】残血触发巨额衰减护盾与流血延缓，团战绝不被秒！"
+      },
+      "ENCHANTER_SUPPORT": {
+        "items": [
+          "3157",
+          "3190"
+        ],
+        "badge": "⏳凝滞保命",
+        "reason": "敌方刺客高危突脸！【中娅沙漏/鸟盾】保护自身并保护残血队友！"
+      },
+      "PURE_TANK": {
+        "items": [
+          "3143",
+          "6665"
+        ],
+        "badge": "🛡️坚实壁垒",
+        "reason": "敌方刺客高爆发！【兰顿之兆/败魔】高额减伤与护盾，为团队抵挡第一波刺杀！"
+      }
+    }
+  },
+  "item_feature_tags": {
+    "3031": [
+      "AD",
+      "BURST",
+      "CORE_DAMAGE",
+      "CRIT",
+      "INFINITY"
+    ],
+    "3036": [
+      "AD",
+      "ANTI_TANK",
+      "ARMOR_PEN",
+      "CRIT"
+    ],
+    "6676": [
+      "AD",
+      "CRIT",
+      "EXECUTE",
+      "LETHALITY"
+    ],
+    "3094": [
+      "ATTACK_SPEED",
+      "BURST",
+      "CRIT",
+      "RANGE"
+    ],
+    "3046": [
+      "ATTACK_SPEED",
+      "CRIT",
+      "MOVE_SPEED"
+    ],
+    "3508": [
+      "ABILITY_HASTE",
+      "AD",
+      "CRIT",
+      "MANA",
+      "SPELL_BLADE"
+    ],
+    "6673": [
+      "AD",
+      "CRIT",
+      "LIFESTEAL",
+      "SHIELD",
+      "SURVIVAL"
+    ],
+    "6675": [
+      "ABILITY_HASTE",
+      "ATTACK_SPEED",
+      "COOLDOWN_REFUND",
+      "CRIT"
+    ],
+    "3085": [
+      "AOE",
+      "ATTACK_SPEED",
+      "CRIT",
+      "ON_HIT"
+    ],
+    "3033": [
+      "AD",
+      "ARMOR_PEN",
+      "CRIT",
+      "GRIEVOUS_WOUNDS"
+    ],
+    "3139": [
+      "AD",
+      "CLEANSE",
+      "CRIT",
+      "MAGIC_RESIST"
+    ],
+    "3095": [
+      "AD",
+      "ATTACK_SPEED",
+      "BURST",
+      "CRIT",
+      "MOVE_SPEED"
+    ],
+    "3153": [
+      "AD",
+      "ANTI_TANK",
+      "ATTACK_SPEED",
+      "LIFESTEAL",
+      "ON_HIT",
+      "PERCENT_CURRENT_HP"
+    ],
+    "3124": [
+      "ATTACK_SPEED",
+      "DOUBLE_STRIKE",
+      "HYBRID",
+      "ON_HIT"
+    ],
+    "6672": [
+      "AD",
+      "ATTACK_SPEED",
+      "EXECUTE_BURST",
+      "ON_HIT"
+    ],
+    "3302": [
+      "AD",
+      "ATTACK_SPEED",
+      "HYBRID_PEN",
+      "ON_HIT"
+    ],
+    "3091": [
+      "ATTACK_SPEED",
+      "MAGIC_RESIST",
+      "MOVE_SPEED",
+      "ON_HIT"
+    ],
+    "3115": [
+      "ABILITY_HASTE",
+      "AP",
+      "ATTACK_SPEED",
+      "ON_HIT"
+    ],
+    "3078": [
+      "ABILITY_HASTE",
+      "AD",
+      "ATTACK_SPEED",
+      "HP",
+      "SPELL_BLADE"
+    ],
+    "3004": [
+      "ABILITY_HASTE",
+      "AD",
+      "MANA",
+      "MANAMUNE",
+      "ON_HIT"
+    ],
+    "3042": [
+      "ABILITY_HASTE",
+      "AD",
+      "MANA",
+      "MANAMUNE",
+      "ON_HIT"
+    ],
+    "3087": [
+      "AD",
+      "AOE",
+      "ATTACK_SPEED",
+      "BURST",
+      "MOVE_SPEED",
+      "ON_HIT"
+    ],
+    "3084": [
+      "BURST_HP",
+      "HEAVY_HP",
+      "HP_STACK",
+      "TITANIC"
+    ],
+    "3083": [
+      "HEAVY_HP",
+      "HP_REGEN",
+      "SURVIVAL"
+    ],
+    "3068": [
+      "AOE_MAGIC",
+      "ARMOR",
+      "HEAVY_HP",
+      "IMMOLATE_BURN"
+    ],
+    "6664": [
+      "ABILITY_HASTE",
+      "ARMOR",
+      "COMBAT_HEAL",
+      "HEAVY_HP"
+    ],
+    "3748": [
+      "AD",
+      "AOE",
+      "HEAVY_HP",
+      "HP_SCALING",
+      "ON_HIT"
+    ],
+    "3075": [
+      "ARMOR",
+      "GRIEVOUS_WOUNDS",
+      "HEAVY_HP",
+      "REFLECT"
+    ],
+    "3110": [
+      "ABILITY_HASTE",
+      "ARMOR",
+      "AS_SLOW",
+      "MANA"
+    ],
+    "3143": [
+      "ANTI_CRIT",
+      "ARMOR",
+      "HEAVY_HP",
+      "SLOW"
+    ],
+    "4401": [
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "MOVE_SPEED"
+    ],
+    "3065": [
+      "HEAL_SHIELD_BOOST",
+      "HEAVY_HP",
+      "MAGIC_RESIST"
+    ],
+    "6665": [
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "MAGIC_SHIELD"
+    ],
+    "8020": [
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "MANA_BURN",
+      "MR_SHRED"
+    ],
+    "6617": [
+      "ARMOR",
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "TEAM_HEAL",
+      "ULT_BUFF"
+    ],
+    "3053": [
+      "AD",
+      "HEAVY_HP",
+      "LIFELINE_SHIELD",
+      "TENACITY"
+    ],
+    "3001": [
+      "ARMOR",
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "RAMPING_RESIST"
+    ],
+    "3814": [
+      "AD",
+      "HEAVY_HP",
+      "LETHALITY",
+      "SPELL_SHIELD"
+    ],
+    "2504": [
+      "AOE_MAGIC",
+      "HEAVY_HP",
+      "IMMOLATE_BURN",
+      "MAGIC_RESIST"
+    ],
+    "6662": [
+      "ABILITY_HASTE",
+      "ARMOR",
+      "HEAVY_HP",
+      "SLOW",
+      "SPELL_BLADE"
+    ],
+    "6691": [
+      "ARMOR",
+      "HEAVY_HP",
+      "MOVE_SPEED",
+      "SLOW"
+    ],
+    "3119": [
+      "ABILITY_HASTE",
+      "HEAVY_HP",
+      "MANA",
+      "SHIELD"
+    ],
+    "3121": [
+      "ABILITY_HASTE",
+      "HEAVY_HP",
+      "MANA",
+      "SHIELD"
+    ],
+    "3089": [
+      "AP",
+      "AP_BURST",
+      "AP_MULTIPLIER",
+      "CORE_MAGIC"
+    ],
+    "4645": [
+      "AP",
+      "AP_BURST",
+      "MAGIC_PEN",
+      "SHIELD_EXECUTE",
+      "SPELL_CRIT_SYNERGY"
+    ],
+    "6655": [
+      "ABILITY_HASTE",
+      "AP",
+      "AP_BURST",
+      "MANA",
+      "POKE"
+    ],
+    "3135": [
+      "ANTI_TANK",
+      "AP",
+      "MAGIC_PEN"
+    ],
+    "3100": [
+      "ABILITY_HASTE",
+      "AP",
+      "AP_BURST",
+      "MOVE_SPEED",
+      "SPELL_BLADE"
+    ],
+    "3157": [
+      "AP",
+      "ARMOR",
+      "STASIS",
+      "SURVIVAL"
+    ],
+    "3003": [
+      "ABILITY_HASTE",
+      "AP",
+      "MANA",
+      "SHIELD"
+    ],
+    "3040": [
+      "ABILITY_HASTE",
+      "AP",
+      "MANA",
+      "SHIELD"
+    ],
+    "3041": [
+      "AP",
+      "AP_BURST",
+      "MOVE_SPEED"
+    ],
+    "3165": [
+      "ABILITY_HASTE",
+      "AP",
+      "GRIEVOUS_WOUNDS",
+      "MAGIC_PEN"
+    ],
+    "2508": [
+      "AP",
+      "EXECUTE_BURST",
+      "MAGIC_PEN",
+      "MOVE_SPEED",
+      "SPELL_CRIT_SYNERGY"
+    ],
+    "3102": [
+      "AP",
+      "MAGIC_RESIST",
+      "SPELL_SHIELD",
+      "SURVIVAL"
+    ],
+    "4628": [
+      "ABILITY_HASTE",
+      "AP",
+      "DAMAGE_AMPLIFY",
+      "VISION"
+    ],
+    "3151": [
+      "AP",
+      "DOT_BURN",
+      "HEAVY_HP",
+      "PERCENT_MAX_HP"
+    ],
+    "6657": [
+      "ABILITY_HASTE",
+      "AP",
+      "DOT_BURN",
+      "MANA",
+      "MR_SHRED",
+      "ULT_HASTE"
+    ],
+    "3116": [
+      "AP",
+      "CONTROL",
+      "HEAVY_HP",
+      "SLOW_CC"
+    ],
+    "3152": [
+      "ABILITY_HASTE",
+      "AP",
+      "COMBAT_RAMP",
+      "HEAVY_HP",
+      "OMNIVAMP"
+    ],
+    "4629": [
+      "ABILITY_HASTE",
+      "AP",
+      "HEAVY_HP",
+      "KITING",
+      "MOVE_SPEED"
+    ],
+    "2503": [
+      "ABILITY_HASTE",
+      "AP",
+      "DOT_BURN",
+      "MANA"
+    ],
+    "3071": [
+      "ABILITY_HASTE",
+      "AD",
+      "ARMOR_SHRED",
+      "HEAVY_HP",
+      "MOVE_SPEED"
+    ],
+    "6653": [
+      "ABILITY_HASTE",
+      "AD",
+      "ARMOR_SHRED",
+      "HEAVY_HP",
+      "MOVE_SPEED"
+    ],
+    "6692": [
+      "ABILITY_HASTE",
+      "AD",
+      "ARMOR_PEN",
+      "SLOW"
+    ],
+    "3074": [
+      "ABILITY_HASTE",
+      "AD",
+      "AOE",
+      "LIFESTEAL",
+      "WAVE_CLEAR"
+    ],
+    "3072": [
+      "AD",
+      "LIFESTEAL",
+      "RAW_AD",
+      "SHIELD"
+    ],
+    "3156": [
+      "ABILITY_HASTE",
+      "AD",
+      "MAGIC_RESIST",
+      "MAGIC_SHIELD",
+      "OMNIVAMP"
+    ],
+    "6610": [
+      "ABILITY_HASTE",
+      "AD",
+      "COMBAT_HEAL",
+      "CRIT_HEAL",
+      "HEAVY_HP"
+    ],
+    "6333": [
+      "ABILITY_HASTE",
+      "AD",
+      "ARMOR",
+      "DAMAGE_DELAY",
+      "TAKEDOWN_HEAL"
+    ],
+    "3142": [
+      "AD",
+      "LETHALITY",
+      "MOVE_SPEED"
+    ],
+    "6696": [
+      "ABILITY_HASTE",
+      "AD",
+      "LETHALITY",
+      "ULT_REFUND"
+    ],
+    "6694": [
+      "AD",
+      "BURST",
+      "LETHALITY",
+      "MOVE_SPEED"
+    ],
+    "6695": [
+      "ABILITY_HASTE",
+      "AD",
+      "EXECUTE_AOE",
+      "LETHALITY"
+    ],
+    "6697": [
+      "ABILITY_HASTE",
+      "AD",
+      "BURST",
+      "LETHALITY",
+      "SLOW"
+    ],
+    "6698": [
+      "ABILITY_HASTE",
+      "AD",
+      "LETHALITY",
+      "RAW_AD"
+    ],
+    "6699": [
+      "AD",
+      "BURST",
+      "LETHALITY",
+      "MOVE_SPEED"
+    ],
+    "2502": [
+      "ABILITY_HASTE",
+      "AD",
+      "LETHALITY",
+      "RAW_AD"
+    ],
+    "3032": [
+      "AD",
+      "BLEED",
+      "CRIT",
+      "DOT_BURN"
+    ],
+    "3161": [
+      "ABILITY_HASTE",
+      "AD",
+      "DAMAGE_AMPLIFY",
+      "HEAVY_HP"
+    ],
+    "2501": [
+      "AD",
+      "HEAVY_HP",
+      "HP_SCALING",
+      "TITANIC"
+    ],
+    "2510": [
+      "ABILITY_HASTE",
+      "AD",
+      "COMBAT_HEAL",
+      "CRIT_HEAL",
+      "HEAVY_HP"
+    ],
+    "6609": [
+      "ABILITY_HASTE",
+      "AD",
+      "GRIEVOUS_WOUNDS",
+      "HEAVY_HP"
+    ],
+    "6630": [
+      "ABILITY_HASTE",
+      "AD",
+      "COMBAT_HEAL",
+      "HEAVY_HP"
+    ],
+    "6631": [
+      "ABILITY_HASTE",
+      "AD",
+      "ATTACK_SPEED",
+      "HEAVY_HP",
+      "SLOW"
+    ],
+    "6632": [
+      "ABILITY_HASTE",
+      "AD",
+      "COMBAT_HEAL",
+      "HEAVY_HP",
+      "SPELL_BLADE"
+    ],
+    "3181": [
+      "AD",
+      "HEAVY_HP",
+      "MOVE_SPEED",
+      "ON_HIT"
+    ],
+    "6690": [
+      "ABILITY_HASTE",
+      "AD",
+      "ATTACK_SPEED",
+      "HEAVY_HP",
+      "MOVE_SPEED",
+      "ULT_HASTE"
+    ],
+    "3026": [
+      "AD",
+      "ARMOR",
+      "REVIVE"
+    ],
+    "3011": [
+      "ABILITY_HASTE",
+      "AP",
+      "CHAIN_HEAL",
+      "HEAL_SHIELD_BOOST"
+    ],
+    "3107": [
+      "ABILITY_HASTE",
+      "GLOBAL_HEAL",
+      "HEAL_SHIELD_BOOST"
+    ],
+    "6645": [
+      "ABILITY_HASTE",
+      "AP",
+      "HEAL_SHIELD_BOOST",
+      "MANA_REGEN"
+    ],
+    "3073": [
+      "ABILITY_HASTE",
+      "AP",
+      "HEAL_SHIELD_BOOST",
+      "MANA_REGEN"
+    ],
+    "3504": [
+      "AP",
+      "BUFF_ON_HIT",
+      "HEAL_SHIELD_BOOST",
+      "MOVE_SPEED"
+    ],
+    "6616": [
+      "AP",
+      "BUFF_AP_HASTE",
+      "HEAL_SHIELD_BOOST",
+      "MOVE_SPEED"
+    ],
+    "3190": [
+      "ARMOR",
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "SHIELD",
+      "SUPPORT_ACTIVE",
+      "TEAM_BUFF"
+    ],
+    "3222": [
+      "CLEANSE",
+      "HEAL_SHIELD_BOOST",
+      "MAGIC_RESIST",
+      "MANA_REGEN",
+      "SUPPORT_ACTIVE"
+    ],
+    "2065": [
+      "ABILITY_HASTE",
+      "AP",
+      "BUFF_ON_HIT",
+      "MANA_REGEN",
+      "MOVE_SPEED"
+    ],
+    "3050": [
+      "ABILITY_HASTE",
+      "ARMOR",
+      "HEAVY_HP",
+      "MAGIC_RESIST",
+      "SLOW_CC"
+    ],
+    "3109": [
+      "ABILITY_HASTE",
+      "ALLY_BUFF",
+      "ARMOR",
+      "DAMAGE_REDUCTION",
+      "HEAVY_HP"
+    ],
+    "4005": [
+      "ABILITY_HASTE",
+      "ALLY_BUFF",
+      "AP",
+      "MANA_REGEN",
+      "SLOW_CC"
+    ],
+    "3137": [
+      "ABILITY_HASTE",
+      "AP",
+      "MAGIC_PEN",
+      "TEAM_HEAL"
+    ],
+    "3146": [
+      "AD",
+      "AP",
+      "HYBRID",
+      "OMNIVAMP",
+      "SLOW"
+    ],
+    "8010": [
+      "AP",
+      "HEAVY_HP",
+      "MAGIC_PEN",
+      "MR_SHRED"
+    ],
+    "1029": [
+      "ARMOR"
+    ],
+    "1031": [
+      "ARMOR"
+    ],
+    "3076": [
+      "ARMOR",
+      "GRIEVOUS_WOUNDS"
+    ],
+    "3082": [
+      "ANTI_CRIT",
+      "ARMOR"
+    ],
+    "3047": [
+      "ARMOR",
+      "BOOTS"
+    ],
+    "1033": [
+      "MAGIC_RESIST"
+    ],
+    "1057": [
+      "MAGIC_RESIST"
+    ],
+    "3211": [
+      "HEAVY_HP",
+      "MAGIC_RESIST"
+    ],
+    "3111": [
+      "BOOTS",
+      "MAGIC_RESIST",
+      "TENACITY"
+    ],
+    "3020": [
+      "AP",
+      "BOOTS",
+      "MAGIC_PEN"
+    ],
+    "3006": [
+      "ATTACK_SPEED",
+      "BOOTS"
+    ],
+    "3009": [
+      "BOOTS",
+      "MOVE_SPEED"
+    ],
+    "3158": [
+      "ABILITY_HASTE",
+      "BOOTS"
+    ],
+    "3117": [
+      "BOOTS",
+      "MOVE_SPEED"
+    ],
+    "3010": [
+      "BOOTS",
+      "MOVE_SPEED"
+    ],
+    "3170": [
+      "BOOTS",
+      "MOVE_SPEED"
+    ],
+    "3123": [
+      "AD",
+      "GRIEVOUS_WOUNDS"
+    ],
+    "3916": [
+      "AP",
+      "GRIEVOUS_WOUNDS"
+    ]
+  },
+  "semantic_patterns": [
+    {
+      "category": "CRIT",
+      "keywords": [
+        "暴击",
+        "珠光莲华",
+        "无尽之刃",
+        "精准致命",
+        "脆弱",
+        "致命一击",
+        "全暴击",
+        "暴击律动",
+        "狂暴",
+        "jeweled lotus",
+        "crit",
+        "critical",
+        "infinity edge"
+      ],
+      "target_tags": [
+        "CRIT",
+        "INFINITY",
+        "BURST"
+      ],
+      "ap_target_tags": [
+        "SPELL_CRIT_SYNERGY",
+        "AP_MULTIPLIER",
+        "AP_BURST",
+        "MAGIC_PEN"
+      ],
+      "badge": "👑暴击质变",
+      "multiplier": 1.8,
+      "bonus_score": 35.0,
+      "reason_template": "与强化【{name}】产生质变联动！暴击率与暴伤收益指数级爆发",
+      "ap_reason_template": "与强化【{name}】技能暴击联动！【影焰/帽子/风暴狂涌】法术暴伤收益极其致命"
+    },
+    {
+      "category": "HEAVY_HP",
+      "keywords": [
+        "歌利亚巨人",
+        "慢炖",
+        "坦克引擎",
+        "坚韧",
+        "巨大化",
+        "地狱火导管",
+        "钢铁之躯",
+        "最大生命值",
+        "体型",
+        "千变者",
+        "goliath",
+        "colossus",
+        "heartsteel",
+        "maximum health"
+      ],
+      "target_tags": [
+        "HEAVY_HP",
+        "HP_STACK",
+        "IMMOLATE_BURN",
+        "HP_SCALING"
+      ],
+      "badge": "🛡️巨人体魄",
+      "multiplier": 1.7,
+      "bonus_score": 30.0,
+      "reason_template": "与强化【{name}】生命值机制完美契合！【心之钢/日炎/巨九】收益翻倍"
+    },
+    {
+      "category": "ABILITY_HASTE",
+      "keywords": [
+        "循环往复",
+        "连招大师",
+        "急速之泉",
+        "超能大招",
+        "终极猎人",
+        "技能急速",
+        "冷却缩减",
+        "连续施法",
+        "法术飞射",
+        "ability haste",
+        "cooldown",
+        "accelerating",
+        "haste"
+      ],
+      "target_tags": [
+        "ABILITY_HASTE",
+        "SPELL_BLADE",
+        "ULT_HASTE",
+        "ULT_REFUND"
+      ],
+      "badge": "🌀连招极速",
+      "multiplier": 1.6,
+      "bonus_score": 28.0,
+      "reason_template": "强化【{name}】大幅缩短技能冷却，耀光特效与大招刷新极度流畅"
+    },
+    {
+      "category": "ON_HIT",
+      "keywords": [
+        "闪电打击",
+        "攻速突破",
+        "双重打击",
+        "热诚",
+        "攻击特效",
+        "普攻",
+        "额外附带",
+        "攻击速度",
+        "刀锋舞者",
+        "on-hit",
+        "attack speed",
+        "lightning strike",
+        "dual wield"
+      ],
+      "target_tags": [
+        "ON_HIT",
+        "ATTACK_SPEED",
+        "DOUBLE_STRIKE"
+      ],
+      "badge": "⚡攻速特效",
+      "multiplier": 1.75,
+      "bonus_score": 32.0,
+      "reason_template": "强化【{name}】提供普攻附加伤害，【破败/羊刀/海妖】特效伤害翻倍"
+    },
+    {
+      "category": "DOT_BURN",
+      "keywords": [
+        "魔法飞弹",
+        "火上浇油",
+        "灼热打击",
+        "折磨",
+        "持续伤害",
+        "流血",
+        "点燃",
+        "magic missile",
+        "burn",
+        "torment",
+        "bleed",
+        "ignite"
+      ],
+      "target_tags": [
+        "DOT_BURN",
+        "SLOW_CC",
+        "PERCENT_MAX_HP"
+      ],
+      "badge": "🔥折磨灼烧",
+      "multiplier": 1.7,
+      "bonus_score": 30.0,
+      "reason_template": "强化【{name}】与持续伤害/减速联动，频繁触发连环灼烧与飞弹"
+    },
+    {
+      "category": "LIFESTEAL",
+      "keywords": [
+        "终极渴望",
+        "灵魂汲取",
+        "炼狱护盾",
+        "吸血",
+        "全能吸血",
+        "治疗",
+        "护盾增幅",
+        "守护天使",
+        "lifesteal",
+        "omnivamp",
+        "vamp",
+        "drain"
+      ],
+      "target_tags": [
+        "LIFESTEAL",
+        "OMNIVAMP",
+        "COMBAT_HEAL",
+        "SHIELD",
+        "HEAL_SHIELD_BOOST"
+      ],
+      "badge": "🩸永生续航",
+      "multiplier": 1.5,
+      "bonus_score": 25.0,
+      "reason_template": "强化【{name}】提供残血回复加成，极大提升持久作战与对拼容错"
+    },
+    {
+      "category": "HEAL_SHIELD",
+      "keywords": [
+        "圣光",
+        "急救用具",
+        "救赎",
+        "神圣",
+        "抚慰",
+        "温暖触碰",
+        "护盾增益",
+        "生命祈愿",
+        "白魔之佑",
+        "治疗效果",
+        "护盾效果",
+        "heal and shield",
+        "first aid",
+        "redemption"
+      ],
+      "target_tags": [
+        "HEAL_SHIELD_BOOST",
+        "GLOBAL_HEAL",
+        "CHAIN_HEAL",
+        "SHIELD",
+        "TEAM_HEAL"
+      ],
+      "badge": "✨圣光护佑",
+      "multiplier": 1.7,
+      "bonus_score": 30.0,
+      "reason_template": "强化【{name}】极大增幅治疗与护盾量！【月石/救赎/香炉】保护收益拉满"
+    },
+    {
+      "category": "ARMOR_PEN",
+      "keywords": [
+        "巨人杀手",
+        "重装粉碎",
+        "破甲",
+        "穿透",
+        "削弱抗性",
+        "斩杀",
+        "armor pen",
+        "magic pen",
+        "penetration",
+        "shred",
+        "giant slayer",
+        "execute"
+      ],
+      "target_tags": [
+        "ARMOR_PEN",
+        "MAGIC_PEN",
+        "MR_SHRED",
+        "ARMOR_SHRED",
+        "EXECUTE"
+      ],
+      "badge": "⚔️终极穿透",
+      "multiplier": 1.6,
+      "bonus_score": 26.0,
+      "reason_template": "强化【{name}】配合百分比穿透装备，对高抗性敌人造成毁灭打击"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "items": [],
+  "trios": [],
+  "augments": [],
+  "weakAgainst": [],
+  "strongAgainst": [],
+  "teammateSynergies": [],
+  "terminalItemTrios": [],
+  "summonerSpellPairs": [],
+  "heroSummary": {
+    "id": "22",
+    "kda": null,
+    "name": "寒冰射手",
+    "tier": null,
+    "wins": 0,
+    "avgCs": null,
+    "games": 0,
+    "patch": "16.17",
+    "roles": [
+      "射手",
+      "辅助"
+    ],
+    "avgGold": null,
+    "seoSlug": "ashe",
+    "winRate": 0,
+    "avgKills": null,
+    "imageUrl": "/assets/champions/16.16.1/22.png",
+    "pickRate": 0,
+    "roleTags": [
+      "Marksman",
+      "Support"
+    ],
+    "avgCcTime": null,
+    "avgDamage": null,
+    "avgDeaths": null,
+    "avgAssists": null,
+    "damageShare": null,
+    "searchTerms": [
+      "艾希",
+      "Ashe",
+      "寒冰"
+    ],
+    "topAugments": [],
+    "avgTurretDmg": null,
+    "utilityScore": null,
+    "avgHealShield": null,
+    "canonicalPath": "/hero/22-ashe",
+    "multiKillRate": null,
+    "previousGames": 0,
+    "previousPatch": "",
+    "survivability": null,
+    "winRateChange": null,
+    "avgDamageTaken": null,
+    "goldEfficiency": null,
+    "pickRateChange": null,
+    "avgDmgMitigated": null,
+    "previousWinRate": null,
+    "dataAvailability": "not_observed",
+    "previousPickRate": null,
+    "killParticipation": null,
+    "dataAvailabilityReason": "no_valid_complete_match_in_frozen_snapshot"
+  }
+}

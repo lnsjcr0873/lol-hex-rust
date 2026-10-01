@@ -1,0 +1,7 @@
+/target
+repomix-output.*
+legacy_python/
+plan.md
+*.tmp*
+.vscode/
+.idea/
