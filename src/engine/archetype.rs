@@ -16,12 +16,18 @@ pub struct ArchetypeDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EngineMetadata {
+    #[serde(default)]
     pub archetypes: HashMap<String, ArchetypeDefinition>,
+    #[serde(default)]
     pub famous_multi_archetype_heroes: HashMap<String, Value>,
+    #[serde(default)]
     pub champion_tactical_traits: HashMap<String, Value>,
+    #[serde(default)]
     pub counter_solutions: HashMap<String, Value>,
+    #[serde(default)]
     pub item_feature_tags: HashMap<String, Vec<String>>,
-    pub semantic_patterns: HashMap<String, Value>,
+    #[serde(default)]
+    pub semantic_patterns: Vec<Value>,
 }
 
 lazy_static! {

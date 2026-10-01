@@ -263,4 +263,25 @@ mod tests {
         assert!(!score.is_nan());
         assert!(score >= 60.0);
     }
+
+    #[test]
+    fn test_ocr_substring_and_anvil() {
+        let db = Database::load_from_dir("data");
+        // Test anvil detection
+        let anvil_lines = vec!["选择一个属性铁砧".to_string(), "+10 法术强度".to_string()];
+        assert!(OcrScanner::is_stat_anvil_cards(&anvil_lines));
+
+        // Test augment match with extra punctuation/whitespace
+        let lines = vec!["《珠 光 护 手》".to_string()];
+        let matches = OcrScanner::match_augments_from_texts(&db, &lines);
+        assert!(!matches.is_empty(), "Should match 珠光护手 despite guillemets and spaces");
+    }
+
+    #[test]
+    fn test_ultrawide_viewport_math() {
+        use crate::vision::ScreenCapture;
+        let vp = ScreenCapture::get_augment_title_band_rect();
+        assert!(vp.width > 0);
+        assert!(vp.height > 0);
+    }
 }

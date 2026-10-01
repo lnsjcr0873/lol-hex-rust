@@ -28,8 +28,8 @@ impl OcrScanner {
     pub fn is_stat_anvil_cards(lines: &[String]) -> bool {
         let full_text = lines.join(" ").to_lowercase();
         let keywords = [
-            "锻造器", "属性卡", "属性增强", "提供属性", "金币属性",
-            "stat anvil", "anvil", "stat shard",
+            "锻造器", "属性卡", "属性增强", "提供属性", "金币属性", "属性铁砧", "铁砧",
+            "stat anvil", "anvil", "stat shard", "shard anvil",
         ];
         for kw in keywords {
             if full_text.contains(kw) {
@@ -64,6 +64,10 @@ impl OcrScanner {
                     | '”'
                     | '、'
                     | '·'
+                    | '《'
+                    | '》'
+                    | '<'
+                    | '>'
             )
     }
 
@@ -85,13 +89,27 @@ impl OcrScanner {
                 }
             }
 
-            // 2. Fuzzy match with jaro_winkler
+            // 2. Substring match (e.g. OCR returned extra prefixes/suffixes)
+            let mut found_substring = false;
+            for (aug_norm, aid) in &db.norm_name_to_augment_id {
+                if aug_norm.len() >= 2 && (norm.contains(aug_norm) || (aug_norm.len() <= norm.len() && norm.starts_with(aug_norm))) {
+                    if !matched_ids.contains(aid) {
+                        matched_ids.push(aid.clone());
+                        found_substring = true;
+                        break;
+                    }
+                }
+            }
+            if found_substring {
+                continue;
+            }
+
+            // 3. Fuzzy match with jaro_winkler using pre-normalized names
             let mut best_id = None;
             let mut best_score = 0.0;
 
-            for (aid, aug) in &db.augments_map {
-                let aug_norm: String = aug.name.chars().filter(|c| !Self::is_punctuation(*c)).collect();
-                let score = jaro_winkler(&norm, &aug_norm);
+            for (aug_norm, aid) in &db.norm_name_to_augment_id {
+                let score = jaro_winkler(&norm, aug_norm);
                 if score > 0.82 && score > best_score {
                     best_score = score;
                     best_id = Some(aid.clone());
