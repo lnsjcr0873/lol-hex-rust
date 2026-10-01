@@ -142,13 +142,19 @@ impl ConfigManager {
             cfg.resolve_conflicts = rc;
         }
         if let Some(hw) = hex_synergy_weight {
-            cfg.hex_synergy_weight = hw.clamp(0.0, 3.0);
+            if !hw.is_nan() && !hw.is_infinite() {
+                cfg.hex_synergy_weight = hw.clamp(0.0, 3.0);
+            }
         }
         if let Some(as_) = archetype_strictness {
-            cfg.archetype_strictness = as_.clamp(0.0, 1.0);
+            if !as_.is_nan() && !as_.is_infinite() {
+                cfg.archetype_strictness = as_.clamp(0.0, 1.0);
+            }
         }
         if let Some(ci) = counter_intensity {
-            cfg.counter_intensity = ci.clamp(0.0, 3.0);
+            if !ci.is_nan() && !ci.is_infinite() {
+                cfg.counter_intensity = ci.clamp(0.0, 3.0);
+            }
         }
         if let Some(gcm) = gold_calc_mode {
             cfg.gold_calc_mode = gcm;
@@ -157,9 +163,13 @@ impl ConfigManager {
             cfg.trio_mode = tm;
         }
 
-        // Persist to disk
+        // Persist to disk safely
         if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
-            let _ = fs::write(&self.config_file_path, json_str);
+            let path = Path::new(&self.config_file_path);
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(path, json_str);
         }
 
         cfg.clone()

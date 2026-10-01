@@ -12,12 +12,22 @@ where
         Str(String),
         Num(i64),
         Float(f64),
+        Bool(bool),
+        Null,
     }
 
     match StrOrNum::deserialize(deserializer)? {
         StrOrNum::Str(s) => Ok(s),
         StrOrNum::Num(n) => Ok(n.to_string()),
-        StrOrNum::Float(f) => Ok(f.to_string()),
+        StrOrNum::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                Ok("0".to_string())
+            } else {
+                Ok((f as i64).to_string())
+            }
+        }
+        StrOrNum::Bool(b) => Ok(b.to_string()),
+        StrOrNum::Null => Ok(String::new()),
     }
 }
 
@@ -31,13 +41,29 @@ where
         Num(f64),
         Int(i64),
         Str(String),
+        Bool(bool),
         Null,
     }
 
     match NumOrStr::deserialize(deserializer)? {
-        NumOrStr::Num(f) => Ok(f),
+        NumOrStr::Num(f) => {
+            if f.is_nan() || f.is_infinite() {
+                Ok(0.0)
+            } else {
+                Ok(f)
+            }
+        }
         NumOrStr::Int(i) => Ok(i as f64),
-        NumOrStr::Str(s) => Ok(s.parse::<f64>().unwrap_or(0.0)),
+        NumOrStr::Str(s) => {
+            let cleaned = s.trim().trim_end_matches('%').replace(',', "");
+            let val = cleaned.parse::<f64>().unwrap_or(0.0);
+            if val.is_nan() || val.is_infinite() {
+                Ok(0.0)
+            } else {
+                Ok(val)
+            }
+        }
+        NumOrStr::Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
         NumOrStr::Null => Ok(0.0),
     }
 }
@@ -52,13 +78,34 @@ where
         Int(i64),
         Num(f64),
         Str(String),
+        Bool(bool),
         Null,
     }
 
     match NumOrStr::deserialize(deserializer)? {
         NumOrStr::Int(i) => Ok(i),
-        NumOrStr::Num(f) => Ok(f as i64),
-        NumOrStr::Str(s) => Ok(s.parse::<i64>().unwrap_or(0)),
+        NumOrStr::Num(f) => {
+            if f.is_nan() || f.is_infinite() {
+                Ok(0)
+            } else {
+                Ok(f as i64)
+            }
+        }
+        NumOrStr::Str(s) => {
+            let cleaned = s.trim().trim_end_matches('%').replace(',', "");
+            if let Ok(i) = cleaned.parse::<i64>() {
+                Ok(i)
+            } else if let Ok(f) = cleaned.parse::<f64>() {
+                if f.is_nan() || f.is_infinite() {
+                    Ok(0)
+                } else {
+                    Ok(f as i64)
+                }
+            } else {
+                Ok(0)
+            }
+        }
+        NumOrStr::Bool(b) => Ok(if b { 1 } else { 0 }),
         NumOrStr::Null => Ok(0),
     }
 }
@@ -201,6 +248,8 @@ pub struct HeroDetail {
     pub hero_id: Value,
     #[serde(default)]
     pub hero_name: String,
+    #[serde(default)]
+    pub hero_summary: Option<HeroSummary>,
     #[serde(default)]
     pub augments: Value,
     #[serde(default)]

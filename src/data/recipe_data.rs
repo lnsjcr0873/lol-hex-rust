@@ -49,6 +49,10 @@ pub fn normalize_item_id(item_id: &str) -> String {
     if RECIPE_META.total_costs.contains_key(tid) || RECIPE_META.recipes.contains_key(tid) {
         return tid.to_string();
     }
+    let digits: String = tid.chars().filter(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() && (RECIPE_META.total_costs.contains_key(&digits) || RECIPE_META.recipes.contains_key(&digits)) {
+        return digits;
+    }
     for pfx_len in [2, 3] {
         if tid.len() > pfx_len {
             let sub = &tid[pfx_len..];
@@ -74,7 +78,11 @@ pub fn calculate_item_net_cost(
         .or_else(|| RECIPE_META.total_costs.get(raw_tid))
         .unwrap_or(&3000);
 
-    let cur_gold_int = current_gold as i64;
+    let cur_gold_int = if current_gold.is_nan() || current_gold.is_infinite() {
+        0
+    } else {
+        (current_gold.max(0.0)) as i64
+    };
 
     if gold_calc_mode == "FULL_COST" {
         let diff = total_cost - cur_gold_int;
@@ -82,7 +90,7 @@ pub fn calculate_item_net_cost(
         let status_text = if is_afford {
             format!("💰 {}/{}g [可全款购买]", cur_gold_int, total_cost)
         } else {
-            format!("💰 {}/{}g (差{}g)", cur_gold_int, total_cost, diff)
+            format!("💰 {}/{}g (差{}g)", cur_gold_int, total_cost, diff.max(0))
         };
 
         return ItemNetCostResult {
@@ -115,9 +123,13 @@ pub fn calculate_item_net_cost(
         .or_else(|| RECIPE_META.recipes.get(raw_tid));
 
     if let Some(recipe_items) = recipe {
-        for req_cid in recipe_items {
+        let mut matched_direct_indices = std::collections::HashSet::new();
+
+        // Pass 1: Direct components
+        for (idx, req_cid) in recipe_items.iter().enumerate() {
             if let Some(pos) = available_owned.iter().position(|x| x == req_cid) {
                 available_owned.remove(pos);
+                matched_direct_indices.insert(idx);
                 let price = *RECIPE_META.component_prices.get(req_cid).unwrap_or(&800);
                 total_deducted += price;
                 let name = RECIPE_META
@@ -132,6 +144,34 @@ pub fn calculate_item_net_cost(
                     price,
                     slot: "direct".to_string(),
                 });
+            }
+        }
+
+        // Pass 2: Nested sub-components for unmatched slots
+        for (idx, req_cid) in recipe_items.iter().enumerate() {
+            if matched_direct_indices.contains(&idx) {
+                continue;
+            }
+            if let Some(sub_recipe) = RECIPE_META.recipes.get(req_cid) {
+                for sub_cid in sub_recipe {
+                    if let Some(pos) = available_owned.iter().position(|x| x == sub_cid) {
+                        available_owned.remove(pos);
+                        let price = *RECIPE_META.component_prices.get(sub_cid).unwrap_or(&400);
+                        total_deducted += price;
+                        let name = RECIPE_META
+                            .component_names
+                            .get(sub_cid)
+                            .cloned()
+                            .unwrap_or_else(|| format!("小件#{}", sub_cid));
+
+                        matched_components.push(MatchedComponent {
+                            item_id: sub_cid.clone(),
+                            name,
+                            price,
+                            slot: "nested".to_string(),
+                        });
+                    }
+                }
             }
         }
     }

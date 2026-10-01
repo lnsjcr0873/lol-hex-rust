@@ -162,5 +162,55 @@ mod tests {
         assert!(!db.heroes_summary.is_empty(), "Heroes summary should not be empty");
         assert!(!db.augments_summary.is_empty(), "Augments summary should not be empty");
         assert!(db.resolve_hero_id("金克丝").is_some());
+        let annie_id = db.resolve_hero_id("黑暗之女");
+        assert!(annie_id.is_some());
+        if let Some(id) = annie_id {
+            assert!(db.heroes_detail.contains_key(&id), "Hero detail for Annie should be indexed by canonical id");
+        }
+    }
+
+    #[test]
+    fn test_lenient_number_deserialization() {
+        #[derive(serde::Deserialize)]
+        struct Sample {
+            #[serde(deserialize_with = "crate::data::models::deserialize_f64_lenient")]
+            rate: f64,
+            #[serde(deserialize_with = "crate::data::models::deserialize_i64_lenient")]
+            count: i64,
+        }
+
+        let json1 = r#"{"rate": "54.2%", "count": "1,250"}"#;
+        let s1: Sample = serde_json::from_str(json1).unwrap();
+        assert!((s1.rate - 54.2).abs() < 1e-4);
+        assert_eq!(s1.count, 1250);
+
+        let json2 = r#"{"rate": null, "count": "15.0"}"#;
+        let s2: Sample = serde_json::from_str(json2).unwrap();
+        assert_eq!(s2.rate, 0.0);
+        assert_eq!(s2.count, 15);
+    }
+
+    #[test]
+    fn test_nested_recipe_deduction() {
+        // Target: 6657 requires 3802 (Lost Chapter) + 3108 (Fiendish Codex)
+        // If player has 1052 (Amplifying Tome, 400g) which is a sub-component of 3802
+        let owned = vec!["1052".to_string()];
+        let res = calculate_item_net_cost("6657", &owned, 1000.0, "NET_DEDUCT");
+        assert!(res.deducted_gold >= 400);
+        assert_eq!(res.matched_components.len(), 1);
+        assert_eq!(res.matched_components[0].slot, "nested");
+    }
+
+    #[tokio::test]
+    async fn test_config_nan_safety() {
+        let temp_dir = std::env::temp_dir().join("hexbrain_test_cfg");
+        let cfg_path = temp_dir.join("config.json");
+        let mgr = crate::config::ConfigManager::new(cfg_path.to_str().unwrap());
+        // Pass f64::NAN
+        let updated = mgr.update(None, Some(f64::NAN), Some(f64::NAN), Some(f64::INFINITY), None, None, None).await;
+        assert!(!updated.hex_synergy_weight.is_nan());
+        assert!(!updated.archetype_strictness.is_nan());
+        assert!(!updated.counter_intensity.is_infinite());
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

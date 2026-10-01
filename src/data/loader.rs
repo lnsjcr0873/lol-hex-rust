@@ -25,7 +25,24 @@ impl Database {
     pub fn load_from_dir(base_dir: &str) -> Self {
         let mut db = Database::default();
 
-        let json_dir = Path::new(base_dir).join("json");
+        let mut json_dir = Path::new(base_dir).join("json");
+        if !json_dir.exists() {
+            if Path::new(base_dir).is_dir() && Path::new(base_dir).join("heroes_summary.json").exists() {
+                json_dir = Path::new(base_dir).to_path_buf();
+            } else if Path::new("data/json").exists() {
+                json_dir = Path::new("data/json").to_path_buf();
+            } else if Path::new("../data/json").exists() {
+                json_dir = Path::new("../data/json").to_path_buf();
+            } else if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(parent) = exe_path.parent() {
+                    let candidate = parent.join("data").join("json");
+                    if candidate.exists() {
+                        json_dir = candidate;
+                    }
+                }
+            }
+        }
+
         let meta_file = json_dir.join("meta.json");
         let heroes_file = json_dir.join("heroes_summary.json");
         let augments_file = json_dir.join("augments_summary.json");
@@ -53,6 +70,7 @@ impl Database {
 
                         for term in &h.search_terms {
                             db.name_to_hero_id.insert(term.to_lowercase(), id.clone());
+                            db.name_to_hero_id.insert(term.clone(), id.clone());
                         }
 
                         db.heroes_map.insert(id, h.clone());
@@ -108,14 +126,46 @@ impl Database {
                     let path = entry.path();
                     if path.extension().and_then(|s| s.to_str()) == Some("json") {
                         if let Ok(content) = fs::read_to_string(&path) {
-                            if let Ok(detail) = serde_json::from_str::<HeroDetail>(&content) {
-                                let id_str = match &detail.hero_id {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    serde_json::Value::Number(n) => n.to_string(),
-                                    _ => path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+                            if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
+                                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                                let stem_parts: Vec<&str> = stem.split('_').collect();
+                                let stem_id = stem_parts.first().copied().unwrap_or("").to_string();
+                                let stem_name = if stem_parts.len() > 1 {
+                                    stem_parts[1..].join("_")
+                                } else {
+                                    String::new()
                                 };
+
+                                let summary_id = detail.hero_summary.as_ref().map(|s| s.id.clone());
+                                let summary_name = detail.hero_summary.as_ref().map(|s| s.name.clone());
+
+                                let id_str = match &detail.hero_id {
+                                    serde_json::Value::String(s) if !s.is_empty() => s.clone(),
+                                    serde_json::Value::Number(n) => n.to_string(),
+                                    _ => summary_id.unwrap_or(stem_id),
+                                };
+
+                                if detail.hero_name.is_empty() {
+                                    if let Some(ref name) = summary_name {
+                                        detail.hero_name = name.clone();
+                                    } else if !stem_name.is_empty() {
+                                        detail.hero_name = stem_name;
+                                    }
+                                }
+
+                                if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
+                                    detail.hero_id = serde_json::Value::String(id_str.clone());
+                                }
+
                                 if !id_str.is_empty() {
-                                    db.heroes_detail.insert(id_str, detail);
+                                    db.heroes_detail.insert(id_str.clone(), detail.clone());
+                                }
+                                if !detail.hero_name.is_empty() {
+                                    db.heroes_detail.insert(detail.hero_name.clone(), detail.clone());
+                                    db.heroes_detail.insert(detail.hero_name.to_lowercase(), detail.clone());
+                                }
+                                if !stem.is_empty() {
+                                    db.heroes_detail.insert(stem, detail);
                                 }
                             }
                         }
