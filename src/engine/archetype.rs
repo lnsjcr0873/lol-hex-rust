@@ -85,27 +85,41 @@ impl ArchetypeEngine {
             }
         }
 
-        // 2. Infer from augments or candidate items
-        // Default to AP_POKE_BURST or CRIT_MARKSMAN based on candidate items top stats
-        let mut ap_score = 0;
-        let mut ad_score = 0;
-        for c in candidate_items.iter().take(5) {
-            let iid = c.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
-            if let Some(tags) = ENGINE_META.item_feature_tags.get(iid) {
-                if tags.iter().any(|t| t == "AP" || t == "MANA") {
-                    ap_score += 1;
-                }
-                if tags.iter().any(|t| t == "AD" || t == "CRIT" || t == "LETHALITY") {
-                    ad_score += 1;
+        // 2. Infer from augments and candidate items against all archetypes
+        let mut arch_scores: HashMap<&str, i32> = HashMap::new();
+        for (arch_id, arch) in &ENGINE_META.archetypes {
+            let mut score = 0;
+            // Match candidate items
+            for c in candidate_items.iter().take(8) {
+                let iid = c.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(tags) = ENGINE_META.item_feature_tags.get(iid) {
+                    for t in tags {
+                        if arch.favored_tags.contains(t) {
+                            score += 3;
+                        }
+                        if arch.forbidden_tags.contains(t) {
+                            score -= 3;
+                        }
+                    }
                 }
             }
+            // Match active augments
+            for a in active_augments {
+                let aug_name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                for fav in &arch.favored_tags {
+                    if aug_name.contains(fav) {
+                        score += 5;
+                    }
+                }
+            }
+            arch_scores.insert(arch_id.as_str(), score);
         }
 
-        let arch_id = if ap_score >= ad_score {
-            "AP_POKE_BURST"
-        } else {
-            "CRIT_MARKSMAN"
-        };
+        let arch_id = arch_scores
+            .into_iter()
+            .max_by_key(|&(_, score)| score)
+            .map(|(id, _)| id)
+            .unwrap_or("CRIT_MARKSMAN");
 
         if let Some(arch) = ENGINE_META.archetypes.get(arch_id) {
             ArchetypeInfo {

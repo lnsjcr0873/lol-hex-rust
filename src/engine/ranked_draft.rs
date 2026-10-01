@@ -73,17 +73,30 @@ impl RankedDraftManager {
         if let Some(arr) = my_team_arr {
             for (idx, m) in arr.iter().enumerate() {
                 let cell_id = m.get("cellId").and_then(|v| v.as_i64()).unwrap_or(0);
-                let cid = m.get("championId").or_else(|| m.get("championPickIntent"))
+                let raw_cid = m.get("championId").or_else(|| m.get("championPickIntent"))
                     .map(|v| match v {
                         Value::String(s) => s.clone(),
                         Value::Number(n) => n.to_string(),
                         _ => "".to_string(),
                     })
                     .unwrap_or_default();
+                let cid = if raw_cid == "0" { String::new() } else { raw_cid };
+
+                let auto_pos = m.get("assignedPosition").and_then(|v| v.as_str()).and_then(|s| {
+                    match s.to_lowercase().as_str() {
+                        "top" => Some("TOP"),
+                        "jungle" => Some("JUNGLE"),
+                        "middle" | "mid" => Some("MID"),
+                        "bottom" | "bot" => Some("ADC"),
+                        "utility" | "support" => Some("SUPPORT"),
+                        _ => None,
+                    }
+                });
 
                 let key = format!("my_{}", idx);
                 let pos = self.manual_positions.get(&key)
                     .cloned()
+                    .or_else(|| auto_pos.map(|s| s.to_string()))
                     .unwrap_or_else(|| ORDERED_POSITIONS[idx % 5].to_string());
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
@@ -105,17 +118,30 @@ impl RankedDraftManager {
         if let Some(arr) = their_team_arr {
             for (idx, m) in arr.iter().enumerate() {
                 let cell_id = m.get("cellId").and_then(|v| v.as_i64()).unwrap_or(0);
-                let cid = m.get("championId").or_else(|| m.get("championPickIntent"))
+                let raw_cid = m.get("championId").or_else(|| m.get("championPickIntent"))
                     .map(|v| match v {
                         Value::String(s) => s.clone(),
                         Value::Number(n) => n.to_string(),
                         _ => "".to_string(),
                     })
                     .unwrap_or_default();
+                let cid = if raw_cid == "0" { String::new() } else { raw_cid };
+
+                let auto_pos = m.get("assignedPosition").and_then(|v| v.as_str()).and_then(|s| {
+                    match s.to_lowercase().as_str() {
+                        "top" => Some("TOP"),
+                        "jungle" => Some("JUNGLE"),
+                        "middle" | "mid" => Some("MID"),
+                        "bottom" | "bot" => Some("ADC"),
+                        "utility" | "support" => Some("SUPPORT"),
+                        _ => None,
+                    }
+                });
 
                 let key = format!("their_{}", idx);
                 let pos = self.manual_positions.get(&key)
                     .cloned()
+                    .or_else(|| auto_pos.map(|s| s.to_string()))
                     .unwrap_or_else(|| ORDERED_POSITIONS[idx % 5].to_string());
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);

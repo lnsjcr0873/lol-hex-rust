@@ -18,6 +18,28 @@ pub struct ThreatProfile {
 pub struct CounterItemEngine;
 
 impl CounterItemEngine {
+    pub fn find_tactical_traits(cname: &str) -> Option<&'static Value> {
+        let trimmed = cname.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if let Some(v) = ENGINE_META.champion_tactical_traits.get(trimmed) {
+            return Some(v);
+        }
+        let clean = trimmed.replace([' ', '.', '\'', '_'], "").to_lowercase();
+        for (k, v) in &ENGINE_META.champion_tactical_traits {
+            if k.to_lowercase() == clean || k.replace([' ', '.', '\'', '_'], "").to_lowercase() == clean {
+                return Some(v);
+            }
+            if let Some(n) = v.get("name").and_then(|v| v.as_str()) {
+                if n == trimmed || n.contains(trimmed) || trimmed.contains(n) {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+
     pub fn analyze_enemy_threats(enemy_team: &[Value]) -> ThreatProfile {
         let mut profile = ThreatProfile::default();
         if enemy_team.is_empty() {
@@ -27,6 +49,7 @@ impl CounterItemEngine {
 
         let mut healer_names = Vec::new();
         let mut tank_names = Vec::new();
+        let mut shield_names = Vec::new();
 
         for e in enemy_team {
             let cname = e
@@ -35,20 +58,24 @@ impl CounterItemEngine {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            if let Some(trait_val) = ENGINE_META.champion_tactical_traits.get(cname) {
+            if let Some(trait_val) = Self::find_tactical_traits(cname) {
+                let disp_name = trait_val.get("name").and_then(|v| v.as_str()).unwrap_or(cname);
                 if let Some(traits) = trait_val.get("traits").and_then(|v| v.as_array()) {
                     for t in traits {
                         if let Some(t_str) = t.as_str() {
                             match t_str {
                                 "HIGH_HEAL" => {
                                     profile.has_high_heal = true;
-                                    healer_names.push(cname);
+                                    healer_names.push(disp_name);
                                 }
                                 "SUPER_TANK" => {
                                     profile.has_super_tank = true;
-                                    tank_names.push(cname);
+                                    tank_names.push(disp_name);
                                 }
-                                "SHIELD_HEAVY" => profile.has_shield_heavy = true,
+                                "SHIELD_HEAVY" => {
+                                    profile.has_shield_heavy = true;
+                                    shield_names.push(disp_name);
+                                }
                                 "HIGH_CC" => profile.has_high_cc = true,
                                 _ => {}
                             }
@@ -70,8 +97,14 @@ impl CounterItemEngine {
         if profile.has_high_heal {
             notes.push(format!("强回血({})需重伤", healer_names.join("/")));
         }
+        if profile.has_shield_heavy {
+            notes.push(format!("多重护盾({})需巨蛇破盾", shield_names.join("/")));
+        }
         if profile.has_super_tank {
             notes.push(format!("重装前排({})需百分比穿透", tank_names.join("/")));
+        }
+        if profile.has_high_cc {
+            notes.push("强控阵容需水银/护盾女妖应对".to_string());
         }
         if profile.physical_threat_count >= 3 {
             notes.push("高额物理伤害需护甲应对".to_string());
@@ -96,15 +129,27 @@ impl CounterItemEngine {
         let mut urgent = HashSet::new();
 
         if threat.has_high_heal {
-            // Anti-heal items (Morello, Mortal Reminder, Chempunk Chainsword, Thornmail)
+            // Anti-heal items (Morello 3165, Mortal Reminder 3033, Chempunk Chainsword 6609, Thornmail 3075)
             for id in ["3165", "3033", "6609", "3075"] {
                 urgent.insert(id.to_string());
             }
         }
 
+        if threat.has_shield_heavy {
+            // Serpent's Fang (6695 巨蛇之牙)
+            urgent.insert("6695".to_string());
+        }
+
         if threat.has_super_tank {
-            // Anti-tank penetration (Void Staff, LDR, Liandry, BotRK)
+            // Anti-tank penetration (Void Staff 3135, LDR 3036, Liandry 3151, BotRK 3153)
             for id in ["3135", "3036", "3151", "3153"] {
+                urgent.insert(id.to_string());
+            }
+        }
+
+        if threat.has_high_cc {
+            // Anti-CC (Mercurial 3139, Banshee 3102, Edge of Night 3814)
+            for id in ["3139", "3102", "3814"] {
                 urgent.insert(id.to_string());
             }
         }

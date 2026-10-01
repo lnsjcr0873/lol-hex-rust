@@ -213,4 +213,54 @@ mod tests {
         assert!(!updated.counter_intensity.is_infinite());
         let _ = std::fs::remove_dir_all(temp_dir);
     }
+
+    #[test]
+    fn test_wilson_nan_and_extremes() {
+        assert_eq!(calc_wilson_lower_bound(f64::NAN, 100, 1.96), 0.5);
+        assert_eq!(calc_wilson_lower_bound(0.6, 0, 1.96), 0.6);
+        let low_zero = calc_wilson_lower_bound(0.0, 100, 1.96);
+        assert!(low_zero >= 0.0);
+        let high_one = calc_wilson_lower_bound(1.0, 100, 1.96);
+        assert!(high_one <= 1.0);
+    }
+
+    #[test]
+    fn test_counter_item_threat_detection() {
+        use serde_json::json;
+        // Test with Dr. Mundo, Soraka, and Leona
+        let enemies = vec![
+            json!({ "championName": "DrMundo" }),
+            json!({ "championName": "众星之子" }),
+        ];
+        let threat = crate::engine::counter::CounterItemEngine::analyze_enemy_threats(&enemies);
+        assert!(threat.has_high_heal, "DrMundo and Soraka should trigger has_high_heal");
+        assert!(threat.has_super_tank, "DrMundo should trigger has_super_tank");
+        let arch = crate::engine::archetype::ArchetypeInfo::default();
+        let urgent = crate::engine::counter::CounterItemEngine::get_urgent_counter_ids(&threat, &arch);
+        assert!(urgent.contains("3165") || urgent.contains("3033"), "Should recommend anti-heal");
+    }
+
+    #[test]
+    fn test_synergy_nan_safety() {
+        use serde_json::json;
+        let candidates = vec![
+            json!({ "itemId": "3089", "tacticalScore": 60.0 }), // Deathcap (AP)
+        ];
+        let augments = vec![
+            json!({ "name": "珠光护手", "description": "法术伤害可以暴击" }),
+        ];
+        let owned = std::collections::HashSet::new();
+        let reranked = crate::engine::synergy::HexItemSynergyEngine::rerank_items_with_synergy(
+            &candidates,
+            &augments,
+            &owned,
+            "1",
+            f64::NAN, // test NaN weight
+            true,
+        );
+        assert_eq!(reranked.len(), 1);
+        let score = reranked[0]["tacticalScore"].as_f64().unwrap();
+        assert!(!score.is_nan());
+        assert!(score >= 60.0);
+    }
 }

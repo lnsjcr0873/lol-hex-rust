@@ -9,6 +9,9 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub fn calc_wilson_lower_bound(p: f64, n: i64, z: f64) -> f64 {
+    if p.is_nan() || p.is_infinite() || z.is_nan() || z.is_infinite() {
+        return 0.5;
+    }
     if n <= 0 {
         return p.clamp(0.0, 1.0);
     }
@@ -18,11 +21,16 @@ pub fn calc_wilson_lower_bound(p: f64, n: i64, z: f64) -> f64 {
     let denominator = 1.0 + z2 / n_f;
     let centre = p + z2 / (2.0 * n_f);
     let mut discriminant = (p * (1.0 - p) / n_f) + (z2 / (4.0 * n_f * n_f));
-    if discriminant < 0.0 {
+    if discriminant < 0.0 || discriminant.is_nan() {
         discriminant = 0.0;
     }
     let spread = z * discriminant.sqrt();
-    ((centre - spread) / denominator).clamp(0.0, 1.0)
+    let lower = (centre - spread) / denominator;
+    if lower.is_nan() {
+        p
+    } else {
+        lower.clamp(0.0, 1.0)
+    }
 }
 
 pub struct DecisionEngine;
@@ -313,24 +321,95 @@ impl DecisionEngine {
         let hero_win_rate = hero_summary.win_rate;
         let mut candidates = Vec::new();
 
+        let hero_detail = db.heroes_detail.get(&hid);
+        let hero_aug_list: Vec<Value> = hero_detail
+            .map(|d| {
+                if let Some(arr) = d.augments.as_array() {
+                    arr.clone()
+                } else if let Some(obj) = d.augments.as_object() {
+                    obj.get("allAugments")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            })
+            .unwrap_or_default();
+
         for aid in augment_ids {
             let resolved_id = db.resolve_augment_id(aid).unwrap_or_else(|| aid.clone());
             let global_stat = db.augments_map.get(&resolved_id);
 
-            let name = global_stat
-                .map(|a| a.name.clone())
-                .unwrap_or_else(|| format!("强化#{}", aid));
-            let rarity = global_stat
-                .map(|a| a.rarity.clone())
-                .unwrap_or_else(|| "白银".to_string());
-            let pair_wr = global_stat.map(|a| a.win_rate).unwrap_or(hero_win_rate);
-            let delta = pair_wr - hero_win_rate;
-            let games = global_stat.map(|a| a.games).unwrap_or(0);
-            let hex_score = global_stat.map(|a| a.hex_score).unwrap_or(50.0);
-            let description = global_stat.map(|a| a.description.clone()).unwrap_or_default();
-            let cdn_icon_url = global_stat.map(|a| a.cdn_icon_url.clone()).unwrap_or_default();
+            // Try to find champion-specific augment stats
+            let hero_specific_stat = hero_aug_list.iter().find(|ha| {
+                let hid_match = ha.get("id").or_else(|| ha.get("augmentId"))
+                    .map(|v| match v {
+                        Value::String(s) => s == &resolved_id || s == aid,
+                        Value::Number(n) => n.to_string() == resolved_id || n.to_string() == *aid,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+                let name_match = ha.get("name").or_else(|| ha.get("augmentName"))
+                    .and_then(|v| v.as_str())
+                    .map(|n| n == aid || n == &resolved_id)
+                    .unwrap_or(false);
+                hid_match || name_match
+            });
 
-            let mut score = 50.0 + (delta * 400.0);
+            let name = hero_specific_stat
+                .and_then(|ha| ha.get("name").or_else(|| ha.get("augmentName")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| global_stat.map(|a| a.name.clone()))
+                .unwrap_or_else(|| format!("强化#{}", aid));
+
+            let rarity = hero_specific_stat
+                .and_then(|ha| ha.get("rarity"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| global_stat.map(|a| a.rarity.clone()))
+                .unwrap_or_else(|| "白银".to_string());
+
+            let pair_wr = hero_specific_stat
+                .and_then(|ha| ha.get("winRate").or_else(|| ha.get("pairWinRate")))
+                .and_then(|v| v.as_f64())
+                .or_else(|| global_stat.map(|a| a.win_rate))
+                .unwrap_or(hero_win_rate);
+
+            let delta = hero_specific_stat
+                .and_then(|ha| ha.get("deltaWinRate"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(pair_wr - hero_win_rate);
+
+            let games = hero_specific_stat
+                .and_then(|ha| ha.get("games"))
+                .and_then(|v| v.as_i64())
+                .or_else(|| global_stat.map(|a| a.games))
+                .unwrap_or(0);
+
+            let hex_score = hero_specific_stat
+                .and_then(|ha| ha.get("hexScore"))
+                .and_then(|v| v.as_f64())
+                .or_else(|| global_stat.map(|a| a.hex_score))
+                .unwrap_or(50.0);
+
+            let description = hero_specific_stat
+                .and_then(|ha| ha.get("description").or_else(|| ha.get("augmentDescription")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| global_stat.map(|a| a.description.clone()))
+                .unwrap_or_default();
+
+            let cdn_icon_url = hero_specific_stat
+                .and_then(|ha| ha.get("iconUrl").or_else(|| ha.get("augmentIconUrl")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| global_stat.map(|a| a.cdn_icon_url.clone()))
+                .unwrap_or_default();
+
+            let wilson_wr = calc_wilson_lower_bound(pair_wr, games, 1.96);
+            let mut score = 50.0 + (delta * 400.0) + (wilson_wr - 0.5) * 50.0;
             if games < 100 {
                 score -= 10.0;
             }
@@ -356,6 +435,7 @@ impl DecisionEngine {
                 "deltaWinRate": delta,
                 "games": games,
                 "hexScore": hex_score,
+                "wilsonWinRate": (wilson_wr * 1000.0).round() / 1000.0,
                 "score": (score * 10.0).round() / 10.0,
                 "tierBadge": tier_badge,
                 "badgeLabel": badge_label,
