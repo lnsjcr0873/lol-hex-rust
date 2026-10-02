@@ -1113,25 +1113,25 @@ unsafe fn render_ranked_hud(
     _height: i32,
     data: &RankedOverlayData,
 ) {
-    let (left_collapsed, right_collapsed, mut active_tab, offset, sample_count, btn_status) = if let Ok(inter) = RANKED_INTERACTION.read() {
-        (
-            inter.left_wing_collapsed,
-            inter.right_wing_collapsed,
-            inter.active_tab.clone(),
-            inter.counter_scroll_offset,
-            inter.sample_match_count,
-            inter.btn_status_text.as_ref().and_then(|txt| {
-                if let Some(t) = inter.btn_status_time {
-                    if t.elapsed() < Duration::from_secs(3) {
-                        return Some(txt.clone());
-                    }
-                }
-                None
-            }),
-        )
+    let inter = if let Ok(guard) = RANKED_INTERACTION.read() {
+        guard.clone()
     } else {
-        (false, false, "lane_counter".to_string(), 0, 20, None)
+        RankedInteractionState::default()
     };
+
+    let left_collapsed = inter.left_wing_collapsed;
+    let right_collapsed = inter.right_wing_collapsed;
+    let mut active_tab = inter.active_tab.clone();
+    let _offset = inter.counter_scroll_offset;
+    let sample_count = inter.sample_match_count;
+    let btn_status = inter.btn_status_text.as_ref().and_then(|txt| {
+        if let Some(t) = inter.btn_status_time {
+            if t.elapsed() < Duration::from_secs(3) {
+                return Some(txt.clone());
+            }
+        }
+        None
+    });
 
     // Auto-switch to runes when locked in
     if data.decision_card.my_locked && data.decision_card.rune_guide.is_some() && active_tab != "runes" {
