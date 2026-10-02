@@ -20,6 +20,59 @@ use tokio::sync::RwLock;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+async fn fetch_slot_counters_and_synergies(
+    opgg: &crate::crawler::OpggClient,
+    db: &crate::data::loader::Database,
+    cid_str: &str,
+    pos: &str,
+) -> (Vec<crate::overlay::CounterHeroItem>, Vec<crate::overlay::CounterHeroItem>) {
+    if cid_str.is_empty() || cid_str == "0" {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut counters = Vec::new();
+    let c_data = opgg.get_counter_picks_against(cid_str, pos, Some(30)).await;
+    if let Some(arr) = c_data.get("counters").and_then(|v| v.as_array()) {
+        for c in arr {
+            let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
+            let opp_name = db.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
+            let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+            let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+            let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
+            counters.push(crate::overlay::CounterHeroItem {
+                champion_id: opp_cid.parse().unwrap_or(0),
+                name: opp_name,
+                tier,
+                counter_win_rate: c_wr,
+                overall_win_rate: c_wr,
+                games,
+            });
+        }
+    }
+
+    let mut synergies = Vec::new();
+    let syn_data = opgg.get_champion_synergies(cid_str, pos).await;
+    if let Some(arr) = syn_data.get("synergies").and_then(|v| v.as_array()) {
+        for s in arr {
+            let syn_cid = s.get("championId").and_then(|v| v.as_str()).unwrap_or("");
+            let syn_name = db.resolve_hero_name(syn_cid).unwrap_or_else(|| format!("Hero-{}", syn_cid));
+            let wr = s.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+            let games = s.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+            let tier = s.get("tier").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+            synergies.push(crate::overlay::CounterHeroItem {
+                champion_id: syn_cid.parse().unwrap_or(0),
+                name: syn_name,
+                tier,
+                counter_win_rate: wr,
+                overall_win_rate: wr,
+                games,
+            });
+        }
+    }
+
+    (counters, synergies)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder()
@@ -158,6 +211,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
+                            let (c_heroes, s_heroes) = fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await;
+
                             my_slots.push(crate::overlay::RankedSlotView {
                                 slot_index: idx,
                                 position: s.position.clone(),
@@ -171,6 +226,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 is_manual_pos: false,
                                 matchup_win_rate: m_wr,
                                 profile: prof,
+                                counter_heroes: c_heroes,
+                                synergy_heroes: s_heroes,
                             });
                         }
 
@@ -187,6 +244,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
+                            let (c_heroes, s_heroes) = fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await;
+
                             their_slots.push(crate::overlay::RankedSlotView {
                                 slot_index: idx,
                                 position: s.position.clone(),
@@ -200,6 +259,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 is_manual_pos: false,
                                 matchup_win_rate: m_wr,
                                 profile: None,
+                                counter_heroes: c_heroes,
+                                synergy_heroes: s_heroes,
                             });
                         }
 

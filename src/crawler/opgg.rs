@@ -423,7 +423,7 @@ impl OpggClient {
             wr_b.partial_cmp(&wr_a).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let n = top_n.unwrap_or(5);
+        let n = top_n.unwrap_or(50);
         if candidates.len() > n {
             candidates.truncate(n);
         }
@@ -435,10 +435,81 @@ impl OpggClient {
         })
     }
 
-    pub async fn get_champion_synergies(&self, champion: &str, position: &str) -> Value {
+    pub async fn get_champion_synergies(&self, champion_id: &str, position: &str) -> Value {
+        let pos_upper = position.to_uppercase();
+        let pos_lower = match pos_upper.as_str() {
+            "TOP" => "top",
+            "JUNGLE" => "jungle",
+            "MID" => "mid",
+            "ADC" => "adc",
+            "SUPPORT" => "support",
+            _ => "mid",
+        };
+        let disk_filename = format!("synergies_{}_{}_{}.json", self.region, champion_id, pos_upper);
+        let disk_path = self.cache_dir.join(&disk_filename);
+
+        if disk_path.exists() {
+            if let Ok(content) = fs::read_to_string(&disk_path) {
+                if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                    return val;
+                }
+            }
+        }
+
+        let url = format!(
+            "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}/synergies",
+            self.region, champion_id, pos_lower
+        );
+        info!("Fetching OP.GG champion synergies: {}", url);
+
+        match self.client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(raw) = resp.json::<Value>().await {
+                    let mut list = Vec::new();
+                    if let Some(arr) = raw.get("data").and_then(|v| v.as_array()) {
+                        for item in arr {
+                            if let Some(syn_cid) = item.get("synergy_champion_id").and_then(|v| v.as_i64()) {
+                                let wr = item.get("win_rate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                let games = item.get("play").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let tier = item.get("synergy_tier_data").and_then(|t| t.get("tier")).and_then(|v| v.as_i64()).unwrap_or(3) as i32;
+                                let syn_pos = item.get("synergy_position").and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
+                                list.push(json!({
+                                    "championId": syn_cid.to_string(),
+                                    "position": syn_pos,
+                                    "winRate": wr,
+                                    "games": games,
+                                    "tier": tier,
+                                    "delta": wr - 0.5,
+                                }));
+                            }
+                        }
+                    }
+
+                    list.sort_by(|a, b| {
+                        let wr_a = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let wr_b = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        wr_b.partial_cmp(&wr_a).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                    let res = json!({
+                        "championId": champion_id,
+                        "position": pos_upper,
+                        "synergies": list
+                    });
+
+                    let _ = fs::write(&disk_path, serde_json::to_string_pretty(&res).unwrap_or_default());
+                    return res;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch OP.GG synergies: {}", e);
+            }
+            _ => {}
+        }
+
         json!({
-            "champion": champion,
-            "position": position,
+            "championId": champion_id,
+            "position": pos_upper,
             "synergies": []
         })
     }

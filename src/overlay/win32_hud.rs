@@ -96,6 +96,8 @@ pub struct RankedSlotView {
     pub is_manual_pos: bool,
     pub matchup_win_rate: Option<f64>,
     pub profile: Option<crate::engine::player_history::PlayerTacticalProfile>,
+    pub counter_heroes: Vec<CounterHeroItem>,
+    pub synergy_heroes: Vec<CounterHeroItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -116,6 +118,11 @@ pub struct RankedInteractionState {
     pub btn_status_text: Option<String>,
     pub btn_status_time: Option<Instant>,
     pub last_local_locked: bool,
+    pub inspect_slot: Option<(bool, usize)>,
+    pub inspect_tab: String,
+    pub sort_ascending: bool,
+    pub inspect_scroll_offset: usize,
+    pub inspect_closed: bool,
 }
 
 impl Default for RankedInteractionState {
@@ -129,6 +136,11 @@ impl Default for RankedInteractionState {
             btn_status_text: None,
             btn_status_time: None,
             last_local_locked: false,
+            inspect_slot: None,
+            inspect_tab: "counter".to_string(),
+            sort_ascending: false,
+            inspect_scroll_offset: 0,
+            inspect_closed: false,
         }
     }
 }
@@ -142,6 +154,11 @@ pub struct HudHotzones {
     pub left_wing_toggle: Option<(i32, i32, i32, i32)>,
     pub right_wing_toggle: Option<(i32, i32, i32, i32)>,
     pub pos_btns: Vec<((i32, i32, i32, i32), bool, usize)>,
+    pub inspect_slot_btns: Vec<((i32, i32, i32, i32), bool, usize)>,
+    pub inspect_tab_btns: Vec<((i32, i32, i32, i32), String)>,
+    pub inspect_sort_btn: Option<(i32, i32, i32, i32)>,
+    pub inspect_close_btn: Option<(i32, i32, i32, i32)>,
+    pub inspect_nav_btns: Vec<((i32, i32, i32, i32), i32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -323,7 +340,68 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         }
     }
 
-    // 7. Pos buttons (left click cycles as well)
+    // 7. Hero Inspection close button
+    if let Some((x1, y1, x2, y2)) = hotzones.inspect_close_btn {
+        if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
+            if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                inter.inspect_closed = true;
+                inter.inspect_slot = None;
+                repaint_needed = true;
+            }
+        }
+    }
+
+    // 8. Hero Inspection sort button (toggle asc/desc)
+    if let Some((x1, y1, x2, y2)) = hotzones.inspect_sort_btn {
+        if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
+            if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                inter.sort_ascending = !inter.sort_ascending;
+                repaint_needed = true;
+            }
+        }
+    }
+
+    // 9. Hero Inspection tab buttons (counter vs synergy)
+    for ((x1, y1, x2, y2), tab_key) in &hotzones.inspect_tab_btns {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                if inter.inspect_tab != *tab_key {
+                    inter.inspect_tab = tab_key.clone();
+                    inter.inspect_scroll_offset = 0;
+                    repaint_needed = true;
+                }
+            }
+            break;
+        }
+    }
+
+    // 10. Hero Inspection slot buttons (click slot to inspect that hero)
+    for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.inspect_slot_btns {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                inter.inspect_closed = false;
+                inter.inspect_slot = Some((*is_my_team, *slot_index));
+                inter.inspect_scroll_offset = 0;
+                repaint_needed = true;
+            }
+            break;
+        }
+    }
+
+    // 11. Hero Inspection nav buttons
+    for ((x1, y1, x2, y2), delta) in &hotzones.inspect_nav_btns {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                let curr = inter.inspect_scroll_offset as i32;
+                let next = (curr + delta).max(0) as usize;
+                inter.inspect_scroll_offset = next;
+                repaint_needed = true;
+            }
+            break;
+        }
+    }
+
+    // 12. Pos buttons (left click cycles as well)
     for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.pos_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
             cycle_slot_position(*is_my_team, *slot_index);
@@ -1066,7 +1144,7 @@ unsafe fn render_ranked_hud(
         }
     }
 
-    let (actual_left_margin, actual_offset_y, cw, _ch) = if let Some(r) = crate::vision::ScreenCapture::get_lol_client_rect() {
+    let (actual_left_margin, actual_offset_y, cw, ch) = if let Some(r) = crate::vision::ScreenCapture::get_lol_client_rect() {
         let sx = r.width as f64 / 1280.0;
         let sy = r.height as f64 / 720.0;
         let top_h = (44.0 * sy) as i32;
@@ -1085,79 +1163,25 @@ unsafe fn render_ranked_hud(
     let mut new_hotzones = HudHotzones::default();
 
     // -------------------------------------------------------------
-    // 1. Top Decision Bar (Outer Docked at actual_offset_y)
+    // 1. Top Minimal Bar (Compact Rune Button & Sample Switcher)
     // -------------------------------------------------------------
-    let card_w = (880.0 * sx) as i32;
-    let card_h = (36.0 * sy) as i32;
-    let cx = actual_left_margin + (cw - card_w) / 2;
-    let cy = if actual_offset_y >= card_h { (actual_offset_y - card_h) / 2 } else { 2 };
-
-    let theme_border = match active_tab.as_str() {
-        "lane_counter" => rgb(0, 230, 150),  // Emerald
-        "multi_counter" => rgb(56, 189, 248), // Sky blue
-        "synergy" => rgb(167, 139, 250),       // Purple
-        "runes" => rgb(245, 158, 11),         // Amber
-        _ => rgb(56, 189, 248),
-    };
-
-    draw_card_rect(hdc, cx, cy, card_w, card_h, rgb(8, 14, 24), theme_border);
-
-    // 1.1 Left: Tab Buttons
-    let mut available_tabs = vec![
-        ("lane_counter", "🎯 对位"),
-        ("multi_counter", "⚔️ 全阵容"),
-        ("synergy", "🤝 协同"),
-    ];
-    if data.decision_card.rune_guide.is_some() {
-        available_tabs.push(("runes", "⚡ 符文"));
-    }
-
-    let tab_start_x = cx + (6.0 * sx) as i32;
-    let tab_w = (54.0 * sx) as i32;
-    let tab_h = (22.0 * sy) as i32;
-    let tab_y1 = cy + (card_h - tab_h) / 2;
-    let tab_y2 = tab_y1 + tab_h;
-    let tab_gap = (3.0 * sx) as i32;
-
-    for (idx, (t_key, t_label)) in available_tabs.iter().enumerate() {
-        let tx1 = tab_start_x + idx as i32 * (tab_w + tab_gap);
-        let tx2 = tx1 + tab_w;
-        let is_active = active_tab == *t_key;
-
-        let (t_bg, t_border, t_fg) = if is_active {
-            match *t_key {
-                "lane_counter" => (rgb(6, 78, 59), rgb(52, 211, 153), rgb(255, 255, 255)),
-                "multi_counter" => (rgb(30, 58, 138), rgb(96, 165, 250), rgb(255, 255, 255)),
-                "synergy" => (rgb(76, 29, 149), rgb(192, 132, 252), rgb(255, 255, 255)),
-                _ => (rgb(120, 53, 15), rgb(251, 191, 36), rgb(255, 255, 255)),
-            }
-        } else {
-            (rgb(17, 24, 39), rgb(55, 65, 81), rgb(156, 163, 175))
-        };
-
-        draw_card_rect(hdc, tx1, tab_y1, tab_w, tab_h, t_bg, t_border);
-        draw_text_line(hdc, t_label, tx1 + 4, tab_y1 + 4, t_fg);
-        new_hotzones.tab_btns.push(((tx1, tab_y1, tx2, tab_y2), t_key.to_string()));
-    }
-
-    let sep_x = tab_start_x + available_tabs.len() as i32 * (tab_w + tab_gap) + 4;
-    draw_h_line(hdc, sep_x, cy + 4, sep_x, rgb(31, 41, 61));
-
-    // 1.2 Right: Sample buttons
+    let top_y = if actual_offset_y >= 30 { (actual_offset_y - 28) / 2 } else { 2 };
+    
+    // Sample switcher on top right
     let sample_counts = [10, 20, 30, 50];
     let s_btn_w = (28.0 * sx) as i32;
     let s_btn_h = (18.0 * sy) as i32;
     let s_gap = (3.0 * sx) as i32;
     let total_s_w = sample_counts.len() as i32 * s_btn_w + (sample_counts.len() as i32 - 1) * s_gap;
-    let s_group_right = cx + card_w - 6;
+    let s_group_right = actual_left_margin + cw - 12;
     let s_group_left = s_group_right - total_s_w;
 
     let label_x = s_group_left - (45.0 * sx) as i32;
-    draw_text_line(hdc, "📊样本:", label_x, cy + (card_h - 12) / 2, rgb(148, 163, 184));
+    draw_text_line(hdc, "📊样本:", label_x, top_y + 3, rgb(148, 163, 184));
 
     for (idx, &sc) in sample_counts.iter().enumerate() {
         let sbx1 = s_group_left + idx as i32 * (s_btn_w + s_gap);
-        let sby1 = cy + (card_h - s_btn_h) / 2;
+        let sby1 = top_y;
         let sbx2 = sbx1 + s_btn_w;
         let sby2 = sby1 + s_btn_h;
         let is_active_sample = sample_count == sc;
@@ -1174,112 +1198,24 @@ unsafe fn render_ranked_hud(
         new_hotzones.sample_btns.push(((sbx1, sby1, sbx2, sby2), sc));
     }
 
-    let sep2_x = label_x - 10;
+    // Rune import pill button at top center (if available)
+    if let Some(ref rg) = data.decision_card.rune_guide {
+        let btn_w = (230.0 * sx) as i32;
+        let btn_h = (24.0 * sy) as i32;
+        let bx1 = actual_left_margin + (cw - btn_w) / 2;
+        let bx2 = bx1 + btn_w;
+        let by1 = top_y;
+        let by2 = by1 + btn_h;
 
-    // 1.3 Middle Content
-    let content_start_x = sep_x + 8;
-    let content_end_x = sep2_x - 8;
-
-    if active_tab == "runes" {
-        if let Some(ref rg) = data.decision_card.rune_guide {
-            let info_text = format!("⚡ [{} - {}] 对线符文已匹配  加点: {}", rg.champion_name, rg.position_cn, rg.skill_order);
-            draw_text_line(hdc, &info_text, content_start_x, cy + (card_h - 14) / 2, rgb(224, 242, 254));
-
-            let btn_w = (145.0 * sx) as i32;
-            let btn_h = (24.0 * sy) as i32;
-            let bx2 = content_end_x;
-            let bx1 = bx2 - btn_w;
-            let by1 = cy + (card_h - btn_h) / 2;
-            let by2 = by1 + btn_h;
-
-            let (btn_bg, btn_border, btn_label) = if let Some(ref status) = btn_status {
-                (rgb(6, 78, 59), rgb(52, 211, 153), status.as_str())
-            } else {
-                (rgb(2, 132, 199), rgb(56, 189, 248), "⚡ 一键导入 OP.GG 符文")
-            };
-
-            draw_card_rect(hdc, bx1, by1, btn_w, btn_h, btn_bg, btn_border);
-            draw_text_line(hdc, btn_label, bx1 + 6, by1 + 5, rgb(255, 255, 255));
-            new_hotzones.rune_btn = Some((bx1, by1, bx2, by2));
+        let (btn_bg, btn_border, btn_label) = if let Some(ref status) = btn_status {
+            (rgb(6, 78, 59), rgb(52, 211, 153), status.as_str())
         } else {
-            draw_text_line(hdc, "等待锁定英雄 · 锁定后将自动推送一键符文与对位建议", content_start_x, cy + (card_h - 14) / 2, rgb(148, 163, 184));
-        }
-    } else {
-        let items: &[CounterHeroItem] = match active_tab.as_str() {
-            "multi_counter" => &data.decision_card.multi_counters,
-            "synergy" => &data.decision_card.synergy_picks,
-            _ => &data.decision_card.lane_counters,
+            (rgb(2, 132, 199), rgb(56, 189, 248), "⚡ 一键导入 OP.GG 符文")
         };
 
-        if items.is_empty() {
-            draw_text_line(hdc, "⏳ 正在实时拉取与推演排位大数据...", content_start_x, cy + (card_h - 14) / 2, rgb(100, 116, 139));
-        } else {
-            let total = items.len();
-            let visible_count = 4;
-            let max_offset = total.saturating_sub(visible_count);
-            let cur_offset = offset.min(max_offset);
-            let visible_items = &items[cur_offset..(cur_offset + visible_count).min(total)];
-
-            // Left nav arrow
-            let arr_w = (16.0 * sx) as i32;
-            let arr_h = (22.0 * sy) as i32;
-            let arr_ly = cy + (card_h - arr_h) / 2;
-            let can_prev = cur_offset > 0;
-            let (arr_l_bg, arr_l_fg) = if can_prev { (rgb(30, 41, 59), rgb(56, 189, 248)) } else { (rgb(11, 19, 32), rgb(51, 65, 85)) };
-            draw_card_rect(hdc, content_start_x, arr_ly, arr_w, arr_h, arr_l_bg, rgb(30, 41, 59));
-            draw_text_line(hdc, "◀", content_start_x + 3, arr_ly + 3, arr_l_fg);
-            if can_prev {
-                new_hotzones.nav_btns.push(((content_start_x, arr_ly, content_start_x + arr_w, arr_ly + arr_h), -2));
-            }
-
-            // Pills
-            let pill_start_x = content_start_x + arr_w + (5.0 * sx) as i32;
-            let pill_w = (88.0 * sx) as i32;
-            let pill_h = (22.0 * sy) as i32;
-            let pill_gap = (4.0 * sx) as i32;
-            let pill_y = cy + (card_h - pill_h) / 2;
-
-            for (idx, item) in visible_items.iter().enumerate() {
-                let px1 = pill_start_x + idx as i32 * (pill_w + pill_gap);
-                let (t_fg, t_bg) = match item.tier {
-                    1 => (rgb(0, 230, 150), rgb(4, 47, 26)),
-                    2 => (rgb(59, 130, 246), rgb(12, 43, 78)),
-                    3 => (rgb(200, 170, 110), rgb(58, 43, 22)),
-                    4 => (rgb(249, 115, 22), rgb(63, 27, 10)),
-                    _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
-                };
-
-                draw_card_rect(hdc, px1, pill_y, pill_w, pill_h, rgb(9, 20, 40), rgb(30, 41, 59));
-
-                // Tier badge
-                let tag_w = (18.0 * sx) as i32;
-                draw_card_rect(hdc, px1, pill_y, tag_w, pill_h, t_bg, t_fg);
-                let t_label = format!("T{}", item.tier);
-                draw_text_line(hdc, &t_label, px1 + 2, pill_y + 3, t_fg);
-
-                // Hero name
-                let name_disp: String = item.name.chars().take(3).collect();
-                draw_text_line(hdc, &name_disp, px1 + tag_w + 3, pill_y + 3, rgb(240, 246, 252));
-
-                // Win rate
-                let wr_str = format!("{:.1}%", item.counter_win_rate * 100.0);
-                let wr_col = if item.counter_win_rate >= 0.5 { rgb(0, 230, 150) } else { rgb(239, 68, 68) };
-                draw_text_line(hdc, &wr_str, px1 + pill_w - 36, pill_y + 3, wr_col);
-            }
-
-            // Right nav arrow
-            let arr_rx = pill_start_x + visible_items.len() as i32 * (pill_w + pill_gap);
-            let can_next = cur_offset + visible_count < total;
-            let (arr_r_bg, arr_r_fg) = if can_next { (rgb(30, 41, 59), rgb(56, 189, 248)) } else { (rgb(11, 19, 32), rgb(51, 65, 85)) };
-            draw_card_rect(hdc, arr_rx, arr_ly, arr_w, arr_h, arr_r_bg, rgb(30, 41, 59));
-            draw_text_line(hdc, "▶", arr_rx + 3, arr_ly + 3, arr_r_fg);
-            if can_next {
-                new_hotzones.nav_btns.push(((arr_rx, arr_ly, arr_rx + arr_w, arr_ly + arr_h), 2));
-            }
-
-            let ind_text = format!("{}-{}/{}", cur_offset + 1, (cur_offset + visible_count).min(total), total);
-            draw_text_line(hdc, &ind_text, arr_rx + arr_w + 4, cy + (card_h - 12) / 2, rgb(100, 116, 139));
-        }
+        draw_card_rect(hdc, bx1, by1, btn_w, btn_h, btn_bg, btn_border);
+        draw_text_line(hdc, btn_label, bx1 + 10, by1 + 4, rgb(255, 255, 255));
+        new_hotzones.rune_btn = Some((bx1, by1, bx2, by2));
     }
 
     // -------------------------------------------------------------
@@ -1319,9 +1255,12 @@ unsafe fn render_ranked_hud(
         let card_h = (74.0 * sy) as i32;
         for (idx, slot) in data.my_team.iter().take(5).enumerate() {
             let cy1 = actual_offset_y + ((100.0 + idx as f64 * 92.0 - 8.0) * sy) as i32;
+            let is_inspected = inter.inspect_slot == Some((true, idx));
+            let card_border = if is_inspected { rgb(251, 191, 36) } else { rgb(30, 58, 95) };
 
-            draw_card_rect(hdc, wx1, cy1, wx2 - wx1, card_h, rgb(9, 20, 36), rgb(30, 58, 95));
-            draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, rgb(2, 132, 199));
+            draw_card_rect(hdc, wx1, cy1, wx2 - wx1, card_h, rgb(9, 20, 36), card_border);
+            draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, if is_inspected { rgb(251, 191, 36) } else { rgb(2, 132, 199) });
+            new_hotzones.inspect_slot_btns.push(((wx1, cy1, wx2, cy1 + card_h), true, idx));
 
             let slot_name = if slot.champion_name.is_empty() { format!("我方{}楼", idx + 1) } else { slot.champion_name.clone() };
             let row1_left = format!("[{}] {}", slot.position_cn, slot_name);
@@ -1376,7 +1315,7 @@ unsafe fn render_ranked_hud(
                     draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
                 }
             } else {
-                draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+                draw_text_line(hdc, "🎯 点击查看对位/协同 ▶", wx1 + 6, cy1 + 46, rgb(56, 189, 248));
             }
         }
     }
@@ -1415,14 +1354,18 @@ unsafe fn render_ranked_hud(
         let card_h = (74.0 * sy) as i32;
         for (idx, slot) in data.their_team.iter().take(5).enumerate() {
             let cy1 = actual_offset_y + ((100.0 + idx as f64 * 92.0 - 8.0) * sy) as i32;
+            let is_inspected = inter.inspect_slot == Some((false, idx));
+            let card_border = if is_inspected { rgb(251, 191, 36) } else { rgb(74, 24, 32) };
 
-            draw_card_rect(hdc, wx1, cy1, wx2 - wx1, card_h, rgb(26, 12, 22), rgb(74, 24, 32));
-            draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, rgb(225, 29, 72));
+            draw_card_rect(hdc, wx1, cy1, wx2 - wx1, card_h, rgb(26, 12, 22), card_border);
+            draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, if is_inspected { rgb(251, 191, 36) } else { rgb(225, 29, 72) });
+            new_hotzones.inspect_slot_btns.push(((wx1, cy1, wx2, cy1 + card_h), false, idx));
 
-            let row1_text = format!("[{}] 敌方{}楼", slot.position_cn, idx + 1);
+            let enemy_cname = if slot.champion_name.is_empty() { format!("敌方{}楼", idx + 1) } else { slot.champion_name.clone() };
+            let row1_text = format!("[{}] {}", slot.position_cn, enemy_cname);
             draw_text_line(hdc, &row1_text, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
-            draw_text_line(hdc, "🔒 敌方选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
-            draw_text_line(hdc, "⚔️ 进入对局后自动解锁", wx1 + 6, cy1 + 45, rgb(100, 116, 139));
+            draw_text_line(hdc, "🔒 选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
+            draw_text_line(hdc, "🎯 点击查看克制/协同 ▶", wx1 + 6, cy1 + 46, rgb(244, 63, 94));
         }
     }
 
@@ -1467,6 +1410,7 @@ unsafe fn render_ranked_hud(
 
         let wr_str = format!("{:.1}%", slot.win_rate * 100.0);
         draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 40, sy1 + 5, rgb(203, 213, 225));
+        new_hotzones.inspect_slot_btns.push(((actual_left_margin, sy1, left_slot_x + slot_card_w, sy1 + slot_card_h), true, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let diff = m_wr - 0.5;
@@ -1516,6 +1460,7 @@ unsafe fn render_ranked_hud(
 
         let wr_str = format!("{:.1}%", slot.win_rate * 100.0);
         draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 40, sy1 + 5, rgb(203, 213, 225));
+        new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, actual_left_margin + cw, sy1 + slot_card_h), false, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let enemy_wr = 1.0 - m_wr;
@@ -1530,6 +1475,190 @@ unsafe fn render_ranked_hud(
             draw_text_line(hdc, &m_text, right_slot_x + 5, sy1 + 24, m_col);
         } else {
             draw_text_line(hdc, "⏳ 等待对位锁定...", right_slot_x + 5, sy1 + 24, rgb(100, 116, 139));
+        }
+    }
+
+    // -------------------------------------------------------------
+    // 5. Hero-Adjacent Floating Inspector Overlay (Counter & Synergy)
+    // -------------------------------------------------------------
+    let inspect_target = if let Some((is_my, slot_i)) = inter.inspect_slot {
+        Some((is_my, slot_i))
+    } else if !inter.inspect_closed {
+        // Auto-inspect: prioritize enemy laner facing local player, then local player, then any picked champ
+        let local_slot = data.my_team.iter().find(|s| s.is_local_player);
+        let enemy_laner = local_slot.and_then(|ls| {
+            data.their_team.iter().enumerate().find(|(_, ts)| ts.position == ls.position && ts.champion_id > 0)
+        });
+        if let Some((enemy_i, _)) = enemy_laner {
+            Some((false, enemy_i))
+        } else if let Some(local_i) = data.my_team.iter().position(|s| s.is_local_player && s.champion_id > 0) {
+            Some((true, local_i))
+        } else if let Some(enemy_i) = data.their_team.iter().position(|s| s.champion_id > 0) {
+            Some((false, enemy_i))
+        } else if let Some(ally_i) = data.my_team.iter().position(|s| s.champion_id > 0) {
+            Some((true, ally_i))
+        } else {
+            data.my_team.iter().position(|s| s.is_local_player).map(|i| (true, i))
+        }
+    } else {
+        None
+    };
+
+    if let Some((is_my_team, slot_index)) = inspect_target {
+        let slot_opt = if is_my_team {
+            data.my_team.get(slot_index)
+        } else {
+            data.their_team.get(slot_index)
+        };
+
+        if let Some(slot) = slot_opt {
+            let f_w = (275.0 * sx) as i32;
+            let f_h = (295.0 * sy) as i32;
+            let f_x = if is_my_team {
+                actual_left_margin + (85.0 * sx) as i32
+            } else {
+                actual_left_margin + cw - (85.0 * sx) as i32 - f_w
+            };
+
+            let base_y = actual_offset_y + ((100.0 + slot_index as f64 * 92.0 - 15.0) * sy) as i32;
+            let f_y = base_y.clamp(actual_offset_y + (42.0 * sy) as i32, (actual_offset_y + ch) - f_h - 10);
+
+            // Card container
+            let border_col = if is_my_team { rgb(14, 165, 233) } else { rgb(244, 63, 94) };
+            draw_card_rect(hdc, f_x, f_y, f_w, f_h, rgb(10, 16, 28), border_col);
+            draw_h_line(hdc, f_x + 4, f_y + 1, f_x + f_w - 4, if is_my_team { rgb(56, 189, 248) } else { rgb(251, 113, 133) });
+
+            // Header Title
+            let hero_name = if slot.champion_name.is_empty() {
+                if is_my_team { format!("我方{}楼", slot_index + 1) } else { format!("敌方{}楼", slot_index + 1) }
+            } else {
+                slot.champion_name.clone()
+            };
+            let title = format!("[{}] {} · 战术情报", slot.position_cn, hero_name);
+            draw_text_line(hdc, &title, f_x + 10, f_y + 6, rgb(255, 255, 255));
+
+            // Close button
+            let close_w = 20;
+            let close_h = 16;
+            let close_x = f_x + f_w - close_w - 8;
+            let close_y = f_y + 6;
+            draw_card_rect(hdc, close_x, close_y, close_w, close_h, rgb(30, 41, 59), rgb(100, 116, 139));
+            draw_text_line(hdc, "✕", close_x + 5, close_y + 1, rgb(226, 232, 240));
+            new_hotzones.inspect_close_btn = Some((close_x, close_y, close_x + close_w, close_y + close_h));
+
+            // Toolbar: Tabs & Sort
+            let ty = f_y + 28;
+            let is_cnt = inter.inspect_tab == "counter";
+            let tab1_w = (72.0 * sx) as i32;
+            let tab1_x = f_x + 8;
+            draw_card_rect(hdc, tab1_x, ty, tab1_w, 20, if is_cnt { rgb(15, 76, 129) } else { rgb(15, 23, 42) }, if is_cnt { rgb(56, 189, 248) } else { rgb(51, 65, 85) });
+            draw_text_line(hdc, "🎯 克制", tab1_x + 10, ty + 3, if is_cnt { rgb(255, 255, 255) } else { rgb(148, 163, 184) });
+            new_hotzones.inspect_tab_btns.push(((tab1_x, ty, tab1_x + tab1_w, ty + 20), "counter".to_string()));
+
+            let is_syn = inter.inspect_tab == "synergy";
+            let tab2_w = (72.0 * sx) as i32;
+            let tab2_x = tab1_x + tab1_w + 6;
+            draw_card_rect(hdc, tab2_x, ty, tab2_w, 20, if is_syn { rgb(15, 76, 129) } else { rgb(15, 23, 42) }, if is_syn { rgb(56, 189, 248) } else { rgb(51, 65, 85) });
+            draw_text_line(hdc, "🤝 协同", tab2_x + 10, ty + 3, if is_syn { rgb(255, 255, 255) } else { rgb(148, 163, 184) });
+            new_hotzones.inspect_tab_btns.push(((tab2_x, ty, tab2_x + tab2_w, ty + 20), "synergy".to_string()));
+
+            let sort_w = (82.0 * sx) as i32;
+            let sort_x = f_x + f_w - sort_w - 8;
+            let sort_label = if inter.sort_ascending { "胜率 ▲升序" } else { "胜率 ▼降序" };
+            draw_card_rect(hdc, sort_x, ty, sort_w, 20, rgb(39, 23, 4), rgb(245, 158, 11));
+            draw_text_line(hdc, sort_label, sort_x + 6, ty + 3, rgb(251, 191, 36));
+            new_hotzones.inspect_sort_btn = Some((sort_x, ty, sort_x + sort_w, ty + 20));
+
+            // Column Header
+            let hy = f_y + 52;
+            draw_h_line(hdc, f_x + 6, hy - 1, f_x + f_w - 6, rgb(30, 41, 59));
+            draw_text_line(hdc, "英雄 / 评级", f_x + 10, hy + 2, rgb(100, 116, 139));
+            let wr_col_name = if inter.inspect_tab == "synergy" { "协同胜率" } else { "克制胜率" };
+            draw_text_line(hdc, wr_col_name, f_x + 120, hy + 2, rgb(100, 116, 139));
+            draw_text_line(hdc, "场次", f_x + 215, hy + 2, rgb(100, 116, 139));
+
+            // Data Items
+            let mut items = if inter.inspect_tab == "synergy" {
+                slot.synergy_heroes.clone()
+            } else {
+                slot.counter_heroes.clone()
+            };
+
+            if inter.sort_ascending {
+                items.sort_by(|a, b| a.counter_win_rate.partial_cmp(&b.counter_win_rate).unwrap_or(std::cmp::Ordering::Equal));
+            } else {
+                items.sort_by(|a, b| b.counter_win_rate.partial_cmp(&a.counter_win_rate).unwrap_or(std::cmp::Ordering::Equal));
+            }
+
+            let page_size = 6;
+            let total_pages = if items.is_empty() { 1 } else { (items.len() + page_size - 1) / page_size };
+            let page_idx = (inter.inspect_scroll_offset / page_size).min(total_pages - 1);
+            let start_idx = page_idx * page_size;
+            let visible_items: Vec<_> = items.iter().skip(start_idx).take(page_size).collect();
+
+            if visible_items.is_empty() {
+                draw_text_line(hdc, "⏳ 暂无 OP.GG 战术数据", f_x + 20, f_y + 110, rgb(148, 163, 184));
+                draw_text_line(hdc, "(等待选定英雄或数据拉取中)", f_x + 20, f_y + 130, rgb(100, 116, 139));
+            } else {
+                for (r_i, item) in visible_items.iter().enumerate() {
+                    let ry = f_y + 70 + r_i as i32 * 32;
+                    let row_bg = if r_i % 2 == 0 { rgb(15, 23, 42) } else { rgb(20, 30, 52) };
+                    draw_card_rect(hdc, f_x + 6, ry, f_w - 12, 28, row_bg, rgb(30, 41, 59));
+
+                    let (t_fg, t_bg) = match item.tier {
+                        1 => (rgb(0, 230, 150), rgb(4, 47, 26)),
+                        2 => (rgb(59, 130, 246), rgb(12, 43, 78)),
+                        3 => (rgb(200, 170, 110), rgb(58, 43, 22)),
+                        4 => (rgb(249, 115, 22), rgb(63, 27, 10)),
+                        _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
+                    };
+                    draw_card_rect(hdc, f_x + 10, ry + 5, 20, 16, t_bg, t_fg);
+                    draw_text_line(hdc, &format!("T{}", item.tier), f_x + 12, ry + 6, t_fg);
+
+                    draw_text_line(hdc, &item.name, f_x + 36, ry + 6, rgb(241, 245, 249));
+
+                    let wr_pct = item.counter_win_rate * 100.0;
+                    let wr_diff = wr_pct - 50.0;
+                    let wr_fg = if wr_diff >= 2.0 {
+                        rgb(0, 230, 150)
+                    } else if wr_diff <= -2.0 {
+                        rgb(239, 68, 68)
+                    } else {
+                        rgb(251, 191, 36)
+                    };
+                    let wr_str = format!("{:.1}%", wr_pct);
+                    draw_text_line(hdc, &wr_str, f_x + 120, ry + 6, wr_fg);
+
+                    let g_str = if item.games >= 1000 {
+                        format!("{:.1}k", item.games as f64 / 1000.0)
+                    } else {
+                        format!("{}", item.games)
+                    };
+                    draw_text_line(hdc, &g_str, f_x + 215, ry + 6, rgb(148, 163, 184));
+                }
+            }
+
+            // Footer
+            let py = f_y + f_h - 26;
+            draw_h_line(hdc, f_x + 6, py - 2, f_x + f_w - 6, rgb(30, 41, 59));
+            if items.len() > page_size {
+                let prev_w = 42;
+                let prev_x = f_x + 10;
+                draw_card_rect(hdc, prev_x, py, prev_w, 20, rgb(20, 30, 50), rgb(51, 65, 85));
+                draw_text_line(hdc, "◀ 上页", prev_x + 4, py + 3, rgb(148, 163, 184));
+                new_hotzones.inspect_nav_btns.push(((prev_x, py, prev_x + prev_w, py + 20), -(page_size as i32)));
+
+                let page_info = format!("{}/{}页 (共{}位)", page_idx + 1, total_pages, items.len());
+                draw_text_line(hdc, &page_info, f_x + 68, py + 3, rgb(203, 213, 225));
+
+                let next_w = 42;
+                let next_x = f_x + f_w - next_w - 10;
+                draw_card_rect(hdc, next_x, py, next_w, 20, rgb(20, 30, 50), rgb(51, 65, 85));
+                draw_text_line(hdc, "下页 ▶", next_x + 4, py + 3, rgb(148, 163, 184));
+                new_hotzones.inspect_nav_btns.push(((next_x, py, next_x + next_w, py + 20), page_size as i32));
+            } else {
+                draw_text_line(hdc, "💡 点击头像/卡片可切换查看英雄", f_x + 20, py + 3, rgb(100, 116, 139));
+            }
         }
     }
 

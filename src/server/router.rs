@@ -723,7 +723,62 @@ async fn export_augments_csv(State(state): State<AppState>) -> Result<Response, 
 
 // ---------------- Overlay Test & Debug Handlers ----------------
 
+fn mock_counters_and_synergies(pos: &str) -> (Vec<crate::overlay::CounterHeroItem>, Vec<crate::overlay::CounterHeroItem>) {
+    let (c_list, s_list) = match pos {
+        "TOP" => (
+            vec![
+                crate::overlay::CounterHeroItem { champion_id: 10, name: "审判天使".to_string(), tier: 1, counter_win_rate: 0.564, overall_win_rate: 0.521, games: 1540 },
+                crate::overlay::CounterHeroItem { champion_id: 62, name: "齐天大圣".to_string(), tier: 1, counter_win_rate: 0.548, overall_win_rate: 0.518, games: 1220 },
+                crate::overlay::CounterHeroItem { champion_id: 82, name: "铁铠冥魂".to_string(), tier: 2, counter_win_rate: 0.536, overall_win_rate: 0.512, games: 2450 },
+                crate::overlay::CounterHeroItem { champion_id: 114, name: "无双剑姬".to_string(), tier: 1, counter_win_rate: 0.525, overall_win_rate: 0.509, games: 1890 },
+                crate::overlay::CounterHeroItem { champion_id: 17, name: "迅捷斥候".to_string(), tier: 2, counter_win_rate: 0.492, overall_win_rate: 0.504, games: 3100 },
+                crate::overlay::CounterHeroItem { champion_id: 24, name: "武器大师".to_string(), tier: 2, counter_win_rate: 0.478, overall_win_rate: 0.501, games: 2800 },
+                crate::overlay::CounterHeroItem { champion_id: 266, name: "暗裔剑魔".to_string(), tier: 3, counter_win_rate: 0.461, overall_win_rate: 0.495, games: 3500 },
+                crate::overlay::CounterHeroItem { champion_id: 58, name: "荒漠屠夫".to_string(), tier: 3, counter_win_rate: 0.443, overall_win_rate: 0.488, games: 1980 },
+            ],
+            vec![
+                crate::overlay::CounterHeroItem { champion_id: 32, name: "殇之木乃伊".to_string(), tier: 1, counter_win_rate: 0.572, overall_win_rate: 0.525, games: 980 },
+                crate::overlay::CounterHeroItem { champion_id: 64, name: "盲僧".to_string(), tier: 1, counter_win_rate: 0.551, overall_win_rate: 0.512, games: 2400 },
+                crate::overlay::CounterHeroItem { champion_id: 25, name: "堕落天使".to_string(), tier: 2, counter_win_rate: 0.539, overall_win_rate: 0.508, games: 1450 },
+                crate::overlay::CounterHeroItem { champion_id: 412, name: "魂锁典狱长".to_string(), tier: 1, counter_win_rate: 0.528, overall_win_rate: 0.518, games: 2200 },
+                crate::overlay::CounterHeroItem { champion_id: 238, name: "影流之主".to_string(), tier: 3, counter_win_rate: 0.485, overall_win_rate: 0.495, games: 1800 },
+                crate::overlay::CounterHeroItem { champion_id: 157, name: "疾风剑豪".to_string(), tier: 3, counter_win_rate: 0.452, overall_win_rate: 0.480, games: 3100 },
+            ],
+        ),
+        _ => (
+            vec![
+                crate::overlay::CounterHeroItem { champion_id: 103, name: "九尾妖狐".to_string(), tier: 1, counter_win_rate: 0.558, overall_win_rate: 0.524, games: 2100 },
+                crate::overlay::CounterHeroItem { champion_id: 134, name: "暗黑元首".to_string(), tier: 1, counter_win_rate: 0.542, overall_win_rate: 0.515, games: 1850 },
+                crate::overlay::CounterHeroItem { champion_id: 84, name: "离群之刺".to_string(), tier: 2, counter_win_rate: 0.531, overall_win_rate: 0.508, games: 2900 },
+                crate::overlay::CounterHeroItem { champion_id: 238, name: "影流之主".to_string(), tier: 2, counter_win_rate: 0.514, overall_win_rate: 0.502, games: 3400 },
+                crate::overlay::CounterHeroItem { champion_id: 91, name: "刀锋之影".to_string(), tier: 3, counter_win_rate: 0.482, overall_win_rate: 0.492, games: 1400 },
+                crate::overlay::CounterHeroItem { champion_id: 7, name: "诡术妖姬".to_string(), tier: 3, counter_win_rate: 0.465, overall_win_rate: 0.485, games: 2200 },
+            ],
+            vec![
+                crate::overlay::CounterHeroItem { champion_id: 64, name: "盲僧".to_string(), tier: 1, counter_win_rate: 0.565, overall_win_rate: 0.520, games: 3100 },
+                crate::overlay::CounterHeroItem { champion_id: 121, name: "虚空掠夺者".to_string(), tier: 1, counter_win_rate: 0.547, overall_win_rate: 0.516, games: 1950 },
+                crate::overlay::CounterHeroItem { champion_id: 59, name: "德玛西亚皇子".to_string(), tier: 2, counter_win_rate: 0.534, overall_win_rate: 0.510, games: 1600 },
+                crate::overlay::CounterHeroItem { champion_id: 254, name: "皮城执法官".to_string(), tier: 2, counter_win_rate: 0.518, overall_win_rate: 0.505, games: 1420 },
+                crate::overlay::CounterHeroItem { champion_id: 234, name: "破败之王".to_string(), tier: 3, counter_win_rate: 0.479, overall_win_rate: 0.490, games: 2500 },
+            ],
+        ),
+    };
+    (c_list, s_list)
+}
+
 async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
+    let (t0_c, t0_s) = mock_counters_and_synergies("TOP");
+    let (t1_c, t1_s) = mock_counters_and_synergies("JUNGLE");
+    let (t2_c, t2_s) = mock_counters_and_synergies("MID");
+    let (t3_c, t3_s) = mock_counters_and_synergies("ADC");
+    let (t4_c, t4_s) = mock_counters_and_synergies("SUPPORT");
+
+    let (e0_c, e0_s) = mock_counters_and_synergies("TOP");
+    let (e1_c, e1_s) = mock_counters_and_synergies("JUNGLE");
+    let (e2_c, e2_s) = mock_counters_and_synergies("MID");
+    let (e3_c, e3_s) = mock_counters_and_synergies("ADC");
+    let (e4_c, e4_s) = mock_counters_and_synergies("SUPPORT");
+
     state.ranked_overlay.trigger_test(crate::overlay::RankedOverlayData {
         my_team: vec![
             crate::overlay::RankedSlotView {
@@ -750,6 +805,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                     badge_text: "🔥 3连胜大爹".to_string(),
                     top_champions: vec!["86".to_string(), "122".to_string()],
                 }),
+                counter_heroes: t0_c,
+                synergy_heroes: t0_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 1,
@@ -775,6 +832,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                     badge_text: "⚡ 通天代".to_string(),
                     top_champions: vec!["64".to_string()],
                 }),
+                counter_heroes: t1_c,
+                synergy_heroes: t1_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 2,
@@ -800,6 +859,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                     badge_text: "👑 绝活哥".to_string(),
                     top_champions: vec!["103".to_string()],
                 }),
+                counter_heroes: t2_c,
+                synergy_heroes: t2_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 3,
@@ -825,6 +886,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                     badge_text: "❄️ 3连败预警".to_string(),
                     top_champions: vec!["81".to_string()],
                 }),
+                counter_heroes: t3_c,
+                synergy_heroes: t3_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 4,
@@ -850,6 +913,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                     badge_text: "📈 稳定上分".to_string(),
                     top_champions: vec!["412".to_string()],
                 }),
+                counter_heroes: t4_c,
+                synergy_heroes: t4_s,
             },
         ],
         their_team: vec![
@@ -866,6 +931,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                 is_manual_pos: false,
                 matchup_win_rate: Some(0.537),
                 profile: None,
+                counter_heroes: e0_c,
+                synergy_heroes: e0_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 1,
@@ -880,6 +947,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                 is_manual_pos: false,
                 matchup_win_rate: Some(0.485),
                 profile: None,
+                counter_heroes: e1_c,
+                synergy_heroes: e1_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 2,
@@ -894,6 +963,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                 is_manual_pos: false,
                 matchup_win_rate: Some(0.515),
                 profile: None,
+                counter_heroes: e2_c,
+                synergy_heroes: e2_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 3,
@@ -908,6 +979,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                 is_manual_pos: false,
                 matchup_win_rate: Some(0.472),
                 profile: None,
+                counter_heroes: e3_c,
+                synergy_heroes: e3_s,
             },
             crate::overlay::RankedSlotView {
                 slot_index: 4,
@@ -922,6 +995,8 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
                 is_manual_pos: false,
                 matchup_win_rate: Some(0.508),
                 profile: None,
+                counter_heroes: e4_c,
+                synergy_heroes: e4_s,
             },
         ],
         decision_card: crate::overlay::RankedDecisionCard {
