@@ -91,9 +91,14 @@ impl ScreenCapture {
     pub fn get_lol_client_rect() -> Option<ViewportRect> {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{
-            ClientToScreen, EnumWindows, FindWindowW, GetClassNameW, GetClientRect,
+            EnumWindows, FindWindowW, GetClassNameW, GetClientRect,
             GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
         };
+
+        #[link(name = "user32")]
+        extern "system" {
+            fn ClientToScreen(hwnd: HWND, lppoint: *mut POINT) -> BOOL;
+        }
 
         Self::attach_desktop_if_needed();
 
@@ -175,7 +180,7 @@ impl ScreenCapture {
             BOOL(1)
         }
 
-        let mut matches = Vec::new();
+        let mut matches: Vec<MatchedClient> = Vec::new();
         unsafe {
             let lparam = LPARAM(&mut matches as *mut _ as isize);
             let _ = EnumWindows(Some(enum_client_proc), lparam);
@@ -193,9 +198,14 @@ impl ScreenCapture {
     pub fn get_lol_game_rect() -> Option<ViewportRect> {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{
-            ClientToScreen, EnumWindows, FindWindowW, GetClassNameW, GetClientRect,
+            EnumWindows, FindWindowW, GetClassNameW, GetClientRect,
             GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
         };
+
+        #[link(name = "user32")]
+        extern "system" {
+            fn ClientToScreen(hwnd: HWND, lppoint: *mut POINT) -> BOOL;
+        }
 
         Self::attach_desktop_if_needed();
 
@@ -275,7 +285,7 @@ impl ScreenCapture {
             BOOL(1)
         }
 
-        let mut matches = Vec::new();
+        let mut matches: Vec<MatchedGame> = Vec::new();
         unsafe {
             let lparam = LPARAM(&mut matches as *mut _ as isize);
             let _ = EnumWindows(Some(enum_game_proc), lparam);
