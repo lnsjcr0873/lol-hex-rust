@@ -73,6 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lcu_bg = lcu_client.clone();
     let draft_bg = ranked_draft.clone();
     let ws_bg = ws_broadcaster.clone();
+    let db_bg = db.clone();
+    let bench_bg = bench_overlay.clone();
 
     tokio::spawn(async move {
         loop {
@@ -83,6 +85,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !session.is_null() {
                     let mut d = draft_bg.write().await;
                     d.parse_session(&session);
+
+                    // Sync bench champions to BenchOverlay HUD
+                    if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
+                        let mut views = Vec::new();
+                        for champ in bench {
+                            if let Some(cid) = champ.get("championId").and_then(|c| c.as_i64()) {
+                                let id_str = cid.to_string();
+                                let hero_name = db_bg.resolve_hero_name(&id_str).unwrap_or_else(|| format!("Hero-{}", cid));
+                                let wr = db_bg.heroes_map.get(&id_str).map(|s| s.win_rate).unwrap_or(0.5);
+                                let tier = if wr >= 0.54 { "S" } else if wr >= 0.51 { "A" } else { "B" };
+                                views.push(crate::overlay::BenchChampView {
+                                    champion_id: cid as i32,
+                                    champion_name: hero_name,
+                                    tier: tier.to_string(),
+                                    win_rate: wr,
+                                });
+                            }
+                        }
+                        if !views.is_empty() {
+                            bench_bg.show_bench_heroes(views);
+                        }
+                    }
 
                     ws_bg.broadcast(&serde_json::json!({
                         "event": "LIVE_SYNC",
@@ -303,5 +327,64 @@ mod tests {
         let cc = cmd_creds.unwrap();
         assert_eq!(cc.port, 51234);
         assert_eq!(cc.auth_token, "token_abc_xyz");
+    }
+
+    #[tokio::test]
+    async fn test_overlay_state_and_config_mutation() {
+        let overlay = InGameOverlay::new();
+        assert!(!overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst));
+
+        // Test mutating config via RwLock
+        {
+            let mut cfg = overlay.config.write().await;
+            cfg.voice_enabled = false;
+            cfg.hotkey = "F1".to_string();
+        }
+        {
+            let cfg = overlay.config.read().await;
+            assert!(!cfg.voice_enabled);
+            assert_eq!(cfg.hotkey, "F1");
+        }
+
+        // Test triggering scan
+        overlay.trigger_scan();
+        assert!(overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst));
+        overlay.stop();
+        assert!(!overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_win32_native_hud_state_transitions() {
+        use crate::overlay::win32_hud::{AugmentCardView, AugmentOverlayData, GLOBAL_HUD};
+        use std::time::Duration;
+
+        let cards = vec![AugmentCardView {
+            name: "珠光护手".to_string(),
+            tier: "S".to_string(),
+            win_rate: 0.584,
+            delta_win_rate: 0.036,
+            wilson_lower: 0.552,
+            games: 15000,
+            recommendation: "首选核心输出".to_string(),
+        }];
+
+        let data = AugmentOverlayData {
+            hero_name: "黑暗之女".to_string(),
+            cards,
+        };
+
+        GLOBAL_HUD.show_augments(data, Duration::from_secs(5));
+        assert!(GLOBAL_HUD.is_visible());
+
+        GLOBAL_HUD.hide();
+        assert!(!GLOBAL_HUD.is_visible());
+    }
+
+    #[test]
+    fn test_database_resolve_hero_name() {
+        let db = Database::load_from_dir("data");
+        let name = db.resolve_hero_name("1");
+        assert!(name.is_some(), "Should resolve hero id 1");
+        assert_eq!(name.unwrap(), "黑暗之女");
     }
 }

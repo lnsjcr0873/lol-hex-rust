@@ -202,6 +202,22 @@ impl Database {
         None
     }
 
+    pub fn resolve_hero_name(&self, id: &str) -> Option<String> {
+        let raw = id.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        if let Some(h) = self.heroes_map.get(raw) {
+            return Some(h.name.clone());
+        }
+        if let Some(d) = self.heroes_detail.get(raw) {
+            if !d.hero_name.is_empty() {
+                return Some(d.hero_name.clone());
+            }
+        }
+        None
+    }
+
     pub fn resolve_augment_id(&self, identifier: &str) -> Option<String> {
         let raw = identifier.trim();
         if raw.is_empty() {

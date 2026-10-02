@@ -1,6 +1,9 @@
+use super::win32_hud::{BenchChampView, BenchOverlayData, GLOBAL_HUD};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +28,7 @@ impl Default for BenchOverlayConfig {
 }
 
 pub struct BenchOverlay {
-    pub config: BenchOverlayConfig,
+    pub config: Arc<RwLock<BenchOverlayConfig>>,
     pub is_showing: Arc<AtomicBool>,
     pub running: Arc<AtomicBool>,
 }
@@ -39,7 +42,7 @@ impl Default for BenchOverlay {
 impl BenchOverlay {
     pub fn new() -> Self {
         Self {
-            config: BenchOverlayConfig::default(),
+            config: Arc::new(RwLock::new(BenchOverlayConfig::default())),
             is_showing: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
         }
@@ -47,11 +50,18 @@ impl BenchOverlay {
 
     pub fn start(&self) {
         self.running.store(true, Ordering::SeqCst);
-        // Background window loop manages WS_EX_LAYERED | WS_EX_NOACTIVATE window
+        GLOBAL_HUD.start();
     }
 
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.is_showing.store(false, Ordering::SeqCst);
+        GLOBAL_HUD.hide();
+    }
+
+    pub fn show_bench_heroes(&self, champions: Vec<BenchChampView>) {
+        self.is_showing.store(true, Ordering::SeqCst);
+        let data = BenchOverlayData { champions };
+        GLOBAL_HUD.show_bench(data, Duration::from_secs(30));
     }
 }

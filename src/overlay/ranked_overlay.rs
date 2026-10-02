@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +20,7 @@ impl Default for RankedOverlayConfig {
 }
 
 pub struct RankedOverlay {
-    pub config: RankedOverlayConfig,
+    pub config: Arc<RwLock<RankedOverlayConfig>>,
     pub is_showing: Arc<AtomicBool>,
     pub running: Arc<AtomicBool>,
 }
@@ -33,7 +34,7 @@ impl Default for RankedOverlay {
 impl RankedOverlay {
     pub fn new() -> Self {
         Self {
-            config: RankedOverlayConfig::default(),
+            config: Arc::new(RwLock::new(RankedOverlayConfig::default())),
             is_showing: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
         }

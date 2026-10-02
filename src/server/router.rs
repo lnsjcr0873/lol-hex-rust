@@ -379,11 +379,13 @@ async fn trigger_ingame_overlay(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn get_overlay_status(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.ingame_overlay.config.read().await;
     Json(json!({
         "status": "ok",
-        "autoSensingEnabled": state.ingame_overlay.config.auto_sensing_enabled,
-        "voiceEnabled": state.ingame_overlay.config.voice_enabled,
-        "hotkey": state.ingame_overlay.config.hotkey
+        "autoSensingEnabled": cfg.auto_sensing_enabled,
+        "voiceEnabled": cfg.voice_enabled,
+        "hotkey": cfg.hotkey,
+        "isShowing": state.ingame_overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst)
     }))
 }
 
@@ -396,46 +398,106 @@ struct OverlayConfigReq {
 }
 
 async fn update_overlay_config(
-    State(_state): State<AppState>,
-    Json(_req): Json<OverlayConfigReq>,
+    State(state): State<AppState>,
+    Json(req): Json<OverlayConfigReq>,
 ) -> Json<Value> {
-    Json(json!({ "status": "updated" }))
+    let mut cfg = state.ingame_overlay.config.write().await;
+    if let Some(v) = req.auto_sensing_enabled {
+        cfg.auto_sensing_enabled = v;
+    }
+    if let Some(v) = req.voice_enabled {
+        cfg.voice_enabled = v;
+    }
+    if let Some(v) = req.hotkey {
+        cfg.hotkey = v;
+    }
+    Json(json!({ "status": "updated", "config": &*cfg }))
 }
 
 async fn get_bench_overlay_status(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.bench_overlay.config.read().await;
     Json(json!({
-        "enabled": state.bench_overlay.config.enabled,
+        "status": "ok",
+        "enabled": cfg.enabled,
         "isShowing": state.bench_overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst),
-        "clickToSwap": state.bench_overlay.config.click_to_swap,
-        "badgePosition": state.bench_overlay.config.badge_position
+        "clickToSwap": cfg.click_to_swap,
+        "badgePosition": cfg.badge_position,
+        "verticalOffset": cfg.vertical_offset,
+        "horizontalOffset": cfg.horizontal_offset
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BenchOverlayConfigReq {
+    enabled: Option<bool>,
+    click_to_swap: Option<bool>,
+    badge_position: Option<String>,
+    vertical_offset: Option<i32>,
+    horizontal_offset: Option<i32>,
+}
+
 async fn update_bench_overlay_config(
-    State(_state): State<AppState>,
-    Json(_req): Json<Value>,
+    State(state): State<AppState>,
+    Json(req): Json<BenchOverlayConfigReq>,
 ) -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+    let mut cfg = state.bench_overlay.config.write().await;
+    if let Some(v) = req.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = req.click_to_swap {
+        cfg.click_to_swap = v;
+    }
+    if let Some(v) = req.badge_position {
+        cfg.badge_position = v;
+    }
+    if let Some(v) = req.vertical_offset {
+        cfg.vertical_offset = v;
+    }
+    if let Some(v) = req.horizontal_offset {
+        cfg.horizontal_offset = v;
+    }
+    Json(json!({ "status": "ok", "config": &*cfg }))
 }
 
 // ---------------- Item Overlay Handlers ----------------
 
 async fn get_item_overlay_status(State(state): State<AppState>) -> Json<Value> {
     let rec = state.item_overlay.last_recommendation.read().await.clone();
+    let cfg = state.item_overlay.config.read().await;
     Json(json!({
         "status": "ok",
-        "enabled": state.item_overlay.config.enabled,
-        "voiceEnabled": state.item_overlay.config.voice_enabled,
-        "hotkey": state.item_overlay.config.hotkey,
+        "enabled": cfg.enabled,
+        "voiceEnabled": cfg.voice_enabled,
+        "hotkey": cfg.hotkey,
+        "isShowing": state.item_overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst),
         "lastRecommendation": rec
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemOverlayConfigReq {
+    enabled: Option<bool>,
+    voice_enabled: Option<bool>,
+    hotkey: Option<String>,
+}
+
 async fn update_item_overlay_config(
-    State(_state): State<AppState>,
-    Json(_req): Json<Value>,
+    State(state): State<AppState>,
+    Json(req): Json<ItemOverlayConfigReq>,
 ) -> Json<Value> {
-    Json(json!({ "status": "updated" }))
+    let mut cfg = state.item_overlay.config.write().await;
+    if let Some(v) = req.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = req.voice_enabled {
+        cfg.voice_enabled = v;
+    }
+    if let Some(v) = req.hotkey {
+        cfg.hotkey = v;
+    }
+    Json(json!({ "status": "updated", "config": &*cfg }))
 }
 
 async fn trigger_item_overlay(State(state): State<AppState>) -> Json<Value> {

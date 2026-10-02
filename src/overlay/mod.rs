@@ -5,6 +5,7 @@ pub mod item_overlay;
 pub mod ranked_overlay;
 pub mod tts;
 pub mod window_tracker;
+pub mod win32_hud;
 
 pub use bench_overlay::BenchOverlay;
 pub use hotkey::HotkeyManager;
@@ -13,3 +14,7 @@ pub use item_overlay::ItemOverlay;
 pub use ranked_overlay::RankedOverlay;
 pub use tts::TextToSpeech;
 pub use window_tracker::WindowTracker;
+pub use win32_hud::{
+    AugmentCardView, AugmentOverlayData, BenchChampView, BenchOverlayData, ItemCardView,
+    ItemOverlayData, NativeHud, GLOBAL_HUD,
+};
