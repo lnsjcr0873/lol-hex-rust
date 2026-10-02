@@ -67,6 +67,12 @@ impl ScreenCapture {
             if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
                 hwnd = FindWindowW(w!("RiotWindowClass"), None).unwrap_or_default();
             }
+            if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
+                hwnd = FindWindowW(w!("RCLIENT"), None).unwrap_or_default();
+            }
+            if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
+                hwnd = FindWindowW(None, w!("League of Legends")).unwrap_or_default();
+            }
 
             if hwnd != HWND::default() && IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool() {
                 let mut rect = RECT::default();

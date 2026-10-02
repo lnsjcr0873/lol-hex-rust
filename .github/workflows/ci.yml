@@ -35,8 +35,17 @@ jobs:
       - name: Build Release
         run: cargo build --release --verbose
 
-      - name: Upload Release Executable
+      - name: Prepare Release Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/data"
+          Copy-Item -Recurse -Force "data/json" "dist/data/json"
+          Copy-Item -Force "data/engine_metadata.json" "dist/data/"
+          Copy-Item -Force "data/recipe_metadata.json" "dist/data/"
+          Copy-Item -Force "target/release/lol-hex-rust.exe" "dist/"
+
+      - name: Upload Release Package
         uses: actions/upload-artifact@v4
         with:
           name: HexBrain-Rust-Windows-x64
-          path: target/release/lol-hex-rust.exe
+          path: dist/

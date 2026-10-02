@@ -75,6 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws_bg = ws_broadcaster.clone();
     let db_bg = db.clone();
     let bench_bg = bench_overlay.clone();
+    let ranked_bg = ranked_overlay.clone();
 
     tokio::spawn(async move {
         loop {
@@ -86,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut d = draft_bg.write().await;
                     d.parse_session_with_db(&session, Some(&db_bg));
 
-                    // Sync bench champions to BenchOverlay HUD
+                    // 1. If benchChampions exists -> ARAM mode -> BenchOverlay HUD
                     if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
                         let mut views = Vec::new();
                         for champ in bench {
@@ -106,6 +107,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !views.is_empty() {
                             bench_bg.show_bench_heroes(views);
                         }
+                    } else if !d.state.my_team.is_empty() {
+                        // 2. 5v5 Ranked / Normal Draft -> RankedOverlay HUD
+                        let my_slots: Vec<crate::overlay::RankedSlotView> = d.state.my_team.iter().map(|s| {
+                            crate::overlay::RankedSlotView {
+                                position_cn: s.position_cn.clone(),
+                                champion_name: s.champion_name.clone(),
+                                win_rate: s.win_rate,
+                                tier: s.tier,
+                                is_local_player: s.is_local_player,
+                            }
+                        }).collect();
+
+                        let their_slots: Vec<crate::overlay::RankedSlotView> = d.state.their_team.iter().map(|s| {
+                            crate::overlay::RankedSlotView {
+                                position_cn: s.position_cn.clone(),
+                                champion_name: s.champion_name.clone(),
+                                win_rate: s.win_rate,
+                                tier: s.tier,
+                                is_local_player: false,
+                            }
+                        }).collect();
+
+                        let local_slot = d.state.my_team.iter().find(|s| s.is_local_player);
+                        let rec_text = if let Some(local) = local_slot {
+                            if !local.champion_id.is_empty() {
+                                format!("已选[{}]: 推荐符文已就绪 · 召唤师技能: 闪现 + 点燃", local.champion_name)
+                            } else {
+                                "等待选择英雄 · 锁定后将自动推送一键符文与对位建议".to_string()
+                            }
+                        } else {
+                            "排位选人辅助已激活 · 实时分析对位胜率".to_string()
+                        };
+
+                        ranked_bg.show_ranked_draft(crate::overlay::RankedOverlayData {
+                            my_team: my_slots,
+                            their_team: their_slots,
+                            recommendation: rec_text,
+                        });
                     }
 
                     ws_bg.broadcast(&serde_json::json!({
@@ -114,6 +153,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "gamePhase": "ChampSelect",
                         "session": session
                     }));
+                }
+            } else {
+                if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                    bench_bg.stop();
+                }
+                if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                    ranked_bg.stop();
                 }
             }
         }
@@ -497,6 +543,39 @@ mod tests {
         assert!(mgr.state.my_team[0].is_local_player);
         assert_eq!(mgr.state.my_team[1].champion_name, "队友2");
         assert_eq!(mgr.state.their_team[0].champion_name, "黑暗之女");
+    }
+
+    #[test]
+    fn test_ranked_overlay_hud_state_transitions() {
+        use crate::overlay::win32_hud::{RankedOverlayData, RankedSlotView, GLOBAL_HUD};
+        use std::time::Duration;
+
+        let data = RankedOverlayData {
+            my_team: vec![
+                RankedSlotView {
+                    position_cn: "中单".to_string(),
+                    champion_name: "黑暗之女".to_string(),
+                    win_rate: 0.53,
+                    tier: 1,
+                    is_local_player: true,
+                },
+            ],
+            their_team: vec![
+                RankedSlotView {
+                    position_cn: "中单".to_string(),
+                    champion_name: "劫".to_string(),
+                    win_rate: 0.49,
+                    tier: 3,
+                    is_local_player: false,
+                },
+            ],
+            recommendation: "对线刺客，注意保留控制".to_string(),
+        };
+
+        GLOBAL_HUD.show_ranked(data, Duration::from_secs(5));
+        assert!(GLOBAL_HUD.is_visible());
+        GLOBAL_HUD.hide();
+        assert!(!GLOBAL_HUD.is_visible());
     }
 }
 

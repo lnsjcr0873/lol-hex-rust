@@ -47,5 +47,11 @@ impl RankedOverlay {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.is_showing.store(false, Ordering::SeqCst);
+        super::win32_hud::GLOBAL_HUD.hide();
+    }
+
+    pub fn show_ranked_draft(&self, data: super::win32_hud::RankedOverlayData) {
+        self.is_showing.store(true, Ordering::SeqCst);
+        super::win32_hud::GLOBAL_HUD.show_ranked(data, std::time::Duration::from_secs(30));
     }
 }

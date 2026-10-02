@@ -52,11 +52,28 @@ pub struct BenchOverlayData {
 }
 
 #[derive(Debug, Clone)]
+pub struct RankedSlotView {
+    pub position_cn: String,
+    pub champion_name: String,
+    pub win_rate: f64,
+    pub tier: i32,
+    pub is_local_player: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RankedOverlayData {
+    pub my_team: Vec<RankedSlotView>,
+    pub their_team: Vec<RankedSlotView>,
+    pub recommendation: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum HudContent {
     None,
     Augment(AugmentOverlayData),
     Item(ItemOverlayData),
     Bench(BenchOverlayData),
+    Ranked(RankedOverlayData),
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +180,17 @@ impl NativeHud {
         {
             let mut st = self.state.write().unwrap();
             st.content = HudContent::Bench(data);
+            st.expires_at = Some(Instant::now() + duration);
+            st.is_visible = true;
+        }
+        self.request_repaint();
+    }
+
+    pub fn show_ranked(&self, data: RankedOverlayData, duration: Duration) {
+        self.start();
+        {
+            let mut st = self.state.write().unwrap();
+            st.content = HudContent::Ranked(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
         }
@@ -442,6 +470,7 @@ unsafe fn render_hud(
         HudContent::Augment(data) => render_augment_hud(hdc, width, height, data),
         HudContent::Item(data) => render_item_hud(hdc, width, height, data),
         HudContent::Bench(data) => render_bench_hud(hdc, width, height, data),
+        HudContent::Ranked(data) => render_ranked_hud(hdc, width, height, data),
         HudContent::None => {}
     }
 }
@@ -596,6 +625,106 @@ unsafe fn render_bench_hud(
         };
         draw_text_line(hdc, &badge, offset_x, bar_y + 38, col);
         offset_x += 120;
+    }
+}
+
+#[cfg(windows)]
+unsafe fn render_ranked_hud(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    width: i32,
+    height: i32,
+    data: &RankedOverlayData,
+) {
+    use windows::Win32::Foundation::COLORREF;
+
+    // 1. Top Banner (Centered at top)
+    let banner_w = 640.min(width - 40);
+    let banner_h = 36;
+    let banner_x = (width - banner_w) / 2;
+    let banner_y = 20;
+
+    draw_card_rect(
+        hdc,
+        banner_x,
+        banner_y,
+        banner_w,
+        banner_h,
+        COLORREF(0x00281e0f), // Dark navy bg
+        COLORREF(0x003c9bc8), // Gold border
+    );
+    draw_text_line(
+        hdc,
+        "👑 HexBrain 排位选人辅助 · 5v5 对位胜率全景分析",
+        banner_x + 16,
+        banner_y + 10,
+        COLORREF(0x0045f0f0), // Cyan/gold text
+    );
+
+    // 2. Left side: My Team (我方 5 个槽位)
+    let card_w = 175.min(((width / 4).max(140)));
+    let card_h = 42;
+    let start_y = 70;
+    let spacing_y = 48;
+
+    for (i, slot) in data.my_team.iter().take(5).enumerate() {
+        let cy = start_y + i as i32 * spacing_y;
+        let border_col = if slot.is_local_player {
+            COLORREF(0x0000d7ff) // Gold for local player
+        } else {
+            COLORREF(0x0038bdf8) // Sky blue for teammates
+        };
+
+        draw_card_rect(hdc, 20, cy, card_w, card_h, COLORREF(0x001e140a), border_col);
+
+        let title_line = format!("[{}] {}", slot.position_cn, slot.champion_name);
+        draw_text_line(hdc, &title_line, 28, cy + 6, COLORREF(0x00ffffff));
+
+        let stat_line = format!("胜率: {:.1}% | T{}级", slot.win_rate * 100.0, slot.tier);
+        let stat_col = if slot.win_rate >= 0.52 {
+            COLORREF(0x004ade80) // Green
+        } else {
+            COLORREF(0x00c0c0c0) // Silver
+        };
+        draw_text_line(hdc, &stat_line, 28, cy + 24, stat_col);
+    }
+
+    // 3. Right side: Their Team (敌方 5 个槽位)
+    let right_x = width - card_w - 20;
+    for (i, slot) in data.their_team.iter().take(5).enumerate() {
+        let cy = start_y + i as i32 * spacing_y;
+        let border_col = COLORREF(0x005546ff); // Red/rose border
+
+        draw_card_rect(hdc, right_x, cy, card_w, card_h, COLORREF(0x001e140a), border_col);
+
+        let title_line = format!("[{}] {}", slot.position_cn, slot.champion_name);
+        draw_text_line(hdc, &title_line, right_x + 8, cy + 6, COLORREF(0x00ffffff));
+
+        let stat_line = format!("胜率: {:.1}% | T{}级", slot.win_rate * 100.0, slot.tier);
+        let stat_col = if slot.win_rate >= 0.52 {
+            COLORREF(0x005546ff) // Red warning
+        } else {
+            COLORREF(0x00c0c0c0)
+        };
+        draw_text_line(hdc, &stat_line, right_x + 8, cy + 24, stat_col);
+    }
+
+    // 4. Bottom Recommendation Bar
+    if !data.recommendation.is_empty() {
+        let bot_w = 640.min(width - 40);
+        let bot_h = 36;
+        let bot_x = (width - bot_w) / 2;
+        let bot_y = (height - bot_h - 20).max(start_y + 5 * spacing_y + 10);
+
+        draw_card_rect(
+            hdc,
+            bot_x,
+            bot_y,
+            bot_w,
+            bot_h,
+            COLORREF(0x001e1b0f),
+            COLORREF(0x0034d399), // Emerald border
+        );
+        draw_text_line(hdc, &data.recommendation, bot_x + 16, bot_y + 10, COLORREF(0x006ee7b7));
     }
 }
 
