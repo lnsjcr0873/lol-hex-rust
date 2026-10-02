@@ -76,6 +76,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_bg = db.clone();
     let bench_bg = bench_overlay.clone();
     let ranked_bg = ranked_overlay.clone();
+    let opgg_bg = opgg_client.clone();
+
+    // Warm up OP.GG tier list in background
+    let opgg_warmup = opgg_client.clone();
+    tokio::spawn(async move {
+        let _ = opgg_warmup.get_ranked_tier_list(false).await;
+    });
 
     tokio::spawn(async move {
         loop {
@@ -85,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let session = lcu_bg.get_champ_select_session().await;
                 if !session.is_null() {
                     let mut d = draft_bg.write().await;
-                    d.parse_session_with_db(&session, Some(&db_bg));
+                    d.parse_session_with_db_and_opgg(&session, Some(&db_bg), Some(&opgg_bg));
 
                     // 1. If benchChampions exists -> ARAM mode -> BenchOverlay HUD
                     if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
@@ -132,7 +139,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let local_slot = d.state.my_team.iter().find(|s| s.is_local_player);
                         let rec_text = if let Some(local) = local_slot {
                             if !local.champion_id.is_empty() {
-                                format!("已选[{}]: 推荐符文已就绪 · 召唤师技能: 闪现 + 点燃", local.champion_name)
+                                let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
+                                if let Some(enemy) = enemy_slot {
+                                    if !enemy.champion_id.is_empty() {
+                                        format!(
+                                            "对位[{}]: 胜率 {:.1}% · 推荐符文已就绪 · 技能: 闪现 + 点燃",
+                                            enemy.champion_name,
+                                            local.win_rate * 100.0
+                                        )
+                                    } else {
+                                        format!("已选[{}]: 等待敌方对位锁定 · 符文已就绪", local.champion_name)
+                                    }
+                                } else {
+                                    format!("已选[{}]: 推荐符文已就绪 · 召唤师技能: 闪现 + 点燃", local.champion_name)
+                                }
                             } else {
                                 "等待选择英雄 · 锁定后将自动推送一键符文与对位建议".to_string()
                             }
@@ -578,6 +598,31 @@ mod tests {
         assert!(hud.is_visible());
         hud.hide();
         assert!(!hud.is_visible());
+    }
+
+    #[test]
+    fn test_database_arc_hero_detail() {
+        let db = Database::load_from_dir("data");
+        let detail_by_id = db.get_hero_detail("1");
+        assert!(detail_by_id.is_some(), "Hero detail for Annie (1) should exist");
+        let detail_by_name = db.get_hero_detail("黑暗之女");
+        assert!(detail_by_name.is_some(), "Hero detail by Chinese name should exist");
+
+        // Verify Arc pointer sharing (zero data copy across index keys)
+        assert!(
+            std::sync::Arc::ptr_eq(detail_by_id.unwrap(), detail_by_name.unwrap()),
+            "Database should share the exact same Arc heap instance across keys"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_opgg_client_fallback_and_cache() {
+        let opgg = crate::crawler::OpggClient::new();
+        let matchup = opgg.get_matchup_win_rate("1", "86", "MID").await;
+        assert!(matchup.is_some());
+        let val = matchup.unwrap();
+        assert!(val.get("winRate").is_some());
+        assert!(val.get("label").is_some());
     }
 }
 

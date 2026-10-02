@@ -2,6 +2,7 @@ use super::models::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::info;
 
 #[derive(Clone, Default)]
@@ -9,7 +10,7 @@ pub struct Database {
     pub meta: MetaInfo,
     pub heroes_summary: Vec<HeroSummary>,
     pub heroes_map: HashMap<String, HeroSummary>,
-    pub heroes_detail: HashMap<String, HeroDetail>,
+    pub heroes_detail: HashMap<String, Arc<HeroDetail>>,
     pub augments_summary: Vec<AugmentSummary>,
     pub augments_map: HashMap<String, AugmentSummary>,
     pub postmatch_data: HashMap<String, PostMatchInfo>,
@@ -156,15 +157,21 @@ impl Database {
                                     detail.hero_id = serde_json::Value::String(id_str.clone());
                                 }
 
+                                let detail_arc = Arc::new(detail);
+
                                 if !id_str.is_empty() {
-                                    db.heroes_detail.insert(id_str.clone(), detail.clone());
+                                    db.name_to_hero_id.insert(id_str.clone(), id_str.clone());
+                                    db.heroes_detail.insert(id_str.clone(), detail_arc.clone());
                                 }
-                                if !detail.hero_name.is_empty() {
-                                    db.heroes_detail.insert(detail.hero_name.clone(), detail.clone());
-                                    db.heroes_detail.insert(detail.hero_name.to_lowercase(), detail.clone());
+                                if !detail_arc.hero_name.is_empty() {
+                                    db.name_to_hero_id.insert(detail_arc.hero_name.clone(), id_str.clone());
+                                    db.name_to_hero_id.insert(detail_arc.hero_name.to_lowercase(), id_str.clone());
+                                    db.heroes_detail.insert(detail_arc.hero_name.clone(), detail_arc.clone());
+                                    db.heroes_detail.insert(detail_arc.hero_name.to_lowercase(), detail_arc.clone());
                                 }
                                 if !stem.is_empty() {
-                                    db.heroes_detail.insert(stem, detail);
+                                    db.name_to_hero_id.insert(stem.clone(), id_str);
+                                    db.heroes_detail.insert(stem, detail_arc);
                                 }
                             }
                         }
@@ -213,6 +220,17 @@ impl Database {
             if !d.hero_name.is_empty() {
                 return Some(d.hero_name.clone());
             }
+        }
+        None
+    }
+
+    pub fn get_hero_detail(&self, query: &str) -> Option<&Arc<HeroDetail>> {
+        let raw = query.trim();
+        if let Some(detail) = self.heroes_detail.get(raw) {
+            return Some(detail);
+        }
+        if let Some(hid) = self.resolve_hero_id(raw) {
+            return self.heroes_detail.get(&hid);
         }
         None
     }

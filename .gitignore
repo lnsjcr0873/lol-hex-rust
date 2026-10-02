@@ -2,6 +2,8 @@
 repomix-output.*
 legacy_python/
 plan.md
+dist/
+data/opgg_cache/
 *.tmp*
 .vscode/
 .idea/

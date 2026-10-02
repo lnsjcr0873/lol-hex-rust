@@ -62,6 +62,15 @@ impl RankedDraftManager {
     }
 
     pub fn parse_session_with_db(&mut self, session: &Value, db: Option<&Database>) {
+        self.parse_session_with_db_and_opgg(session, db, None);
+    }
+
+    pub fn parse_session_with_db_and_opgg(
+        &mut self,
+        session: &Value,
+        db: Option<&Database>,
+        opgg: Option<&crate::crawler::OpggClient>,
+    ) {
         let my_team_arr = session.get("myTeam").and_then(|v| v.as_array());
         let their_team_arr = session.get("theirTeam").and_then(|v| v.as_array());
         let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -106,7 +115,7 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
-                let (cname, cavatar, cwr, ctier) = if let Some(database) = db {
+                let (cname, cavatar, mut cwr, mut ctier) = if let Some(database) = db {
                     if !cid.is_empty() {
                         let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
                         let name = database.resolve_hero_name(&resolved_id)
@@ -122,6 +131,15 @@ impl RankedDraftManager {
                 } else {
                     (format!("队友{}", idx + 1), String::new(), 0.505, 2)
                 };
+
+                if let Some(op) = opgg {
+                    if !cid.is_empty() {
+                        if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {
+                            cwr = op_wr;
+                            ctier = op_tier;
+                        }
+                    }
+                }
 
                 self.state.my_team.push(DraftSlot {
                     cell_id,
@@ -168,7 +186,7 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
-                let (cname, cavatar, cwr, ctier) = if let Some(database) = db {
+                let (cname, cavatar, mut cwr, mut ctier) = if let Some(database) = db {
                     if !cid.is_empty() {
                         let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
                         let name = database.resolve_hero_name(&resolved_id)
@@ -184,6 +202,15 @@ impl RankedDraftManager {
                 } else {
                     (format!("对手{}", idx + 1), String::new(), 0.495, 3)
                 };
+
+                if let Some(op) = opgg {
+                    if !cid.is_empty() {
+                        if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {
+                            cwr = op_wr;
+                            ctier = op_tier;
+                        }
+                    }
+                }
 
                 self.state.their_team.push(DraftSlot {
                     cell_id,
