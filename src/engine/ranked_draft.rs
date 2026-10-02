@@ -1,3 +1,4 @@
+use crate::data::loader::Database;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -57,6 +58,10 @@ impl RankedDraftManager {
     }
 
     pub fn parse_session(&mut self, session: &Value) {
+        self.parse_session_with_db(session, None);
+    }
+
+    pub fn parse_session_with_db(&mut self, session: &Value, db: Option<&Database>) {
         let my_team_arr = session.get("myTeam").and_then(|v| v.as_array());
         let their_team_arr = session.get("theirTeam").and_then(|v| v.as_array());
         let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -101,16 +106,33 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
+                let (cname, cavatar, cwr, ctier) = if let Some(database) = db {
+                    if !cid.is_empty() {
+                        let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
+                        let name = database.resolve_hero_name(&resolved_id)
+                            .unwrap_or_else(|| format!("队友{}", idx + 1));
+                        let summary = database.heroes_map.get(&resolved_id);
+                        let avatar = summary.map(|s| s.avatar_url.clone()).unwrap_or_default();
+                        let wr = summary.map(|s| s.win_rate).unwrap_or(0.505);
+                        let tier = summary.and_then(|s| s.tier).unwrap_or(2);
+                        (name, avatar, wr, tier)
+                    } else {
+                        (format!("队友{}", idx + 1), String::new(), 0.505, 2)
+                    }
+                } else {
+                    (format!("队友{}", idx + 1), String::new(), 0.505, 2)
+                };
+
                 self.state.my_team.push(DraftSlot {
                     cell_id,
                     champion_id: cid,
-                    champion_name: format!("队友{}", idx + 1),
+                    champion_name: cname,
                     position: pos,
                     position_cn: SHORT_POS_NAMES_CN[pos_idx].to_string(),
                     is_local_player: cell_id == local_cell_id,
-                    win_rate: 0.505,
-                    tier: 2,
-                    avatar_url: "".to_string(),
+                    win_rate: cwr,
+                    tier: ctier,
+                    avatar_url: cavatar,
                 });
             }
         }
@@ -146,16 +168,33 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
+                let (cname, cavatar, cwr, ctier) = if let Some(database) = db {
+                    if !cid.is_empty() {
+                        let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
+                        let name = database.resolve_hero_name(&resolved_id)
+                            .unwrap_or_else(|| format!("对手{}", idx + 1));
+                        let summary = database.heroes_map.get(&resolved_id);
+                        let avatar = summary.map(|s| s.avatar_url.clone()).unwrap_or_default();
+                        let wr = summary.map(|s| s.win_rate).unwrap_or(0.495);
+                        let tier = summary.and_then(|s| s.tier).unwrap_or(3);
+                        (name, avatar, wr, tier)
+                    } else {
+                        (format!("对手{}", idx + 1), String::new(), 0.495, 3)
+                    }
+                } else {
+                    (format!("对手{}", idx + 1), String::new(), 0.495, 3)
+                };
+
                 self.state.their_team.push(DraftSlot {
                     cell_id,
                     champion_id: cid,
-                    champion_name: format!("对手{}", idx + 1),
+                    champion_name: cname,
                     position: pos,
                     position_cn: SHORT_POS_NAMES_CN[pos_idx].to_string(),
                     is_local_player: false,
-                    win_rate: 0.495,
-                    tier: 3,
-                    avatar_url: "".to_string(),
+                    win_rate: cwr,
+                    tier: ctier,
+                    avatar_url: cavatar,
                 });
             }
         }

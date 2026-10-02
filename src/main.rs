@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let session = lcu_bg.get_champ_select_session().await;
                 if !session.is_null() {
                     let mut d = draft_bg.write().await;
-                    d.parse_session(&session);
+                    d.parse_session_with_db(&session, Some(&db_bg));
 
                     // Sync bench champions to BenchOverlay HUD
                     if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
@@ -471,6 +471,32 @@ mod tests {
         for c in candidates {
             assert!(c.get("hasTrioSynergy").is_some());
         }
+    }
+
+    #[test]
+    fn test_ranked_draft_session_parsing_with_db() {
+        use serde_json::json;
+        let db = Database::load_from_dir("data");
+        let mut mgr = crate::engine::ranked_draft::RankedDraftManager::new();
+
+        let session = json!({
+            "myTeam": [
+                { "cellId": 0, "championId": 1, "assignedPosition": "middle" },
+                { "cellId": 1, "championId": 0, "assignedPosition": "top" }
+            ],
+            "theirTeam": [
+                { "cellId": 5, "championId": "1", "assignedPosition": "utility" }
+            ],
+            "localPlayerCellId": 0
+        });
+
+        mgr.parse_session_with_db(&session, Some(&db));
+        assert!(mgr.state.is_draft_active);
+        assert_eq!(mgr.state.my_team.len(), 2);
+        assert_eq!(mgr.state.my_team[0].champion_name, "黑暗之女");
+        assert!(mgr.state.my_team[0].is_local_player);
+        assert_eq!(mgr.state.my_team[1].champion_name, "队友2");
+        assert_eq!(mgr.state.their_team[0].champion_name, "黑暗之女");
     }
 }
 

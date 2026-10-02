@@ -1,6 +1,5 @@
 use crate::config::RecommendationConfig;
 use crate::data::loader::Database;
-use crate::data::models::*;
 use crate::data::recipe_data::calculate_item_net_cost;
 use crate::engine::archetype::ArchetypeEngine;
 use crate::engine::counter::CounterItemEngine;
@@ -309,7 +308,7 @@ impl DecisionEngine {
         hero_id: &str,
         augment_ids: &[String],
         current_stage: Option<i32>,
-        _existing_augments: &[String],
+        existing_augments: &[String],
     ) -> Value {
         let hid = match db.resolve_hero_id(hero_id) {
             Some(id) => id,
@@ -445,8 +444,8 @@ impl DecisionEngine {
 
                     if matches_cand {
                         for ex in existing_augments {
-                            let ex_resolved = db.resolve_augment_id(ex).unwrap_or_else(|| ex.clone());
-                            let ex_name = db.augments_map.get(&ex_resolved).map(|a| a.name.clone()).unwrap_or_else(|| ex.clone());
+                            let ex_resolved = db.resolve_augment_id(ex).unwrap_or_else(|| ex.to_string());
+                            let ex_name = db.augments_map.get(&ex_resolved).map(|a| a.name.clone()).unwrap_or_else(|| ex.to_string());
                             let matches_ex = trio_names.iter().any(|n| n == ex || n == &ex_name)
                                 || trio_ids.iter().any(|id| id == ex || id == &ex_resolved);
                             if matches_ex {
