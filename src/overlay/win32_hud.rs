@@ -183,8 +183,8 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_HUD: Arc<NativeHud> = Arc::new(NativeHud::new());
     pub static ref RANKED_INTERACTION: std::sync::RwLock<RankedInteractionState> = std::sync::RwLock::new(RankedInteractionState::default());
     pub static ref GLOBAL_HOTZONES: std::sync::RwLock<HudHotzones> = std::sync::RwLock::new(HudHotzones::default());
-    pub static ref GLOBAL_LCU: Arc<tokio::sync::RwLock<Option<crate::lcu::LcuClient>>> = Arc::new(tokio::sync::RwLock::new(None));
-    pub static ref GLOBAL_HISTORY: Arc<tokio::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>>> = Arc::new(tokio::sync::RwLock::new(None));
+    pub static ref GLOBAL_LCU: std::sync::RwLock<Option<crate::lcu::LcuClient>> = std::sync::RwLock::new(None);
+    pub static ref GLOBAL_HISTORY: std::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>> = std::sync::RwLock::new(None);
 }
 
 pub fn apply_current_runes_now() {
@@ -200,8 +200,12 @@ pub fn apply_current_runes_now() {
 
     tokio::spawn(async move {
         let success = if let Some(payload) = rune_data {
-            let lcu_opt = GLOBAL_LCU.read().await;
-            if let Some(lcu) = lcu_opt.as_ref() {
+            let lcu = if let Ok(guard) = GLOBAL_LCU.read() {
+                guard.clone()
+            } else {
+                None
+            };
+            if let Some(lcu) = lcu {
                 lcu.apply_perk_page(&payload).await
             } else {
                 false
@@ -1339,9 +1343,9 @@ unsafe fn render_ranked_hud(
                 let dot_cy = cy1 + 29;
                 for d_idx in 0..5 {
                     let dx = dot_start_x + d_idx * 9;
-                    let (fill_c, border_c) = if p.streak_type == "win" && d_idx < p.streak_count.min(5) as usize {
+                    let (fill_c, border_c) = if p.streak_type == "win" && d_idx < p.streak_count.min(5) {
                         (rgb(16, 185, 129), rgb(52, 211, 153))
-                    } else if p.streak_type == "loss" && d_idx < p.streak_count.min(5) as usize {
+                    } else if p.streak_type == "loss" && d_idx < p.streak_count.min(5) {
                         (rgb(239, 68, 68), rgb(248, 113, 113))
                     } else if (d_idx % 2 == 0 && p.win_rate_pct >= 50) || p.win_rate_pct >= 65 {
                         (rgb(16, 185, 129), rgb(52, 211, 153))

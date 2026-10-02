@@ -16,6 +16,7 @@ pub use tts::TextToSpeech;
 pub use window_tracker::WindowTracker;
 #[allow(unused_imports)]
 pub use win32_hud::{
-    AugmentCardView, AugmentOverlayData, BenchChampView, BenchOverlayData, ItemCardView,
-    ItemOverlayData, NativeHud, RankedOverlayData, RankedSlotView, GLOBAL_HUD,
+    AugmentCardView, AugmentOverlayData, BenchChampView, BenchOverlayData, CounterHeroItem,
+    ItemCardView, ItemOverlayData, NativeHud, RankedDecisionCard, RankedOverlayData,
+    RankedSlotView, RuneGuideView, GLOBAL_HUD,
 };
