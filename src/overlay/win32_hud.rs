@@ -81,6 +81,7 @@ pub struct HudState {
     pub content: HudContent,
     pub expires_at: Option<Instant>,
     pub is_visible: bool,
+    pub is_test_mode: bool,
 }
 
 impl Default for HudState {
@@ -89,6 +90,7 @@ impl Default for HudState {
             content: HudContent::None,
             expires_at: None,
             is_visible: false,
+            is_test_mode: false,
         }
     }
 }
@@ -193,6 +195,19 @@ impl NativeHud {
             st.content = HudContent::Ranked(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
+            st.is_test_mode = false;
+        }
+        self.request_repaint();
+    }
+
+    pub fn show_ranked_test(&self, data: RankedOverlayData, duration: Duration) {
+        self.start();
+        {
+            let mut st = self.state.write().unwrap();
+            st.content = HudContent::Ranked(data);
+            st.expires_at = Some(Instant::now() + duration);
+            st.is_visible = true;
+            st.is_test_mode = true;
         }
         self.request_repaint();
     }
@@ -203,6 +218,7 @@ impl NativeHud {
             st.content = HudContent::None;
             st.expires_at = None;
             st.is_visible = false;
+            st.is_test_mode = false;
         }
         #[cfg(windows)]
         {
@@ -438,47 +454,69 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         SW_SHOWNOACTIVATE,
     };
 
-    let lol_rect = crate::vision::ScreenCapture::get_lol_window_rect();
-    let is_league_active = crate::overlay::WindowTracker::is_league_active();
-
-    let mut should_hide = lol_rect.is_none();
-    let mut is_expired = false;
-
-    if let Ok(mut st) = GLOBAL_HUD.state.write() {
+    let (content_type, is_test, is_expired) = if let Ok(mut st) = GLOBAL_HUD.state.write() {
+        let mut expired = false;
         if let Some(exp) = st.expires_at {
             if Instant::now() >= exp {
                 st.is_visible = false;
                 st.content = HudContent::None;
                 st.expires_at = None;
-                is_expired = true;
+                st.is_test_mode = false;
+                expired = true;
             }
         }
-        if !st.is_visible {
-            should_hide = true;
-        }
+        (st.content.clone(), st.is_test_mode, expired)
+    } else {
+        (HudContent::None, false, true)
+    };
 
-        match &st.content {
-            HudContent::Augment(_) | HudContent::Item(_) => {
-                if !is_league_active {
-                    should_hide = true;
-                }
-            }
-            HudContent::Ranked(_) | HudContent::Bench(_) => {
-                // In ChampSelect: stay docked onto League Client as long as client is visible on screen!
-            }
-            HudContent::None => {
-                should_hide = true;
-            }
-        }
+    if is_expired {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        return;
     }
 
-    if should_hide || is_expired {
+    let mut target_rect = match &content_type {
+        HudContent::Ranked(_) | HudContent::Bench(_) => {
+            crate::vision::ScreenCapture::get_lol_client_rect()
+        }
+        HudContent::Augment(_) | HudContent::Item(_) => {
+            crate::vision::ScreenCapture::get_lol_game_rect()
+                .or_else(crate::vision::ScreenCapture::get_lol_client_rect)
+        }
+        HudContent::None => None,
+    };
+
+    if target_rect.is_none() && is_test {
+        // Fallback for test mode: Center 1280x720 on screen (identical to Python test behavior)
+        let vp = crate::vision::ScreenCapture::get_effective_viewport();
+        let cw = 1280.min(vp.width);
+        let ch = 720.min(vp.height);
+        target_rect = Some(crate::vision::ViewportRect {
+            x: (vp.width - cw) / 2,
+            y: (vp.height - ch) / 2,
+            width: cw,
+            height: ch,
+        });
+    }
+
+    let is_league_active = crate::overlay::WindowTracker::is_league_active();
+    let should_hide = match &content_type {
+        HudContent::None => true,
+        HudContent::Augment(_) | HudContent::Item(_) => {
+            target_rect.is_none() || !is_league_active
+        }
+        HudContent::Ranked(_) | HudContent::Bench(_) => {
+            target_rect.is_none()
+        }
+    };
+
+    if should_hide {
         let _ = ShowWindow(hwnd, SW_HIDE);
         return;
     }
 
     // Align with active League window position
-    if let Some(rect) = lol_rect {
+    if let Some(rect) = target_rect {
         let _ = SetWindowPos(
             hwnd,
             HWND_TOPMOST,

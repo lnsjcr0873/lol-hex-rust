@@ -723,7 +723,7 @@ async fn export_augments_csv(State(state): State<AppState>) -> Result<Response, 
 // ---------------- Overlay Test & Debug Handlers ----------------
 
 async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
-    state.ranked_overlay.show_ranked_draft(crate::overlay::RankedOverlayData {
+    state.ranked_overlay.trigger_test(crate::overlay::RankedOverlayData {
         my_team: vec![
             crate::overlay::RankedSlotView {
                 position_cn: "上单".to_string(),
@@ -799,7 +799,7 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
             },
         ],
         recommendation: "👑 测试态 · 对位[诺克萨斯之手]: 胜率 52.8% · 推荐符文已就绪 · 技能: 闪现 + 点燃".to_string(),
-    });
+    }, std::time::Duration::from_secs(30));
 
     Json(serde_json::json!({
         "success": true,
@@ -808,15 +808,23 @@ async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn get_overlay_debug(State(state): State<AppState>) -> Json<Value> {
-    let lol_rect = crate::vision::ScreenCapture::get_lol_window_rect();
+    let client_rect = crate::vision::ScreenCapture::get_lol_client_rect();
+    let game_rect = crate::vision::ScreenCapture::get_lol_game_rect();
     let is_league_active = crate::overlay::WindowTracker::is_league_active();
     let is_game_active = crate::overlay::WindowTracker::is_game_active();
     let phase = state.lcu_client.get_gameflow_phase().await;
     let is_showing = state.ranked_overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst);
+    let is_in_test_mode = state.ranked_overlay.is_in_test_mode();
     let league_pid = crate::vision::capture::get_league_pid();
 
     Json(serde_json::json!({
-        "lolWindowRect": lol_rect.map(|r| serde_json::json!({
+        "clientRect": client_rect.map(|r| serde_json::json!({
+            "x": r.x,
+            "y": r.y,
+            "width": r.width,
+            "height": r.height
+        })),
+        "gameRect": game_rect.map(|r| serde_json::json!({
             "x": r.x,
             "y": r.y,
             "width": r.width,
@@ -826,6 +834,7 @@ async fn get_overlay_debug(State(state): State<AppState>) -> Json<Value> {
         "isGameActive": is_game_active,
         "gameflowPhase": phase,
         "isRankedOverlayShowing": is_showing,
+        "isInTestMode": is_in_test_mode,
         "leaguePid": league_pid
     }))
 }

@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
 
                     if is_aram {
-                        if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                        if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                             ranked_bg.stop();
                         }
                         if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
@@ -200,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
                 }
-                if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                     ranked_bg.stop();
                 }
             }
