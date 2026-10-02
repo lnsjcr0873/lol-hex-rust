@@ -257,7 +257,14 @@ impl DecisionEngine {
         let mut traps = Vec::new();
 
         for a in aug_list {
-            let delta = a.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let delta = a.get("deltaWinRate")
+                .and_then(|v| v.as_f64())
+                .unwrap_or_else(|| {
+                    a.get("winRate")
+                        .and_then(|v| v.as_f64())
+                        .map(|wr| wr - hero_win_rate)
+                        .unwrap_or(0.0)
+                });
             let games = a.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
 
             if delta < -0.005 && games >= 100 {
@@ -518,6 +525,9 @@ impl DecisionEngine {
 
     pub fn search_augments_for_hero(db: &Database, hero_id: &str, query: &str) -> Vec<Value> {
         let q = query.trim().to_lowercase();
+        let hid = db.resolve_hero_id(hero_id).unwrap_or_else(|| hero_id.to_string());
+        let hero_detail = db.heroes_detail.get(&hid);
+
         let mut results = Vec::new();
 
         for (aid, aug) in &db.augments_map {
@@ -526,12 +536,32 @@ impl DecisionEngine {
             let desc_match = aug.description.to_lowercase().contains(&q);
 
             if q.is_empty() || name_match || id_match || desc_match {
+                // If hero detail has champion-specific augment stats, prefer them
+                let (wr, games) = if let Some(detail) = hero_detail {
+                    let mut found = None;
+                    if let Some(arr) = detail.augments.as_array() {
+                        for item in arr {
+                            let match_id = item.get("id").and_then(|v| v.as_str()) == Some(aid.as_str());
+                            let match_name = item.get("name").and_then(|v| v.as_str()) == Some(aug.name.as_str());
+                            if match_id || match_name {
+                                let w = item.get("winRate").and_then(|v| v.as_f64()).unwrap_or(aug.win_rate);
+                                let g = item.get("games").and_then(|v| v.as_i64()).unwrap_or(aug.games);
+                                found = Some((w, g));
+                                break;
+                            }
+                        }
+                    }
+                    found.unwrap_or((aug.win_rate, aug.games))
+                } else {
+                    (aug.win_rate, aug.games)
+                };
+
                 results.push(json!({
                     "id": aid,
                     "name": aug.name,
                     "rarity": aug.rarity,
-                    "winRate": aug.win_rate,
-                    "games": aug.games,
+                    "winRate": wr,
+                    "games": games,
                     "description": aug.description,
                     "cdnIconUrl": aug.cdn_icon_url
                 }));

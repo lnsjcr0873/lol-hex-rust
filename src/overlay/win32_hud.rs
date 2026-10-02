@@ -80,7 +80,7 @@ pub struct NativeHud {
     pub running: Arc<AtomicBool>,
     pub state: Arc<std::sync::RwLock<HudState>>,
     #[cfg(windows)]
-    pub hwnd: Arc<std::sync::Mutex<Option<windows::Win32::Foundation::HWND>>>,
+    pub hwnd: Arc<std::sync::Mutex<Option<isize>>>,
 }
 
 lazy_static::lazy_static! {
@@ -124,10 +124,11 @@ impl NativeHud {
         #[cfg(windows)]
         {
             if let Ok(guard) = self.hwnd.lock() {
-                if let Some(hwnd) = *guard {
+                if let Some(val) = *guard {
                     unsafe {
-                        use windows::Win32::Foundation::{LPARAM, WPARAM};
+                        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
                         use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+                        let hwnd = HWND(val as *mut core::ffi::c_void);
                         let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                 }
@@ -178,9 +179,11 @@ impl NativeHud {
         #[cfg(windows)]
         {
             if let Ok(guard) = self.hwnd.lock() {
-                if let Some(hwnd) = *guard {
+                if let Some(val) = *guard {
                     unsafe {
+                        use windows::Win32::Foundation::HWND;
                         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+                        let hwnd = HWND(val as *mut core::ffi::c_void);
                         let _ = ShowWindow(hwnd, SW_HIDE);
                     }
                 }
@@ -196,11 +199,12 @@ impl NativeHud {
         #[cfg(windows)]
         {
             if let Ok(guard) = self.hwnd.lock() {
-                if let Some(hwnd) = *guard {
+                if let Some(val) = *guard {
                     unsafe {
-                        use windows::Win32::Foundation::BOOL;
+                        use windows::Win32::Foundation::{BOOL, HWND};
                         use windows::Win32::Graphics::Gdi::InvalidateRect;
                         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+                        let hwnd = HWND(val as *mut core::ffi::c_void);
                         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                         let _ = InvalidateRect(hwnd, None, BOOL(0));
                     }
@@ -217,17 +221,14 @@ impl NativeHud {
 #[cfg(windows)]
 fn run_win32_hud_loop(
     running: Arc<AtomicBool>,
-    hwnd_holder: Arc<std::sync::Mutex<Option<windows::Win32::Foundation::HWND>>>,
+    hwnd_holder: Arc<std::sync::Mutex<Option<isize>>>,
 ) {
     use windows::core::w;
-    use windows::Win32::Foundation::{COLORREF, HWND, RECT};
-    use windows::Win32::Graphics::Gdi::InvalidateRect;
+    use windows::Win32::Foundation::{COLORREF, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassExW,
-        SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TranslateMessage,
-        CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_ALPHA, LWA_COLORKEY, MSG,
-        SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        SetLayeredWindowAttributes, SetTimer, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+        LWA_ALPHA, LWA_COLORKEY, MSG, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
         WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
@@ -273,9 +274,9 @@ fn run_win32_hud_loop(
         let transparent_color = COLORREF(0x00010101);
         let _ = SetLayeredWindowAttributes(hwnd, transparent_color, 240, LWA_COLORKEY | LWA_ALPHA);
 
-        // Store HWND
+        // Store HWND as isize (Send + Sync)
         if let Ok(mut guard) = hwnd_holder.lock() {
-            *guard = Some(hwnd);
+            *guard = Some(hwnd.0 as isize);
         }
 
         // 80ms timer for tracking active game window & auto-hiding
@@ -301,16 +302,14 @@ unsafe extern "system" fn overlay_wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::Foundation::{BOOL, COLORREF, LPARAM, LRESULT, RECT, WPARAM};
+    use windows::Win32::Foundation::{COLORREF, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush,
-        DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, SelectObject,
-        HBRUSH, HDC, PAINTSTRUCT, SRCCOPY,
+        DeleteDC, DeleteObject, EndPaint, FillRect, SelectObject, PAINTSTRUCT, SRCCOPY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, GetClientRect, KillTimer, PostQuitMessage, SetWindowPos, ShowWindow,
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-        WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_TIMER,
+        DefWindowProcW, GetClientRect, KillTimer, PostQuitMessage, WM_CLOSE, WM_DESTROY,
+        WM_ERASEBKGND, WM_PAINT, WM_TIMER,
     };
 
     match msg {
@@ -332,12 +331,12 @@ unsafe extern "system" fn overlay_wndproc(
                 // Double buffering: Create compatible in-memory DC & bitmap
                 let mem_dc = CreateCompatibleDC(hdc);
                 let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
-                let old_bmp = SelectObject(mem_dc, mem_bmp.into());
+                let old_bmp = SelectObject(mem_dc, mem_bmp);
 
                 // Clear memory buffer with Chroma Key (RGB 1, 1, 1)
                 let bg_brush = CreateSolidBrush(COLORREF(0x00010101));
                 FillRect(mem_dc, &client_rect, bg_brush);
-                let _ = DeleteObject(bg_brush.into());
+                let _ = DeleteObject(bg_brush);
 
                 // Read snapshot and render HUD content
                 if let Ok(st) = GLOBAL_HUD.state.read() {
@@ -350,8 +349,8 @@ unsafe extern "system" fn overlay_wndproc(
                 let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
 
                 // Clean up GDI memory objects
-                SelectObject(mem_dc, old_bmp);
-                let _ = DeleteObject(mem_bmp.into());
+                let _ = SelectObject(mem_dc, old_bmp);
+                let _ = DeleteObject(mem_bmp);
                 let _ = DeleteDC(mem_dc);
             }
 
@@ -618,18 +617,18 @@ unsafe fn draw_card_rect(
 
     // 1. Draw outer rounded rect with border color
     let border_brush = CreateSolidBrush(border_color);
-    let old_brush = SelectObject(hdc, border_brush.into());
+    let old_brush = SelectObject(hdc, border_brush);
     let _ = RoundRect(hdc, x, y, x + w, y + h, 10, 10);
 
     // 2. Draw inner rounded rect inset by 2px with bg color
     let bg_brush = CreateSolidBrush(bg_color);
-    SelectObject(hdc, bg_brush.into());
+    let _ = SelectObject(hdc, bg_brush);
     let _ = RoundRect(hdc, x + 2, y + 2, x + w - 2, y + h - 2, 8, 8);
 
     // Restore and delete brushes
-    SelectObject(hdc, old_brush);
-    let _ = DeleteObject(border_brush.into());
-    let _ = DeleteObject(bg_brush.into());
+    let _ = SelectObject(hdc, old_brush);
+    let _ = DeleteObject(border_brush);
+    let _ = DeleteObject(bg_brush);
 }
 
 #[cfg(windows)]
