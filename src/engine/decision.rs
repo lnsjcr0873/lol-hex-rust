@@ -344,6 +344,8 @@ impl DecisionEngine {
             })
             .unwrap_or_default();
 
+        let augment_trios = hero_detail.map(|d| d.trios.clone()).unwrap_or_default();
+
         for aid in augment_ids {
             let resolved_id = db.resolve_augment_id(aid).unwrap_or_else(|| aid.clone());
             let global_stat = db.augments_map.get(&resolved_id);
@@ -421,6 +423,49 @@ impl DecisionEngine {
                 score -= 10.0;
             }
 
+            // Check augment trio synergy with existing augments
+            let mut trio_synergy_found: Option<(String, f64)> = None;
+            if !existing_augments.is_empty() {
+                for trio in &augment_trios {
+                    let mut trio_names: Vec<String> = Vec::new();
+                    if let Some(names) = trio.get("augmentNames").and_then(|v| v.as_array()) {
+                        trio_names = names.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
+                    }
+                    let mut trio_ids: Vec<String> = Vec::new();
+                    if let Some(ids) = trio.get("augmentIds").and_then(|v| v.as_array()) {
+                        trio_ids = ids.iter().filter_map(|x| match x {
+                            Value::String(s) => Some(s.clone()),
+                            Value::Number(n) => Some(n.to_string()),
+                            _ => None,
+                        }).collect();
+                    }
+
+                    let matches_cand = trio_names.iter().any(|n| n == &name)
+                        || trio_ids.iter().any(|id| id == &resolved_id || id == aid);
+
+                    if matches_cand {
+                        for ex in existing_augments {
+                            let ex_resolved = db.resolve_augment_id(ex).unwrap_or_else(|| ex.clone());
+                            let ex_name = db.augments_map.get(&ex_resolved).map(|a| a.name.clone()).unwrap_or_else(|| ex.clone());
+                            let matches_ex = trio_names.iter().any(|n| n == ex || n == &ex_name)
+                                || trio_ids.iter().any(|id| id == ex || id == &ex_resolved);
+                            if matches_ex {
+                                let trio_wr = trio.get("winRate").and_then(|v| v.as_f64()).unwrap_or(pair_wr);
+                                trio_synergy_found = Some((ex_name, trio_wr));
+                                break;
+                            }
+                        }
+                    }
+                    if trio_synergy_found.is_some() {
+                        break;
+                    }
+                }
+            }
+
+            if trio_synergy_found.is_some() {
+                score += 15.0;
+            }
+
             let is_destiny = delta >= 0.035;
             let is_trap = delta < -0.005;
 
@@ -433,6 +478,12 @@ impl DecisionEngine {
             } else {
                 ("B", "⚖️ 常规 B 级可用", "slate")
             };
+
+            let synergy_partner = trio_synergy_found.as_ref().map(|(n, _)| n.clone());
+            let synergy_wr = trio_synergy_found.as_ref().map(|(_, wr)| *wr);
+            let synergy_note = trio_synergy_found.as_ref().map(|(n, wr)| {
+                format!("与已选强化[{}]存在高胜率组合联动 ({:.1}%)", n, wr * 100.0)
+            });
 
             candidates.push(json!({
                 "augmentId": resolved_id,
@@ -449,6 +500,10 @@ impl DecisionEngine {
                 "badgeColor": badge_color,
                 "isDestiny": is_destiny,
                 "isTrap": is_trap,
+                "hasTrioSynergy": trio_synergy_found.is_some(),
+                "synergyPartner": synergy_partner,
+                "synergyWinRate": synergy_wr,
+                "synergyNote": synergy_note,
                 "description": description,
                 "cdnIconUrl": cdn_icon_url
             }));
@@ -468,8 +523,12 @@ impl DecisionEngine {
         let rationale = if let Some(ref best) = best_candidate {
             let bname = best.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let bdelta = best.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0) * 100.0;
+            let syn_note = best.get("synergyNote").and_then(|v| v.as_str());
+
             if all_traps {
                 format!("🚨 全陷阱警告：当前 3 个候选强化对 {} 均为负收益！建议重掷！若无骰子勉强选【{}】。", hero_summary.name, bname)
+            } else if let Some(sn) = syn_note {
+                format!("✨ 推荐【{}】（{}），契合度与实战容错率极佳 (+{:.2}%)。", bname, sn, bdelta)
             } else if best.get("isDestiny").and_then(|v| v.as_bool()).unwrap_or(false) {
                 format!("👑 首选【{}】！带来高达 +{:.2}% 净胜率暴增，是当前最强质变核心强化！", bname, bdelta)
             } else {
@@ -666,6 +725,18 @@ impl DecisionEngine {
             calculate_item_net_cost(iid, current_items, gold, &cfg.gold_calc_mode)
         });
 
+        let terminal_trios = hero_detail
+            .map(|d| d.terminal_item_trios.clone())
+            .unwrap_or_default();
+        let recommended_trio = ArchetypeEngine::align_terminal_trio_with_archetype(
+            &terminal_trios,
+            &archetype_info,
+            &owned_set,
+            &countered_items,
+            cfg.resolve_conflicts,
+            &cfg.trio_mode,
+        );
+
         json!({
             "heroId": hid,
             "gold": gold,
@@ -674,6 +745,8 @@ impl DecisionEngine {
             "threatProfile": threat_profile,
             "nextItem": next_item,
             "goldInfo": gold_info,
+            "recommendedTrio": recommended_trio,
+            "terminalTrios": terminal_trios,
             "buildPath": build_path.into_iter().take(6).collect::<Vec<_>>()
         })
     }

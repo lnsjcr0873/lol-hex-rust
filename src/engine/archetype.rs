@@ -183,14 +183,98 @@ impl ArchetypeEngine {
         refined
     }
 
+    fn extract_trio_item_ids(trio: &Value) -> Vec<String> {
+        let mut ids = Vec::new();
+        let candidates = [
+            trio.get("itemIds"),
+            trio.get("items"),
+            trio.get("itemIdList"),
+        ];
+        for cand in candidates.into_iter().flatten() {
+            if let Some(arr) = cand.as_array() {
+                for v in arr {
+                    if let Some(s) = v.as_str() {
+                        ids.push(s.to_string());
+                    } else if let Some(n) = v.as_i64() {
+                        ids.push(n.to_string());
+                    }
+                }
+                if !ids.is_empty() {
+                    return ids;
+                }
+            }
+        }
+        ids
+    }
+
     pub fn align_terminal_trio_with_archetype(
         all_trios: &[Value],
-        _archetype_info: &ArchetypeInfo,
-        _owned_item_ids: &HashSet<String>,
-        _counter_items: &[Value],
-        _resolve_conflicts: bool,
-        _trio_mode: &str,
+        archetype_info: &ArchetypeInfo,
+        owned_item_ids: &HashSet<String>,
+        counter_items: &[Value],
+        resolve_conflicts: bool,
+        trio_mode: &str,
     ) -> Option<Value> {
-        all_trios.first().cloned()
+        if all_trios.is_empty() {
+            return None;
+        }
+
+        let favored: HashSet<&str> = archetype_info.favored_tags.iter().map(|s| s.as_str()).collect();
+        let forbidden: HashSet<&str> = archetype_info.forbidden_tags.iter().map(|s| s.as_str()).collect();
+        let counter_set: HashSet<String> = counter_items
+            .iter()
+            .filter_map(|it| it.get("itemId").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+
+        let mut scored_trios: Vec<(f64, Value)> = all_trios
+            .iter()
+            .map(|trio| {
+                let wr = trio.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                let games = trio.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+                let mut score = wr * 100.0;
+
+                let items = Self::extract_trio_item_ids(trio);
+                let mut owned_match_count = 0;
+
+                for iid in &items {
+                    // 1. Owned item match
+                    if owned_item_ids.contains(iid) {
+                        score += 20.0;
+                        owned_match_count += 1;
+                    }
+
+                    // 2. Archetype tags
+                    if let Some(tags) = ENGINE_META.item_feature_tags.get(iid) {
+                        if tags.iter().any(|t| favored.contains(t.as_str())) {
+                            score += 5.0;
+                        }
+                        if resolve_conflicts && archetype_info.is_locked && tags.iter().any(|t| forbidden.contains(t.as_str())) {
+                            score -= 15.0;
+                        }
+                    }
+
+                    // 3. Counter item synergy
+                    if (trio_mode == "DYNAMIC_COUNTER" || trio_mode == "IRON_COUNTER") && counter_set.contains(iid) {
+                        score += 8.0;
+                    }
+                }
+
+                if trio_mode == "STRICT_TRIO" {
+                    // In strict trio mode, sample size and pure winrate carry extra weight
+                    let smoothed_wr = (wr * games as f64 + 0.5 * 50.0) / (games as f64 + 50.0);
+                    score += (smoothed_wr - 0.5) * 40.0;
+                }
+
+                let mut enriched = trio.clone();
+                enriched["matchScore"] = Value::from((score * 10.0).round() / 10.0);
+                enriched["ownedMatches"] = Value::from(owned_match_count);
+
+                (score, enriched)
+            })
+            .collect();
+
+        scored_trios.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored_trios.into_iter().next().map(|(_, val)| val)
     }
 }
+

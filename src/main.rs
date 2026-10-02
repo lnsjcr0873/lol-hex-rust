@@ -387,4 +387,90 @@ mod tests {
         assert!(name.is_some(), "Should resolve hero id 1");
         assert_eq!(name.unwrap(), "黑暗之女");
     }
+
+    #[test]
+    fn test_exporter_bom_and_bytes() {
+        let db = Database::load_from_dir("data");
+        let bytes = crate::crawler::Exporter::export_heroes_summary_csv_bytes(&db).unwrap();
+        // Check UTF-8 BOM
+        assert!(bytes.len() >= 3);
+        assert_eq!(&bytes[0..3], b"\xEF\xBB\xBF", "CSV export must prepend UTF-8 BOM for Windows Excel compatibility");
+        let text = String::from_utf8(bytes[3..].to_vec()).unwrap();
+        assert!(text.contains("英雄ID"), "Header should be in CSV");
+        assert!(text.contains("黑暗之女"), "Data should contain Chinese hero names");
+
+        let aug_bytes = crate::crawler::Exporter::export_augments_summary_csv_bytes(&db).unwrap();
+        assert_eq!(&aug_bytes[0..3], b"\xEF\xBB\xBF");
+        let aug_text = String::from_utf8(aug_bytes[3..].to_vec()).unwrap();
+        assert!(aug_text.contains("强化ID"));
+    }
+
+    #[test]
+    fn test_terminal_trio_alignment() {
+        use serde_json::json;
+        use std::collections::HashSet;
+
+        let trios = vec![
+            json!({
+                "itemIds": ["3089", "3157", "3020"],
+                "itemNames": ["灭世者的死亡之帽", "中娅沙漏", "法师之靴"],
+                "winRate": 0.58,
+                "games": 500
+            }),
+            json!({
+                "itemIds": ["3031", "3094", "3006"],
+                "itemNames": ["无尽之刃", "疾射火炮", "狂战士胫甲"],
+                "winRate": 0.59,
+                "games": 400
+            }),
+        ];
+
+        let mut owned = HashSet::new();
+        owned.insert("3089".to_string()); // Player already owns Deathcap
+
+        let arch = crate::engine::archetype::ArchetypeInfo {
+            locked_archetype_id: "BURST_MAGE".to_string(),
+            favored_tags: vec!["ABILITY_POWER".to_string()],
+            is_locked: true,
+            ..Default::default()
+        };
+
+        let aligned = crate::engine::archetype::ArchetypeEngine::align_terminal_trio_with_archetype(
+            &trios,
+            &arch,
+            &owned,
+            &[],
+            true,
+            "DYNAMIC_COUNTER",
+        );
+
+        assert!(aligned.is_some());
+        let res = aligned.unwrap();
+        let item_ids = res["itemIds"].as_array().unwrap();
+        assert_eq!(item_ids[0].as_str().unwrap(), "3089", "Should pick the AP trio matching owned Deathcap");
+        assert_eq!(res["ownedMatches"].as_i64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_compare_augments_trio_synergy() {
+        let db = Database::load_from_dir("data");
+        // Compare augments for Annie (1) with an existing augment
+        // If Annie has augments, pass existing_augments and check comparison
+        let res = crate::engine::decision::DecisionEngine::compare_augments(
+            &db,
+            "1",
+            &["1238".to_string(), "1068".to_string(), "1124".to_string()],
+            Some(1),
+            &["珠光护手".to_string()],
+        );
+
+        assert!(res.get("candidates").is_some());
+        let candidates = res["candidates"].as_array().unwrap();
+        assert!(!candidates.is_empty());
+        // Verify each candidate has hasTrioSynergy field
+        for c in candidates {
+            assert!(c.get("hasTrioSynergy").is_some());
+        }
+    }
 }
+

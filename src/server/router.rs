@@ -1,5 +1,5 @@
 use crate::config::{get_preset_definitions, ConfigManager};
-use crate::crawler::OpggClient;
+use crate::crawler::{Exporter, OpggClient};
 use crate::data::loader::Database;
 use crate::data::models::AugmentSummary;
 use crate::engine::decision::DecisionEngine;
@@ -10,8 +10,8 @@ use crate::server::assets::static_handler;
 use crate::server::ws::{ws_handler, WsBroadcaster};
 
 use axum::extract::{Path as AxPath, Query, State};
-use axum::http::StatusCode;
-use axum::response::Json;
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
@@ -89,6 +89,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/ranked/counters", get(get_ranked_counters))
         .route("/api/ranked/synergies", get(get_ranked_synergies))
         .route("/api/ranked/draft-decision", get(get_draft_decision))
+
+        // Data Export API
+        .route("/api/export/heroes.csv", get(export_heroes_csv))
+        .route("/api/export/augments.csv", get(export_augments_csv))
 
         // WebSocket endpoint
         .route("/ws/live", get({
@@ -684,3 +688,32 @@ async fn get_draft_decision(State(state): State<AppState>) -> Json<Value> {
         "decision_card": draft.state.decision_card
     }))
 }
+
+// ---------------- Data Export Handlers ----------------
+
+async fn export_heroes_csv(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    match Exporter::export_heroes_summary_csv_bytes(&state.db) {
+        Ok(bytes) => {
+            let headers = [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (header::CONTENT_DISPOSITION, "attachment; filename=\"heroes_summary.csv\""),
+            ];
+            Ok((headers, bytes).into_response())
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+async fn export_augments_csv(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    match Exporter::export_augments_summary_csv_bytes(&state.db) {
+        Ok(bytes) => {
+            let headers = [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (header::CONTENT_DISPOSITION, "attachment; filename=\"augments_summary.csv\""),
+            ];
+            Ok((headers, bytes).into_response())
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
