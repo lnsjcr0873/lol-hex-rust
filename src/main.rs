@@ -98,27 +98,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut d = draft_bg.write().await;
                     d.parse_session_with_db_and_opgg(&session, Some(&db_bg), Some(&opgg_bg));
 
-                    // 1. If benchChampions exists -> ARAM mode -> BenchOverlay HUD
-                    if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
-                        let mut views = Vec::new();
-                        for champ in bench {
-                            if let Some(cid) = champ.get("championId").and_then(|c| c.as_i64()) {
-                                let id_str = cid.to_string();
-                                let hero_name = db_bg.resolve_hero_name(&id_str).unwrap_or_else(|| format!("Hero-{}", cid));
-                                let wr = db_bg.heroes_map.get(&id_str).map(|s| s.win_rate).unwrap_or(0.5);
-                                let tier = if wr >= 0.54 { "S" } else if wr >= 0.51 { "A" } else { "B" };
-                                views.push(crate::overlay::BenchChampView {
-                                    champion_id: cid as i32,
-                                    champion_name: hero_name,
-                                    tier: tier.to_string(),
-                                    win_rate: wr,
-                                });
+                    // 1. If benchEnabled or non-empty bench -> ARAM mode -> BenchOverlay HUD
+                    let is_aram = session.get("benchEnabled").and_then(|v| v.as_bool()).unwrap_or(false)
+                        || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
+
+                    if is_aram {
+                        if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                            ranked_bg.stop();
+                        }
+                        if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
+                            let mut views = Vec::new();
+                            for champ in bench {
+                                if let Some(cid) = champ.get("championId").and_then(|c| c.as_i64()) {
+                                    let id_str = cid.to_string();
+                                    let hero_name = db_bg.resolve_hero_name(&id_str).unwrap_or_else(|| format!("Hero-{}", cid));
+                                    let wr = db_bg.heroes_map.get(&id_str).map(|s| s.win_rate).unwrap_or(0.5);
+                                    let tier = if wr >= 0.54 { "S" } else if wr >= 0.51 { "A" } else { "B" };
+                                    views.push(crate::overlay::BenchChampView {
+                                        champion_id: cid as i32,
+                                        champion_name: hero_name,
+                                        tier: tier.to_string(),
+                                        win_rate: wr,
+                                    });
+                                }
+                            }
+                            if !views.is_empty() {
+                                bench_bg.show_bench_heroes(views);
                             }
                         }
-                        if !views.is_empty() {
-                            bench_bg.show_bench_heroes(views);
-                        }
                     } else if !d.state.my_team.is_empty() {
+                        if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                            bench_bg.stop();
+                        }
                         // 2. 5v5 Ranked / Normal Draft -> RankedOverlay HUD
                         let my_slots: Vec<crate::overlay::RankedSlotView> = d.state.my_team.iter().map(|s| {
                             crate::overlay::RankedSlotView {

@@ -408,9 +408,10 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         SW_SHOWNOACTIVATE,
     };
 
+    let lol_rect = crate::vision::ScreenCapture::get_lol_window_rect();
     let is_game_active = crate::overlay::WindowTracker::is_league_active();
 
-    let mut should_hide = !is_game_active;
+    let mut should_hide = lol_rect.is_none() || !is_game_active;
     let mut is_expired = false;
 
     if let Ok(mut st) = GLOBAL_HUD.state.write() {
@@ -433,7 +434,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     }
 
     // Align with active League window position
-    if let Some(rect) = crate::vision::ScreenCapture::get_lol_window_rect() {
+    if let Some(rect) = lol_rect {
         let _ = SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -637,11 +638,14 @@ unsafe fn render_ranked_hud(
 ) {
     use windows::Win32::Foundation::COLORREF;
 
+    let scale_x = width as f64 / 1280.0;
+    let scale_y = height as f64 / 720.0;
+
     // 1. Top Banner (Centered at top)
-    let banner_w = 640.min(width - 40);
-    let banner_h = 36;
+    let banner_w = ((640.0 * scale_x) as i32).min(width - 40);
+    let banner_h = (36.0 * scale_y) as i32;
     let banner_x = (width - banner_w) / 2;
-    let banner_y = 20;
+    let banner_y = (15.0 * scale_y) as i32;
 
     draw_card_rect(
         hdc,
@@ -655,29 +659,30 @@ unsafe fn render_ranked_hud(
     draw_text_line(
         hdc,
         "👑 HexBrain 排位选人辅助 · 5v5 对位胜率全景分析",
-        banner_x + 16,
-        banner_y + 10,
+        banner_x + (16.0 * scale_x) as i32,
+        banner_y + (10.0 * scale_y) as i32,
         COLORREF(0x0045f0f0), // Cyan/gold text
     );
 
-    // 2. Left side: My Team (我方 5 个槽位)
-    let card_w = 175.min(((width / 4).max(140)));
-    let card_h = 42;
-    let start_y = 70;
-    let spacing_y = 48;
+    // 2. Left side: My Team (我方 5 个槽位, 吸附于我方头像右侧 X=205)
+    let left_x = (205.0 * scale_x) as i32;
+    let card_w = (140.0 * scale_x) as i32;
+    let card_h = (44.0 * scale_y) as i32;
+    let start_y = (100.0 * scale_y) as i32;
+    let pitch_y = (92.0 * scale_y) as i32;
 
     for (i, slot) in data.my_team.iter().take(5).enumerate() {
-        let cy = start_y + i as i32 * spacing_y;
+        let cy = start_y + i as i32 * pitch_y;
         let border_col = if slot.is_local_player {
             COLORREF(0x0000d7ff) // Gold for local player
         } else {
             COLORREF(0x0038bdf8) // Sky blue for teammates
         };
 
-        draw_card_rect(hdc, 20, cy, card_w, card_h, COLORREF(0x001e140a), border_col);
+        draw_card_rect(hdc, left_x, cy, card_w, card_h, COLORREF(0x001e140a), border_col);
 
         let title_line = format!("[{}] {}", slot.position_cn, slot.champion_name);
-        draw_text_line(hdc, &title_line, 28, cy + 6, COLORREF(0x00ffffff));
+        draw_text_line(hdc, &title_line, left_x + 8, cy + 5, COLORREF(0x00ffffff));
 
         let stat_line = format!("胜率: {:.1}% | T{}级", slot.win_rate * 100.0, slot.tier);
         let stat_col = if slot.win_rate >= 0.52 {
@@ -685,19 +690,19 @@ unsafe fn render_ranked_hud(
         } else {
             COLORREF(0x00c0c0c0) // Silver
         };
-        draw_text_line(hdc, &stat_line, 28, cy + 24, stat_col);
+        draw_text_line(hdc, &stat_line, left_x + 8, cy + 24, stat_col);
     }
 
-    // 3. Right side: Their Team (敌方 5 个槽位)
-    let right_x = width - card_w - 20;
+    // 3. Right side: Their Team (敌方 5 个槽位, 吸附于敌方头像左侧 X=935)
+    let right_x = (935.0 * scale_x) as i32;
     for (i, slot) in data.their_team.iter().take(5).enumerate() {
-        let cy = start_y + i as i32 * spacing_y;
+        let cy = start_y + i as i32 * pitch_y;
         let border_col = COLORREF(0x005546ff); // Red/rose border
 
         draw_card_rect(hdc, right_x, cy, card_w, card_h, COLORREF(0x001e140a), border_col);
 
         let title_line = format!("[{}] {}", slot.position_cn, slot.champion_name);
-        draw_text_line(hdc, &title_line, right_x + 8, cy + 6, COLORREF(0x00ffffff));
+        draw_text_line(hdc, &title_line, right_x + 8, cy + 5, COLORREF(0x00ffffff));
 
         let stat_line = format!("胜率: {:.1}% | T{}级", slot.win_rate * 100.0, slot.tier);
         let stat_col = if slot.win_rate >= 0.52 {
@@ -710,10 +715,10 @@ unsafe fn render_ranked_hud(
 
     // 4. Bottom Recommendation Bar
     if !data.recommendation.is_empty() {
-        let bot_w = 640.min(width - 40);
-        let bot_h = 36;
+        let bot_w = ((680.0 * scale_x) as i32).min(width - 40);
+        let bot_h = (36.0 * scale_y) as i32;
         let bot_x = (width - bot_w) / 2;
-        let bot_y = (height - bot_h - 20).max(start_y + 5 * spacing_y + 10);
+        let bot_y = (height - bot_h - (16.0 * scale_y) as i32).max(start_y + 5 * pitch_y + 10);
 
         draw_card_rect(
             hdc,

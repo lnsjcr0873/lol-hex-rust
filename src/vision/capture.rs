@@ -8,7 +8,16 @@ pub struct ViewportRect {
 
 pub struct ScreenCapture;
 
+static LEAGUE_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn get_league_pid() -> u32 {
+    LEAGUE_PID.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl ScreenCapture {
+    pub fn get_league_pid() -> u32 {
+        get_league_pid()
+    }
     pub fn get_effective_viewport() -> ViewportRect {
         #[cfg(windows)]
         {
@@ -56,40 +65,100 @@ impl ScreenCapture {
 
     #[cfg(windows)]
     pub fn get_lol_window_rect() -> Option<ViewportRect> {
-        use windows::core::w;
-        use windows::Win32::Foundation::{HWND, RECT};
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, GetWindowRect, IsWindow, IsWindowVisible,
+            EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+            IsIconic, IsWindow, IsWindowVisible,
         };
 
-        unsafe {
-            let mut hwnd = FindWindowW(None, w!("League of Legends (TM) Client")).unwrap_or_default();
-            if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
-                hwnd = FindWindowW(w!("RiotWindowClass"), None).unwrap_or_default();
-            }
-            if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
-                hwnd = FindWindowW(w!("RCLIENT"), None).unwrap_or_default();
-            }
-            if hwnd == HWND::default() || !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() {
-                hwnd = FindWindowW(None, w!("League of Legends")).unwrap_or_default();
+        struct Candidate {
+            pid: u32,
+            is_game: bool,
+            rect: ViewportRect,
+        }
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                return BOOL(1);
             }
 
-            if hwnd != HWND::default() && IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool() {
-                let mut rect = RECT::default();
-                if GetWindowRect(hwnd, &mut rect).is_ok() {
-                    let w = rect.right - rect.left;
-                    let h = rect.bottom - rect.top;
-                    if w >= 640 && h >= 480 {
-                        return Some(ViewportRect {
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_err() {
+                return BOOL(1);
+            }
+
+            let w = rect.right - rect.left;
+            let h = rect.bottom - rect.top;
+            if w < 600 || h < 400 || rect.left < -10000 {
+                return BOOL(1);
+            }
+
+            let mut class_buf = [0u16; 256];
+            let c_len = GetClassNameW(hwnd, &mut class_buf);
+            let class_name = if c_len > 0 {
+                String::from_utf16_lossy(&class_buf[..c_len as usize]).to_lowercase()
+            } else {
+                String::new()
+            };
+
+            let mut title_buf = [0u16; 256];
+            let t_len = GetWindowTextW(hwnd, &mut title_buf);
+            let title = if t_len > 0 {
+                String::from_utf16_lossy(&title_buf[..t_len as usize]).to_lowercase()
+            } else {
+                String::new()
+            };
+
+            let is_game = class_name.contains("riotwindowclass")
+                || title.contains("league of legends (tm) client");
+
+            let is_client = class_name.contains("rclient")
+                || title == "league of legends"
+                || title.contains("英雄联盟");
+
+            if is_game || is_client {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+                let out = lparam.0 as *mut Vec<Candidate>;
+                if !out.is_null() {
+                    (*out).push(Candidate {
+                        pid,
+                        is_game,
+                        rect: ViewportRect {
                             x: rect.left,
                             y: rect.top,
                             width: w,
                             height: h,
-                        });
-                    }
+                        },
+                    });
                 }
             }
+
+            BOOL(1)
         }
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        unsafe {
+            let lparam = LPARAM(&mut candidates as *mut _ as isize);
+            let _ = EnumWindows(Some(enum_proc), lparam);
+        }
+
+        if let Some(game) = candidates.iter().find(|c| c.is_game) {
+            LEAGUE_PID.store(game.pid, std::sync::atomic::Ordering::Relaxed);
+            return Some(game.rect.clone());
+        }
+
+        if let Some(client) = candidates.iter().find(|c| !c.is_game) {
+            LEAGUE_PID.store(client.pid, std::sync::atomic::Ordering::Relaxed);
+            return Some(client.rect.clone());
+        }
+
+        None
+    }
+
+    #[cfg(not(windows))]
+    pub fn get_lol_window_rect() -> Option<ViewportRect> {
         None
     }
 
