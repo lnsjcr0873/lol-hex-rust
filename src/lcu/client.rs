@@ -300,4 +300,69 @@ impl LcuClient {
             Err(_) => false,
         }
     }
+
+    pub async fn get_chat_conversation_participants(&self, chat_room_id: &str) -> Vec<Value> {
+        if !self.ensure_credentials().await {
+            return Vec::new();
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/participants",
+            port, chat_room_id
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                if let Ok(list) = res.json::<Vec<Value>>().await {
+                    return list;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    pub async fn get_player_ranked_stats(&self, puuid: &str) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-ranked/v1/ranked-stats/{}",
+            port, puuid
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn get_player_match_history(&self, puuid: &str, end_idx: usize) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex=0&endIndex={}",
+            port, puuid, end_idx
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
 }
