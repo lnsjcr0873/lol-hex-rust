@@ -711,6 +711,7 @@ mod tests {
                     win_rate: 0.53,
                     tier: 1,
                     is_local_player: true,
+                    ..Default::default()
                 },
             ],
             their_team: vec![
@@ -720,8 +721,10 @@ mod tests {
                     win_rate: 0.49,
                     tier: 3,
                     is_local_player: false,
+                    ..Default::default()
                 },
             ],
+            decision_card: Default::default(),
             recommendation: "对线刺客，注意保留控制".to_string(),
         };
 
