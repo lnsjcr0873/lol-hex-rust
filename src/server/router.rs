@@ -8,7 +8,6 @@ use crate::lcu::{LcuClient, LiveClientDataReader};
 use crate::overlay::{BenchOverlay, InGameOverlay, ItemOverlay, RankedOverlay};
 use crate::server::assets::static_handler;
 use crate::server::ws::{ws_handler, WsBroadcaster};
-use crate::vision::OcrScanner;
 
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::StatusCode;
@@ -212,31 +211,21 @@ struct ScanAndCompareReq {
     hero_id: String,
     current_stage: Option<i32>,
     existing_augments: Option<Vec<String>>,
+    candidate_augments: Option<Vec<String>>,
 }
 
 async fn scan_and_compare(
     State(state): State<AppState>,
     Json(req): Json<ScanAndCompareReq>,
 ) -> Json<Value> {
-    // In live system, triggers OCR screen capture and compares
-    let lines = OcrScanner::scan_augment_titles().await;
-    let matched_ids: Vec<String> = if !lines.is_empty() {
-        let matches = OcrScanner::match_augments_from_texts(&state.db, &lines);
-        let ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
-        if ids.is_empty() {
-            vec!["1238".to_string(), "1068".to_string(), "1124".to_string()]
-        } else {
-            ids
-        }
-    } else {
+    let candidates = req.candidate_augments.unwrap_or_else(|| {
         vec!["1238".to_string(), "1068".to_string(), "1124".to_string()]
-    };
-
+    });
     let existing = req.existing_augments.unwrap_or_default();
     let res = DecisionEngine::compare_augments(
         &state.db,
         &req.hero_id,
-        &matched_ids,
+        &candidates,
         req.current_stage,
         &existing,
     );

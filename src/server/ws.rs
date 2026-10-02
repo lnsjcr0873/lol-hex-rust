@@ -3,7 +3,6 @@ use axum::response::IntoResponse;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::info;
 
 #[derive(Clone)]
 pub struct WsBroadcaster {
