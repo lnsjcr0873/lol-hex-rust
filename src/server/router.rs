@@ -12,10 +12,10 @@ use crate::vision::OcrScanner;
 
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json};
+use axum::response::Json;
 use axum::routing::{get, post};
 use axum::Router;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -219,12 +219,24 @@ async fn scan_and_compare(
     Json(req): Json<ScanAndCompareReq>,
 ) -> Json<Value> {
     // In live system, triggers OCR screen capture and compares
-    let dummy_augments = vec!["1238".to_string(), "1068".to_string(), "1124".to_string()];
+    let lines = OcrScanner::scan_augment_titles().await;
+    let matched_ids: Vec<String> = if !lines.is_empty() {
+        let matches = OcrScanner::match_augments_from_texts(&state.db, &lines);
+        let ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
+        if ids.is_empty() {
+            vec!["1238".to_string(), "1068".to_string(), "1124".to_string()]
+        } else {
+            ids
+        }
+    } else {
+        vec!["1238".to_string(), "1068".to_string(), "1124".to_string()]
+    };
+
     let existing = req.existing_augments.unwrap_or_default();
     let res = DecisionEngine::compare_augments(
         &state.db,
         &req.hero_id,
-        &dummy_augments,
+        &matched_ids,
         req.current_stage,
         &existing,
     );

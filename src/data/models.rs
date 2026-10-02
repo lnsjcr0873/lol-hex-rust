@@ -1,6 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 
 pub fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
 where

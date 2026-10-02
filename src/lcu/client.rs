@@ -3,7 +3,6 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct LcuClient {

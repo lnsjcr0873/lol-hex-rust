@@ -14,6 +14,7 @@ pub use item_overlay::ItemOverlay;
 pub use ranked_overlay::RankedOverlay;
 pub use tts::TextToSpeech;
 pub use window_tracker::WindowTracker;
+#[allow(unused_imports)]
 pub use win32_hud::{
     AugmentCardView, AugmentOverlayData, BenchChampView, BenchOverlayData, ItemCardView,
     ItemOverlayData, NativeHud, GLOBAL_HUD,
