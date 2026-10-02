@@ -8,7 +8,7 @@ mod server;
 mod vision;
 
 use config::ConfigManager;
-use crawler::OpggClient;
+use crawler::{HexdataCrawler, OpggClient};
 use data::loader::Database;
 use engine::ranked_draft::RankedDraftManager;
 use lcu::{LcuClient, LiveClientDataReader};
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("基于 1157万+ 局真实对局大数据的海克斯大乱斗实时决策辅助引擎");
     println!("============================================================");
 
-    // 1. Load In-Memory Database
+    // 1. Load Lightweight In-Memory Database (details loaded on demand / online)
     let db = Arc::new(Database::load_from_dir("data"));
 
     // 2. Initialize Subsystems
@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingame_overlay = Arc::new(InGameOverlay::new());
     let item_overlay = Arc::new(ItemOverlay::new());
     let opgg_client = Arc::new(OpggClient::new());
+    let hexdata_client = Arc::new(HexdataCrawler::new());
     let ws_broadcaster = Arc::new(WsBroadcaster::new());
 
     // 3. Start Overlays
@@ -77,11 +78,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bench_bg = bench_overlay.clone();
     let ranked_bg = ranked_overlay.clone();
     let opgg_bg = opgg_client.clone();
+    let hexdata_bg = hexdata_client.clone();
 
-    // Warm up OP.GG tier list in background
+    // Warm up OP.GG tier list and HexData handshake in background
     let opgg_warmup = opgg_client.clone();
+    let hex_handshake = hexdata_client.clone();
     tokio::spawn(async move {
         let _ = opgg_warmup.get_ranked_tier_list(false).await;
+        hex_handshake.handshake().await;
     });
 
     tokio::spawn(async move {
@@ -139,6 +143,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let local_slot = d.state.my_team.iter().find(|s| s.is_local_player);
                         let rec_text = if let Some(local) = local_slot {
                             if !local.champion_id.is_empty() {
+                                let cid_clone = local.champion_id.clone();
+                                let db_clone = db_bg.clone();
+                                let hex_crawler = hexdata_bg.clone();
+                                tokio::spawn(async move {
+                                    let _ = db_clone.fetch_and_cache_hero_detail(&cid_clone, &hex_crawler).await;
+                                });
+
                                 let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
                                 if let Some(enemy) = enemy_slot {
                                     if !enemy.champion_id.is_empty() {
@@ -197,6 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ingame_overlay,
         item_overlay,
         opgg_client,
+        hexdata_client,
         ws_broadcaster,
     };
 
@@ -255,7 +267,7 @@ mod tests {
         let annie_id = db.resolve_hero_id("黑暗之女");
         assert!(annie_id.is_some());
         if let Some(id) = annie_id {
-            assert!(db.heroes_detail.contains_key(&id), "Hero detail for Annie should be indexed by canonical id");
+            assert!(db.get_hero_detail(&id).is_some(), "Hero detail for Annie should be accessible by canonical id");
         }
     }
 
@@ -610,7 +622,7 @@ mod tests {
 
         // Verify Arc pointer sharing (zero data copy across index keys)
         assert!(
-            std::sync::Arc::ptr_eq(detail_by_id.unwrap(), detail_by_name.unwrap()),
+            std::sync::Arc::ptr_eq(&detail_by_id.unwrap(), &detail_by_name.unwrap()),
             "Database should share the exact same Arc heap instance across keys"
         );
     }
@@ -623,6 +635,21 @@ mod tests {
         let val = matchup.unwrap();
         assert!(val.get("winRate").is_some());
         assert!(val.get("label").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_hexdata_crawler_and_lazy_load() {
+        let db = Database::load_from_dir("data");
+        let crawler = crate::crawler::HexdataCrawler::new();
+
+        let initial_len = db.heroes_detail.read().unwrap().len();
+
+        let detail = db.fetch_and_cache_hero_detail("1", &crawler).await;
+        assert!(detail.is_some(), "Hero 1 detail should be loaded via on-demand / fallback");
+        assert_eq!(detail.unwrap().hero_name, "黑暗之女");
+
+        let after_len = db.heroes_detail.read().unwrap().len();
+        assert!(after_len > initial_len);
     }
 }
 

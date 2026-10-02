@@ -183,28 +183,31 @@ impl DecisionEngine {
     pub fn get_hero_decision_profile(db: &Database, hero_id: &str) -> Option<Value> {
         let hid = db.resolve_hero_id(hero_id)?;
         let summary = db.heroes_map.get(&hid)?;
-        let detail = db.heroes_detail.get(&hid);
+        let detail = db.get_hero_detail(&hid);
 
         let hero_tier = summary.tier.unwrap_or(3);
         let hero_win_rate = summary.win_rate;
         let reroll_advice = Self::calculate_reroll_roi(hero_tier, hero_win_rate);
 
-        let raw_augments = detail.map(|d| d.augments.clone()).unwrap_or(Value::Null);
+        let raw_augments = detail.as_ref().map(|d| d.augments.clone()).unwrap_or(Value::Null);
         let classified_augments = Self::classify_augments(&raw_augments, hero_win_rate);
 
-        let raw_items = detail.map(|d| d.items.clone()).unwrap_or(Value::Null);
+        let raw_items = detail.as_ref().map(|d| d.items.clone()).unwrap_or(Value::Null);
         let items_data = Self::process_items(&raw_items);
 
         let terminal_trios = detail
+            .as_ref()
             .map(|d| d.terminal_item_trios.clone())
             .unwrap_or_default();
-        let augment_trios = detail.map(|d| d.trios.clone()).unwrap_or_default();
+        let augment_trios = detail.as_ref().map(|d| d.trios.clone()).unwrap_or_default();
         let spells = detail
+            .as_ref()
             .map(|d| d.summoner_spell_pairs.clone())
             .unwrap_or_default();
-        let strong_against = detail.map(|d| d.strong_against.clone()).unwrap_or_default();
-        let weak_against = detail.map(|d| d.weak_against.clone()).unwrap_or_default();
+        let strong_against = detail.as_ref().map(|d| d.strong_against.clone()).unwrap_or_default();
+        let weak_against = detail.as_ref().map(|d| d.weak_against.clone()).unwrap_or_default();
         let teammates = detail
+            .as_ref()
             .map(|d| d.teammate_synergies.clone())
             .unwrap_or_default();
 
@@ -327,8 +330,9 @@ impl DecisionEngine {
         let hero_win_rate = hero_summary.win_rate;
         let mut candidates = Vec::new();
 
-        let hero_detail = db.heroes_detail.get(&hid);
+        let hero_detail = db.get_hero_detail(&hid);
         let hero_aug_list: Vec<Value> = hero_detail
+            .as_ref()
             .map(|d| {
                 if let Some(arr) = d.augments.as_array() {
                     arr.clone()
@@ -343,7 +347,7 @@ impl DecisionEngine {
             })
             .unwrap_or_default();
 
-        let augment_trios = hero_detail.map(|d| d.trios.clone()).unwrap_or_default();
+        let augment_trios = hero_detail.as_ref().map(|d| d.trios.clone()).unwrap_or_default();
 
         for aid in augment_ids {
             let resolved_id = db.resolve_augment_id(aid).unwrap_or_else(|| aid.clone());
@@ -584,7 +588,7 @@ impl DecisionEngine {
     pub fn search_augments_for_hero(db: &Database, hero_id: &str, query: &str) -> Vec<Value> {
         let q = query.trim().to_lowercase();
         let hid = db.resolve_hero_id(hero_id).unwrap_or_else(|| hero_id.to_string());
-        let hero_detail = db.heroes_detail.get(&hid);
+        let hero_detail = db.get_hero_detail(&hid);
 
         let mut results = Vec::new();
 
@@ -595,7 +599,7 @@ impl DecisionEngine {
 
             if q.is_empty() || name_match || id_match || desc_match {
                 // If hero detail has champion-specific augment stats, prefer them
-                let (wr, games) = if let Some(detail) = hero_detail {
+                let (wr, games) = if let Some(detail) = hero_detail.as_ref() {
                     let mut found = None;
                     if let Some(arr) = detail.augments.as_array() {
                         for item in arr {
@@ -646,10 +650,10 @@ impl DecisionEngine {
         cfg: &RecommendationConfig,
     ) -> Value {
         let hid = db.resolve_hero_id(hero_id).unwrap_or_else(|| hero_id.to_string());
-        let hero_detail = db.heroes_detail.get(&hid);
+        let hero_detail = db.get_hero_detail(&hid);
 
         let mut candidate_items = Vec::new();
-        if let Some(d) = hero_detail {
+        if let Some(d) = hero_detail.as_ref() {
             if let Some(arr) = d.items.as_array() {
                 candidate_items.extend(arr.clone());
             } else if let Some(obj) = d.items.as_object() {
@@ -725,6 +729,7 @@ impl DecisionEngine {
         });
 
         let terminal_trios = hero_detail
+            .as_ref()
             .map(|d| d.terminal_item_trios.clone())
             .unwrap_or_default();
         let recommended_trio = ArchetypeEngine::align_terminal_trio_with_archetype(

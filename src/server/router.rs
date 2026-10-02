@@ -1,5 +1,5 @@
 use crate::config::{get_preset_definitions, ConfigManager};
-use crate::crawler::{Exporter, OpggClient};
+use crate::crawler::{Exporter, HexdataCrawler, OpggClient};
 use crate::data::loader::Database;
 use crate::data::models::AugmentSummary;
 use crate::engine::decision::DecisionEngine;
@@ -32,6 +32,7 @@ pub struct AppState {
     pub ingame_overlay: Arc<InGameOverlay>,
     pub item_overlay: Arc<ItemOverlay>,
     pub opgg_client: Arc<OpggClient>,
+    pub hexdata_client: Arc<HexdataCrawler>,
     pub ws_broadcaster: Arc<WsBroadcaster>,
 }
 
@@ -156,7 +157,7 @@ async fn get_hero_augments_pool(
     let hid = state.db.resolve_hero_id(&hero_id).ok_or(StatusCode::NOT_FOUND)?;
     let mut augs = Vec::new();
 
-    if let Some(detail) = state.db.heroes_detail.get(&hid) {
+    if let Some(detail) = state.db.get_hero_detail(&hid) {
         if let Some(arr) = detail.augments.as_array() {
             augs = arr.clone();
         } else if let Some(obj) = detail.augments.as_object() {
@@ -274,7 +275,7 @@ async fn get_relationships(
     AxPath(hero_id): AxPath<String>,
 ) -> Result<Json<Value>, StatusCode> {
     let hid = state.db.resolve_hero_id(&hero_id).ok_or(StatusCode::NOT_FOUND)?;
-    if let Some(detail) = state.db.heroes_detail.get(&hid) {
+    if let Some(detail) = state.db.get_hero_detail(&hid) {
         Ok(Json(json!({
             "strongAgainst": detail.strong_against,
             "weakAgainst": detail.weak_against,
