@@ -183,7 +183,7 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_HUD: Arc<NativeHud> = Arc::new(NativeHud::new());
     pub static ref RANKED_INTERACTION: std::sync::RwLock<RankedInteractionState> = std::sync::RwLock::new(RankedInteractionState::default());
     pub static ref GLOBAL_HOTZONES: std::sync::RwLock<HudHotzones> = std::sync::RwLock::new(HudHotzones::default());
-    pub static ref GLOBAL_LCU: std::sync::RwLock<Option<crate::lcu::LcuClient>> = std::sync::RwLock::new(None);
+    pub static ref GLOBAL_LCU: std::sync::RwLock<Option<Arc<crate::lcu::LcuClient>>> = std::sync::RwLock::new(None);
     pub static ref GLOBAL_HISTORY: std::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>> = std::sync::RwLock::new(None);
 }
 
@@ -1122,7 +1122,7 @@ unsafe fn render_ranked_hud(
     for (idx, (t_key, t_label)) in available_tabs.iter().enumerate() {
         let tx1 = tab_start_x + idx as i32 * (tab_w + tab_gap);
         let tx2 = tx1 + tab_w;
-        let is_active = (active_tab == *t_key);
+        let is_active = active_tab == *t_key;
 
         let (t_bg, t_border, t_fg) = if is_active {
             match *t_key {
@@ -1160,7 +1160,7 @@ unsafe fn render_ranked_hud(
         let sby1 = cy + (card_h - s_btn_h) / 2;
         let sbx2 = sbx1 + s_btn_w;
         let sby2 = sby1 + s_btn_h;
-        let is_active_sample = (sample_count == sc);
+        let is_active_sample = sample_count == sc;
 
         let (s_bg, s_border, s_fg) = if is_active_sample {
             (rgb(6, 78, 59), rgb(52, 211, 153), rgb(255, 255, 255))
