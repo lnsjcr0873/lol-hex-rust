@@ -382,7 +382,7 @@ unsafe extern "system" fn overlay_wndproc(
                 let _ = DeleteDC(mem_dc);
             }
 
-            EndPaint(hwnd, &ps);
+            let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1), // Prevent flickering

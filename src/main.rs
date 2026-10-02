@@ -401,9 +401,10 @@ mod tests {
 
     #[test]
     fn test_win32_native_hud_state_transitions() {
-        use crate::overlay::win32_hud::{AugmentCardView, AugmentOverlayData, GLOBAL_HUD};
+        use crate::overlay::win32_hud::{AugmentCardView, AugmentOverlayData, NativeHud};
         use std::time::Duration;
 
+        let hud = NativeHud::new();
         let cards = vec![AugmentCardView {
             name: "珠光护手".to_string(),
             tier: "S".to_string(),
@@ -419,11 +420,11 @@ mod tests {
             cards,
         };
 
-        GLOBAL_HUD.show_augments(data, Duration::from_secs(5));
-        assert!(GLOBAL_HUD.is_visible());
+        hud.show_augments(data, Duration::from_secs(5));
+        assert!(hud.is_visible());
 
-        GLOBAL_HUD.hide();
-        assert!(!GLOBAL_HUD.is_visible());
+        hud.hide();
+        assert!(!hud.is_visible());
     }
 
     #[test]
@@ -547,9 +548,10 @@ mod tests {
 
     #[test]
     fn test_ranked_overlay_hud_state_transitions() {
-        use crate::overlay::win32_hud::{RankedOverlayData, RankedSlotView, GLOBAL_HUD};
+        use crate::overlay::win32_hud::{NativeHud, RankedOverlayData, RankedSlotView};
         use std::time::Duration;
 
+        let hud = NativeHud::new();
         let data = RankedOverlayData {
             my_team: vec![
                 RankedSlotView {
@@ -572,10 +574,10 @@ mod tests {
             recommendation: "对线刺客，注意保留控制".to_string(),
         };
 
-        GLOBAL_HUD.show_ranked(data, Duration::from_secs(5));
-        assert!(GLOBAL_HUD.is_visible());
-        GLOBAL_HUD.hide();
-        assert!(!GLOBAL_HUD.is_visible());
+        hud.show_ranked(data, Duration::from_secs(5));
+        assert!(hud.is_visible());
+        hud.hide();
+        assert!(!hud.is_visible());
     }
 }
 
