@@ -90,6 +90,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/ranked/counters", get(get_ranked_counters))
         .route("/api/ranked/synergies", get(get_ranked_synergies))
         .route("/api/ranked/draft-decision", get(get_draft_decision))
+        .route("/api/ranked/test-overlay", post(test_ranked_overlay))
+        .route("/api/overlay/debug", get(get_overlay_debug))
 
         // Data Export API
         .route("/api/export/heroes.csv", get(export_heroes_csv))
@@ -716,5 +718,115 @@ async fn export_augments_csv(State(state): State<AppState>) -> Result<Response, 
         }
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+// ---------------- Overlay Test & Debug Handlers ----------------
+
+async fn test_ranked_overlay(State(state): State<AppState>) -> Json<Value> {
+    state.ranked_overlay.show_ranked_draft(crate::overlay::RankedOverlayData {
+        my_team: vec![
+            crate::overlay::RankedSlotView {
+                position_cn: "上单".to_string(),
+                champion_name: "德玛西亚之力".to_string(),
+                win_rate: 0.528,
+                tier: 1,
+                is_local_player: true,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "打野".to_string(),
+                champion_name: "盲僧".to_string(),
+                win_rate: 0.512,
+                tier: 2,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "中单".to_string(),
+                champion_name: "九尾妖狐".to_string(),
+                win_rate: 0.531,
+                tier: 1,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "下路".to_string(),
+                champion_name: "探险家".to_string(),
+                win_rate: 0.495,
+                tier: 3,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "辅助".to_string(),
+                champion_name: "魂锁典狱长".to_string(),
+                win_rate: 0.518,
+                tier: 2,
+                is_local_player: false,
+            },
+        ],
+        their_team: vec![
+            crate::overlay::RankedSlotView {
+                position_cn: "上单".to_string(),
+                champion_name: "诺克萨斯之手".to_string(),
+                win_rate: 0.515,
+                tier: 2,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "打野".to_string(),
+                champion_name: "德邦总管".to_string(),
+                win_rate: 0.508,
+                tier: 2,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "中单".to_string(),
+                champion_name: "影流之主".to_string(),
+                win_rate: 0.498,
+                tier: 3,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "下路".to_string(),
+                champion_name: "虚空之女".to_string(),
+                win_rate: 0.521,
+                tier: 1,
+                is_local_player: false,
+            },
+            crate::overlay::RankedSlotView {
+                position_cn: "辅助".to_string(),
+                champion_name: "曙光女神".to_string(),
+                win_rate: 0.510,
+                tier: 2,
+                is_local_player: false,
+            },
+        ],
+        recommendation: "👑 测试态 · 对位[诺克萨斯之手]: 胜率 52.8% · 推荐符文已就绪 · 技能: 闪现 + 点燃".to_string(),
+    });
+
+    Json(serde_json::json!({
+        "success": true,
+        "message": "已触发排位对位选人吸附悬浮窗 (持续30秒)"
+    }))
+}
+
+async fn get_overlay_debug(State(state): State<AppState>) -> Json<Value> {
+    let lol_rect = crate::vision::ScreenCapture::get_lol_window_rect();
+    let is_league_active = crate::overlay::WindowTracker::is_league_active();
+    let is_game_active = crate::overlay::WindowTracker::is_game_active();
+    let phase = state.lcu_client.get_gameflow_phase().await;
+    let is_showing = state.ranked_overlay.is_showing.load(std::sync::atomic::Ordering::SeqCst);
+    let league_pid = crate::vision::capture::get_league_pid();
+
+    Json(serde_json::json!({
+        "lolWindowRect": lol_rect.map(|r| serde_json::json!({
+            "x": r.x,
+            "y": r.y,
+            "width": r.width,
+            "height": r.height
+        })),
+        "isLeagueActive": is_league_active,
+        "isGameActive": is_game_active,
+        "gameflowPhase": phase,
+        "isRankedOverlayShowing": is_showing,
+        "leaguePid": league_pid
+    }))
 }
 

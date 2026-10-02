@@ -71,6 +71,25 @@ impl ScreenCapture {
             IsIconic, IsWindow, IsWindowVisible,
         };
 
+        // Attach to user interactive desktop if launched from background
+        #[link(name = "user32")]
+        extern "system" {
+            fn OpenDesktopW(lpszdesktop: *const u16, dwflags: u32, finherit: i32, dwdesiredaccess: u32) -> *mut core::ffi::c_void;
+            fn OpenInputDesktop(dwflags: u32, finherit: i32, dwdesiredaccess: u32) -> *mut core::ffi::c_void;
+            fn SetThreadDesktop(hdesktop: *mut core::ffi::c_void) -> i32;
+        }
+
+        unsafe {
+            let default_name: Vec<u16> = "Default\0".encode_utf16().collect();
+            let mut hdesk = OpenDesktopW(default_name.as_ptr(), 0, 0, 0x01FF);
+            if hdesk.is_null() {
+                hdesk = OpenInputDesktop(0, 0, 0x01FF);
+            }
+            if !hdesk.is_null() {
+                let _ = SetThreadDesktop(hdesk);
+            }
+        }
+
         struct Candidate {
             pid: u32,
             is_game: bool,
@@ -113,7 +132,7 @@ impl ScreenCapture {
                 || title.contains("league of legends (tm) client");
 
             let is_client = class_name.contains("rclient")
-                || title == "league of legends"
+                || title.contains("league of legends")
                 || title.contains("英雄联盟");
 
             if is_game || is_client {

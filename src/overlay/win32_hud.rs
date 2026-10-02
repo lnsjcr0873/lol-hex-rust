@@ -247,12 +247,31 @@ impl NativeHud {
 // -------------------------------------------------------------
 
 #[cfg(windows)]
+unsafe fn attach_to_interactive_desktop() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn OpenDesktopW(lpszdesktop: *const u16, dwflags: u32, finherit: i32, dwdesiredaccess: u32) -> *mut core::ffi::c_void;
+        fn OpenInputDesktop(dwflags: u32, finherit: i32, dwdesiredaccess: u32) -> *mut core::ffi::c_void;
+        fn SetThreadDesktop(hdesktop: *mut core::ffi::c_void) -> i32;
+    }
+
+    let default_name: Vec<u16> = "Default\0".encode_utf16().collect();
+    let mut hdesk = OpenDesktopW(default_name.as_ptr(), 0, 0, 0x01FF);
+    if hdesk.is_null() {
+        hdesk = OpenInputDesktop(0, 0, 0x01FF);
+    }
+    if !hdesk.is_null() {
+        let _ = SetThreadDesktop(hdesk);
+    }
+}
+
+#[cfg(windows)]
 fn run_win32_hud_loop(
     running: Arc<AtomicBool>,
     hwnd_holder: Arc<std::sync::Mutex<Option<isize>>>,
 ) {
     use windows::core::w;
-    use windows::Win32::Foundation::{COLORREF, HWND};
+    use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassExW,
         SetLayeredWindowAttributes, SetTimer, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
@@ -260,12 +279,23 @@ fn run_win32_hud_loop(
         WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleW(lpmodulename: *const u16) -> *mut core::ffi::c_void;
+    }
+
     unsafe {
+        attach_to_interactive_desktop();
+
+        let hmod = GetModuleHandleW(std::ptr::null());
+        let hinstance = HINSTANCE(hmod);
+
         let class_name = w!("HexBrainOverlayClass");
         let mut wndclass = WNDCLASSEXW::default();
         wndclass.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
         wndclass.style = CS_HREDRAW | CS_VREDRAW;
         wndclass.lpfnWndProc = Some(overlay_wndproc);
+        wndclass.hInstance = hinstance;
         wndclass.lpszClassName = class_name;
 
         let _ = RegisterClassExW(&wndclass);
@@ -289,7 +319,7 @@ fn run_win32_hud_loop(
             vp.height,
             HWND::default(),
             windows::Win32::UI::WindowsAndMessaging::HMENU::default(),
-            windows::Win32::Foundation::HINSTANCE(std::ptr::null_mut()),
+            hinstance,
             None,
         ).unwrap_or_default();
 
@@ -409,9 +439,9 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     };
 
     let lol_rect = crate::vision::ScreenCapture::get_lol_window_rect();
-    let is_game_active = crate::overlay::WindowTracker::is_league_active();
+    let is_league_active = crate::overlay::WindowTracker::is_league_active();
 
-    let mut should_hide = lol_rect.is_none() || !is_game_active;
+    let mut should_hide = lol_rect.is_none();
     let mut is_expired = false;
 
     if let Ok(mut st) = GLOBAL_HUD.state.write() {
@@ -425,6 +455,20 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         }
         if !st.is_visible {
             should_hide = true;
+        }
+
+        match &st.content {
+            HudContent::Augment(_) | HudContent::Item(_) => {
+                if !is_league_active {
+                    should_hide = true;
+                }
+            }
+            HudContent::Ranked(_) | HudContent::Bench(_) => {
+                // In ChampSelect: stay docked onto League Client as long as client is visible on screen!
+            }
+            HudContent::None => {
+                should_hide = true;
+            }
         }
     }
 

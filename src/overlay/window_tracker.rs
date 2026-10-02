@@ -1,6 +1,35 @@
 #[derive(Debug, Clone, Default)]
 pub struct WindowTracker;
 
+#[cfg(windows)]
+fn is_process_league_or_riot(pid: u32) -> bool {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(dwdesiredaccess: u32, binherithandle: i32, dwprocessid: u32) -> *mut core::ffi::c_void;
+        fn CloseHandle(hobject: *mut core::ffi::c_void) -> i32;
+        fn QueryFullProcessImageNameW(hprocess: *mut core::ffi::c_void, dwflags: u32, lpexename: *mut u16, lpsize: *mut u32) -> i32;
+    }
+
+    unsafe {
+        // PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        let handle = OpenProcess(0x1000, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+
+        let mut buf = [0u16; 512];
+        let mut size = buf.len() as u32;
+        let res = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
+        let _ = CloseHandle(handle);
+
+        if res != 0 && size > 0 {
+            let path = String::from_utf16_lossy(&buf[..size as usize]).to_lowercase();
+            return path.contains("league") || path.contains("riot") || path.contains("hex");
+        }
+    }
+    false
+}
+
 impl WindowTracker {
     #[cfg(windows)]
     pub fn is_league_active() -> bool {
@@ -16,7 +45,7 @@ impl WindowTracker {
                 return false;
             }
 
-            // 1. PID Matching (CEF Child Window & Input Field Penetration)
+            // 1. PID & Process Name Matching (Penetrates CEF Child Windows & Renderers)
             let mut fg_pid = 0u32;
             GetWindowThreadProcessId(fg, Some(&mut fg_pid));
             if fg_pid != 0 {
@@ -25,6 +54,9 @@ impl WindowTracker {
                 }
                 let lol_pid = crate::vision::capture::get_league_pid();
                 if lol_pid != 0 && fg_pid == lol_pid {
+                    return true;
+                }
+                if is_process_league_or_riot(fg_pid) {
                     return true;
                 }
             }
@@ -92,6 +124,9 @@ impl WindowTracker {
                 }
                 let lol_pid = crate::vision::capture::get_league_pid();
                 if lol_pid != 0 && fg_pid == lol_pid {
+                    return true;
+                }
+                if is_process_league_or_riot(fg_pid) {
                     return true;
                 }
             }
