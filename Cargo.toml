@@ -6,13 +6,8 @@ authors = ["lnsjcr0873"]
 description = "HexBrain - 英雄联盟海克斯大乱斗全量数据同步与实时决策辅助系统 (Rust 原生重构版)"
 
 [dependencies]
-# Async Runtime & Web Networking
+# Async Runtime & Networking
 tokio = { version = "1.38", features = ["full"] }
-axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
-rust-embed = { version = "8.4", features = ["interpolate-folder-path"] }
-mime_guess = "2.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Data & Serialization

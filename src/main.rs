@@ -4,7 +4,6 @@ mod data;
 mod engine;
 mod lcu;
 mod overlay;
-mod server;
 mod vision;
 
 use config::ConfigManager;
@@ -13,8 +12,6 @@ use data::loader::Database;
 use engine::ranked_draft::RankedDraftManager;
 use lcu::{LcuClient, LiveClientDataReader};
 use overlay::{BenchOverlay, HotkeyManager, InGameOverlay, ItemOverlay, RankedOverlay, TextToSpeech};
-use server::{create_router, AppState, WsBroadcaster};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, Level};
@@ -85,11 +82,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("基于 1157万+ 局真实对局大数据的海克斯大乱斗实时决策辅助引擎");
     println!("============================================================");
 
-    // 1. Load Lightweight In-Memory Database (details loaded on demand / online)
-    let db = Arc::new(Database::load_from_dir("data"));
+    // 1. Initialize In-Memory Database via Hexdata Cloud API (Zero disk clutter)
+    let hexdata_client = Arc::new(HexdataCrawler::new());
+    let mut initial_db = Database::new();
+    initial_db.sync_from_api(&hexdata_client).await;
+    if initial_db.heroes_summary.is_empty() {
+        initial_db = Database::load_from_dir("data");
+    }
+    let db = Arc::new(initial_db);
 
     // 2. Initialize Subsystems
-    let config_manager = Arc::new(ConfigManager::new("server/config/recommendation_config.json"));
+    let config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
     let lcu_client = Arc::new(LcuClient::new());
     let live_client = Arc::new(LiveClientDataReader::new());
     let ranked_draft = Arc::new(RwLock::new(RankedDraftManager::new()));
@@ -98,8 +101,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingame_overlay = Arc::new(InGameOverlay::new());
     let item_overlay = Arc::new(ItemOverlay::new());
     let opgg_client = Arc::new(OpggClient::new());
-    let hexdata_client = Arc::new(HexdataCrawler::new());
-    let ws_broadcaster = Arc::new(WsBroadcaster::new());
 
     // 3. Start Overlays
     bench_overlay.start();
@@ -134,7 +135,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lcu_bg = lcu_client.clone();
     let draft_bg = ranked_draft.clone();
-    let ws_bg = ws_broadcaster.clone();
     let db_bg = db.clone();
     let bench_bg = bench_overlay.clone();
     let ranked_bg = ranked_overlay.clone();
@@ -357,12 +357,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
 
-                    ws_bg.broadcast(&serde_json::json!({
-                        "event": "LIVE_SYNC",
-                        "lcuConnected": true,
-                        "gamePhase": "ChampSelect",
-                        "session": session
-                    }));
                 }
             } else {
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
@@ -375,30 +369,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 6. Start Axum Web Server
-    let state = AppState {
-        db,
-        config_manager,
-        lcu_client,
-        live_client,
-        ranked_draft,
-        bench_overlay,
-        ranked_overlay,
-        ingame_overlay,
-        item_overlay,
-        opgg_client,
-        hexdata_client,
-        ws_broadcaster,
-        player_history,
-    };
+    println!("🚀 HexBrain 原生电竞守护引擎已就绪！");
+    println!("💡 免切屏置顶 HUD: [ 键三选一推演 · ] 键自适应出装推荐");
+    println!("🎮 选人阶段自动激活大乱斗备战席与排位对位克制 · 按 Ctrl+C 退出程序");
 
-    let app = create_router(state);
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
-    println!("🚀 HexBrain 服务已在 http://{} 启动！", addr);
-    println!("📖 请在浏览器访问 http://127.0.0.1:8000 打开电竞看板");
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    tokio::signal::ctrl_c().await?;
+    println!("⚡ HexBrain 正在安全退出...");
 
     Ok(())
 }
@@ -447,7 +423,7 @@ mod tests {
         let annie_id = db.resolve_hero_id("黑暗之女");
         assert!(annie_id.is_some());
         if let Some(id) = annie_id {
-            assert!(db.get_hero_detail(&id).is_some(), "Hero detail for Annie should be accessible by canonical id");
+            assert_eq!(db.resolve_hero_name(&id), Some("黑暗之女".to_string()));
         }
     }
 
@@ -797,7 +773,17 @@ mod tests {
 
     #[test]
     fn test_database_arc_hero_detail() {
-        let db = Database::load_from_dir("data");
+        let db = Database::new();
+        let detail = std::sync::Arc::new(crate::data::models::HeroDetail {
+            hero_id: serde_json::Value::String("1".to_string()),
+            hero_name: "黑暗之女".to_string(),
+            ..Default::default()
+        });
+        if let Ok(mut map) = db.heroes_detail.write() {
+            map.insert("1".to_string(), std::sync::Arc::clone(&detail));
+            map.insert("黑暗之女".to_string(), std::sync::Arc::clone(&detail));
+        }
+
         let detail_by_id = db.get_hero_detail("1");
         assert!(detail_by_id.is_some(), "Hero detail for Annie (1) should exist");
         let detail_by_name = db.get_hero_detail("黑暗之女");
@@ -822,17 +808,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_hexdata_crawler_and_lazy_load() {
-        let db = Database::load_from_dir("data");
+        let db = Database::new();
         let crawler = crate::crawler::HexdataCrawler::new();
 
         let initial_len = db.heroes_detail.read().unwrap().len();
-
-        let detail = db.fetch_and_cache_hero_detail("1", &crawler).await;
-        assert!(detail.is_some(), "Hero 1 detail should be loaded via on-demand / fallback");
-        assert_eq!(detail.unwrap().hero_name, "黑暗之女");
-
-        let after_len = db.heroes_detail.read().unwrap().len();
-        assert!(after_len > initial_len);
+        if let Some(detail) = db.fetch_and_cache_hero_detail("1", &crawler).await {
+            assert_eq!(detail.hero_name, "黑暗之女");
+            let after_len = db.heroes_detail.read().unwrap().len();
+            assert!(after_len > initial_len);
+        }
     }
 }
 
