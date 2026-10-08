@@ -39,9 +39,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist/data"
-          Copy-Item -Recurse -Force "data/json" "dist/data/json"
-          Copy-Item -Force "data/engine_metadata.json" "dist/data/"
-          Copy-Item -Force "data/recipe_metadata.json" "dist/data/"
+          if (Test-Path "data/json") { Copy-Item -Recurse -Force "data/json" "dist/data/json" }
+          if (Test-Path "data/engine_metadata.json") { Copy-Item -Force "data/engine_metadata.json" "dist/data/" }
+          if (Test-Path "data/recipe_metadata.json") { Copy-Item -Force "data/recipe_metadata.json" "dist/data/" }
           Copy-Item -Force "target/release/lol-hex-rust.exe" "dist/"
 
       - name: Upload Release Package
