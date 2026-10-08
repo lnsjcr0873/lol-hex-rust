@@ -957,6 +957,18 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         };
         if desired_ex != current_ex {
             let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired_ex as isize);
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            };
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
         }
     }
 

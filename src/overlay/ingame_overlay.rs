@@ -97,6 +97,9 @@ impl InGameOverlay {
                             }
                         }
                         if !cards.is_empty() {
+                            if let Some(best) = cards.iter().max_by(|a, b| a.win_rate.partial_cmp(&b.win_rate).unwrap_or(std::cmp::Ordering::Equal)) {
+                                crate::overlay::TextToSpeech::speak(&format!("建议优选{}，胜率{:.0}%", best.name, best.win_rate * 100.0));
+                            }
                             let data = AugmentOverlayData {
                                 hero_name: "海克斯强化推演".to_string(),
                                 cards,

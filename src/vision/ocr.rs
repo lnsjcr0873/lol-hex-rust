@@ -133,6 +133,15 @@ impl OcrScanner {
         }
 
         let res = std::panic::catch_unwind(|| -> windows::core::Result<Vec<String>> {
+            #[link(name = "ole32")]
+            extern "system" {
+                fn CoInitializeEx(pvreserved: *mut core::ffi::c_void, dwcoinit: u32) -> i32;
+            }
+            // COINIT_MULTITHREADED = 0x0
+            unsafe {
+                let _ = CoInitializeEx(std::ptr::null_mut(), 0);
+            }
+
             use windows::Graphics::Imaging::BitmapDecoder;
             use windows::Media::Ocr::OcrEngine;
             use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};

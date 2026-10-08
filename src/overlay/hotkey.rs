@@ -140,21 +140,25 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         let vk_code = *(lparam as *const u32);
         // VK_OEM_4 = 0xDB ('['), VK_OEM_6 = 0xDD (']')
         if vk_code == 0xDB {
-            if crate::overlay::WindowTracker::is_league_active() {
-                if let Ok(guard) = CALLBACK_LEFT.lock() {
-                    if let Some(ref cb) = *guard {
-                        cb();
+            std::thread::spawn(|| {
+                if crate::overlay::WindowTracker::is_league_active() {
+                    if let Ok(guard) = CALLBACK_LEFT.lock() {
+                        if let Some(ref cb) = *guard {
+                            cb();
+                        }
                     }
                 }
-            }
+            });
         } else if vk_code == 0xDD {
-            if crate::overlay::WindowTracker::is_league_active() {
-                if let Ok(guard) = CALLBACK_RIGHT.lock() {
-                    if let Some(ref cb) = *guard {
-                        cb();
+            std::thread::spawn(|| {
+                if crate::overlay::WindowTracker::is_league_active() {
+                    if let Ok(guard) = CALLBACK_RIGHT.lock() {
+                        if let Some(ref cb) = *guard {
+                            cb();
+                        }
                     }
                 }
-            }
+            });
         }
     }
 
