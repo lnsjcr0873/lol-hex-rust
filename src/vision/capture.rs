@@ -353,7 +353,18 @@ impl ScreenCapture {
             }
 
             let hdc_mem = CreateCompatibleDC(hdc_screen);
+            if hdc_mem.is_invalid() {
+                let _ = ReleaseDC(HWND::default(), hdc_screen);
+                return None;
+            }
+
             let hbmp = CreateCompatibleBitmap(hdc_screen, rect.width, rect.height);
+            if hbmp.is_invalid() {
+                let _ = DeleteDC(hdc_mem);
+                let _ = ReleaseDC(HWND::default(), hdc_screen);
+                return None;
+            }
+
             let old_bmp = SelectObject(hdc_mem, hbmp);
 
             let _ = BitBlt(

@@ -26,8 +26,10 @@ impl TextToSpeech {
                         "CreateObject(\"SAPI.SpVoice\").Speak \"{}\"",
                         msg.replace('"', "\"\"")
                     );
+                    use std::os::windows::process::CommandExt;
                     let _ = std::process::Command::new("mshta")
                         .args([format!("vbscript:Execute(\"{}\")(close)", script)])
+                        .creation_flags(0x08000000)
                         .output();
                 }
             });

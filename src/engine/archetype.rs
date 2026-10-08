@@ -53,6 +53,10 @@ pub struct ArchetypeInfo {
 pub struct ArchetypeEngine;
 
 impl ArchetypeEngine {
+    pub fn get_hero_archetype_info(hero_id: &str) -> ArchetypeInfo {
+        Self::detect_archetype(hero_id, &[], &[], &[], false)
+    }
+
     pub fn detect_archetype(
         hero_id: &str,
         owned_items: &[String],

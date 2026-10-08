@@ -753,28 +753,32 @@ unsafe extern "system" fn overlay_wndproc(
             if width > 0 && height > 0 {
                 // Double buffering: Create compatible in-memory DC & bitmap
                 let mem_dc = CreateCompatibleDC(hdc);
-                let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
-                let old_bmp = SelectObject(mem_dc, mem_bmp);
+                if !mem_dc.is_invalid() {
+                    let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
+                    if !mem_bmp.is_invalid() {
+                        let old_bmp = SelectObject(mem_dc, mem_bmp);
 
-                // Clear memory buffer with Chroma Key (RGB 1, 1, 1)
-                let bg_brush = CreateSolidBrush(COLORREF(0x00010101));
-                FillRect(mem_dc, &client_rect, bg_brush);
-                let _ = DeleteObject(bg_brush);
+                        // Clear memory buffer with Chroma Key (RGB 1, 1, 1)
+                        let bg_brush = CreateSolidBrush(COLORREF(0x00010101));
+                        FillRect(mem_dc, &client_rect, bg_brush);
+                        let _ = DeleteObject(bg_brush);
 
-                // Read snapshot and render HUD content
-                if let Ok(st) = GLOBAL_HUD.state.read() {
-                    if st.is_visible {
-                        render_hud(mem_dc, width, height, &st.content);
+                        // Read snapshot and render HUD content
+                        if let Ok(st) = GLOBAL_HUD.state.read() {
+                            if st.is_visible {
+                                render_hud(mem_dc, width, height, &st.content);
+                            }
+                        }
+
+                        // BitBlt memory buffer to screen
+                        let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
+
+                        // Clean up GDI memory objects
+                        let _ = SelectObject(mem_dc, old_bmp);
+                        let _ = DeleteObject(mem_bmp);
                     }
+                    let _ = DeleteDC(mem_dc);
                 }
-
-                // BitBlt memory buffer to screen
-                let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
-
-                // Clean up GDI memory objects
-                let _ = SelectObject(mem_dc, old_bmp);
-                let _ = DeleteObject(mem_bmp);
-                let _ = DeleteDC(mem_dc);
             }
 
             let _ = EndPaint(hwnd, &ps);
@@ -987,11 +991,8 @@ unsafe fn render_hud(
     height: i32,
     content: &HudContent,
 ) {
-    use windows::Win32::Graphics::Gdi::{SetBkMode, BKMODE};
-    let _ = SetBkMode(hdc, BKMODE(1)); // 1 = TRANSPARENT background
     use windows::Win32::Graphics::Gdi::{GetStockObject, SelectObject, SetBkMode, DEFAULT_GUI_FONT, TRANSPARENT};
-
-    SetBkMode(hdc, TRANSPARENT);
+    let _ = SetBkMode(hdc, TRANSPARENT);
     let stock_font = GetStockObject(DEFAULT_GUI_FONT);
     SelectObject(hdc, stock_font);
 

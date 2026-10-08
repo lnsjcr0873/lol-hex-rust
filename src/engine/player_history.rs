@@ -125,11 +125,36 @@ impl PlayerHistoryManager {
                 if let Some(games) = h.get("games").and_then(|g| g.get("games")).and_then(|v| v.as_array()) {
                     m_count = games.len() as i32;
                     let mut first_win = None;
+                    let mut streak_ended = false;
 
                     for g in games {
-                        let is_win = g.get("participants")
+                        // Accurately locate the participant corresponding to this player's puuid
+                        let target_participant_id = g.get("participantIdentities")
+                            .and_then(|v| v.as_array())
+                            .and_then(|arr| {
+                                arr.iter().find(|pi| {
+                                    pi.get("player")
+                                        .and_then(|pl| pl.get("puuid"))
+                                        .and_then(|v| v.as_str())
+                                        == Some(puuid)
+                                })
+                            })
+                            .and_then(|pi| pi.get("participantId"))
+                            .and_then(|v| v.as_i64());
+
+                        let participant = g.get("participants")
                             .and_then(|p| p.as_array())
-                            .and_then(|arr| arr.first())
+                            .and_then(|arr| {
+                                if let Some(pid) = target_participant_id {
+                                    arr.iter().find(|p| p.get("participantId").and_then(|v| v.as_i64()) == Some(pid))
+                                } else {
+                                    // Fallback: match inline puuid
+                                    arr.iter().find(|p| p.get("puuid").and_then(|v| v.as_str()) == Some(puuid))
+                                }
+                                .or_else(|| arr.first())
+                            });
+
+                        let is_win = participant
                             .and_then(|p| p.get("stats"))
                             .and_then(|s| s.get("win"))
                             .and_then(|w| w.as_bool())
@@ -139,17 +164,19 @@ impl PlayerHistoryManager {
                             m_wins += 1;
                         }
 
-                        if first_win.is_none() {
-                            first_win = Some(is_win);
-                            streak_type = if is_win { "win".to_string() } else { "loss".to_string() };
-                            streak_count = 1;
-                        } else if first_win == Some(is_win) {
-                            streak_count += 1;
+                        if !streak_ended {
+                            if first_win.is_none() {
+                                first_win = Some(is_win);
+                                streak_type = if is_win { "win".to_string() } else { "loss".to_string() };
+                                streak_count = 1;
+                            } else if first_win == Some(is_win) {
+                                streak_count += 1;
+                            } else {
+                                streak_ended = true;
+                            }
                         }
 
-                        let cid = g.get("participants")
-                            .and_then(|p| p.as_array())
-                            .and_then(|arr| arr.first())
+                        let cid = participant
                             .and_then(|p| p.get("championId"))
                             .and_then(|c| c.as_i64())
                             .unwrap_or(0);

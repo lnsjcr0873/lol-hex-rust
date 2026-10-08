@@ -182,6 +182,28 @@ impl RankedDraftManager {
                 let pos = self.manual_positions.get(&key)
                     .cloned()
                     .or_else(|| auto_pos.map(|s| s.to_string()))
+                    .or_else(|| {
+                        if !cid.is_empty() {
+                            opgg.and_then(|op| op.get_primary_position(&cid))
+                                .or_else(|| {
+                                    db.and_then(|database| {
+                                        let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
+                                        database.heroes_map.get(&resolved_id).and_then(|s| {
+                                            s.roles.first().and_then(|r| match r.to_lowercase().as_str() {
+                                                "top" => Some("TOP".to_string()),
+                                                "jungle" | "jg" => Some("JUNGLE".to_string()),
+                                                "mid" | "middle" => Some("MID".to_string()),
+                                                "bot" | "bottom" | "adc" => Some("ADC".to_string()),
+                                                "support" | "sup" | "utility" => Some("SUPPORT".to_string()),
+                                                _ => None,
+                                            })
+                                        })
+                                    })
+                                })
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or_else(|| ORDERED_POSITIONS[idx % 5].to_string());
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);

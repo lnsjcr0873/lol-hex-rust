@@ -114,36 +114,61 @@ impl ItemOverlay {
         // 1. Threat Analysis on Enemy Team
         let threats = CounterItemEngine::analyze_enemy_threats(enemies);
 
-        // 2. Resolve hero archetype info
-        let resolved_name = if hero_name.is_empty() {
-            db.resolve_hero_name(hero_id).unwrap_or_else(|| "当前英雄".to_string())
+        // 2. Resolve hero id & archetype info
+        let resolved_id = if !hero_id.is_empty() {
+            hero_id.to_string()
+        } else if !hero_name.is_empty() {
+            db.resolve_hero_id(hero_name).unwrap_or_default()
         } else {
-            hero_name.to_string()
+            String::new()
         };
 
-        let archetype = crate::engine::archetype::ArchetypeEngine::get_hero_archetype_info(hero_id);
+        let resolved_name = if !hero_name.is_empty() {
+            hero_name.to_string()
+        } else if !resolved_id.is_empty() {
+            db.resolve_hero_name(&resolved_id).unwrap_or_else(|| "当前英雄".to_string())
+        } else {
+            "当前英雄".to_string()
+        };
+
+        let archetype = crate::engine::archetype::ArchetypeEngine::detect_archetype(
+            &resolved_id,
+            owned_item_ids,
+            &[],
+            &[],
+            false,
+        );
         let urgent_ids = CounterItemEngine::get_urgent_counter_ids(&threats, &archetype);
 
         let mut item_views = Vec::new();
 
         // 3. Populate urgent counter items first
-        for item_id in urgent_ids.iter().take(3) {
+        for item_id in urgent_ids.iter().take(4) {
             let item_cost = calculate_item_net_cost(item_id, owned_item_ids, current_gold, "NET_DEDUCT");
             let iname = match item_id.as_str() {
                 "3165" => "莫雷洛秘典",
                 "3033" => "凡性的提醒",
-                "3814" => "巨蛇之牙",
+                "6609" => "炼金朋克链锯",
+                "3075" => "荆棘之甲",
+                "6695" => "巨蛇之牙",
                 "3036" => "多米尼克领主的致意",
+                "3153" => "破败王者之刃",
                 "3135" => "虚空之杖",
+                "3151" => "兰德里的折磨",
+                "3139" => "水银弯刀",
+                "3102" => "女妖面纱",
+                "3814" => "夜之锋刃",
                 "3157" => "中娅沙漏",
                 _ => "针对克制核心",
             };
-            let reason = if threats.has_high_heal && (item_id == "3165" || item_id == "3033") {
+            let reason = if threats.has_high_heal && matches!(item_id.as_str(), "3165" | "3033" | "6609" | "3075") {
                 "针对敌方高回复 (重伤抵扣散件)"
-            } else if threats.has_heavy_shield && item_id == "3814" {
+            } else if threats.has_shield_heavy && item_id == "6695" {
                 "针对敌方厚重护盾 (破盾破阵)"
-            } else if threats.has_super_tank {
+            } else if threats.has_super_tank && matches!(item_id.as_str(), "3036" | "3153" | "3135" | "3151") {
                 "针对敌方超高护甲魔抗 (百分比穿透)"
+            } else if threats.has_high_cc && matches!(item_id.as_str(), "3139" | "3102" | "3814") {
+                "针对敌方强控阵容 (解控免疫)"
             } else {
                 "实时克制出装推荐"
             };

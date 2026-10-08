@@ -717,15 +717,26 @@ impl DecisionEngine {
             cfg.resolve_conflicts,
         );
 
+        let extract_item_id = |it: &serde_json::Value| -> String {
+            it.get("itemId")
+                .or_else(|| it.get("id"))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| v.as_i64().map(|n| n.to_string()))
+                })
+                .unwrap_or_default()
+        };
+
         // Next item recommendation
         let next_item = build_path.iter().find(|it| {
-            let iid = it.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
-            !owned_set.contains(iid)
+            let iid = extract_item_id(it);
+            !iid.is_empty() && !owned_set.contains(&iid)
         }).cloned();
 
         let gold_info = next_item.as_ref().map(|item| {
-            let iid = item.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
-            calculate_item_net_cost(iid, current_items, gold, &cfg.gold_calc_mode)
+            let iid = extract_item_id(item);
+            calculate_item_net_cost(&iid, current_items, gold, &cfg.gold_calc_mode)
         });
 
         let terminal_trios = hero_detail

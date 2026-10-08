@@ -74,6 +74,17 @@ impl OpggClient {
         None
     }
 
+    pub fn get_primary_position(&self, champion_id: &str) -> Option<String> {
+        if let Ok(lock) = self.tier_list_cache.read() {
+            if let Some((_, ref val)) = *lock {
+                if let Some(champ) = val.get("champions").and_then(|c| c.get(champion_id)) {
+                    return champ.get("primaryPosition").and_then(|p| p.as_str()).map(|s| s.to_string());
+                }
+            }
+        }
+        None
+    }
+
     pub async fn get_ranked_tier_list(&self, force_refresh: bool) -> Value {
         // 1. Check in-memory cache with 6 hours TTL
         if !force_refresh {
