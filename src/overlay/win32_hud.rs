@@ -1256,7 +1256,7 @@ unsafe fn render_ranked_hud(
     }
 
     // Rune import pill button at top center (if available)
-    if let Some(ref rg) = data.decision_card.rune_guide {
+    if let Some(ref _rg) = data.decision_card.rune_guide {
         let btn_w = (230.0 * sx) as i32;
         let btn_h = (24.0 * sy) as i32;
         let bx1 = actual_left_margin + (cw - btn_w) / 2;
@@ -1801,8 +1801,8 @@ unsafe fn draw_text_line(
     y: i32,
     color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{SetBkMode, SetTextColor, TextOutW, BKMODE};
-    let _ = SetBkMode(hdc, BKMODE(1));
+    use windows::Win32::Graphics::Gdi::{SetBkMode, SetTextColor, TextOutW, TRANSPARENT};
+    let _ = SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, color);
     let wide: Vec<u16> = text.encode_utf16().collect();
     let _ = TextOutW(hdc, x, y, &wide);

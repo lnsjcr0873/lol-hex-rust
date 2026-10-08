@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Arc::new(initial_db);
 
     // 2. Initialize Subsystems
-    let config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
+    let _config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
     let lcu_client = Arc::new(LcuClient::new());
     let live_client = Arc::new(LiveClientDataReader::new());
     let ranked_draft = Arc::new(RwLock::new(RankedDraftManager::new()));

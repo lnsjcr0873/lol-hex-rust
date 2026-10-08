@@ -89,8 +89,8 @@ impl InGameOverlay {
                                     name: aug.name.clone(),
                                     tier: tier.to_string(),
                                     win_rate: wr,
-                                    delta_win_rate: aug.delta_win_rate,
-                                    wilson_lower: aug.wilson_lower,
+                                    delta_win_rate: aug.avg_delta_win_rate.unwrap_or(0.0),
+                                    wilson_lower: crate::engine::decision::calc_wilson_lower_bound(wr, aug.games, 1.96),
                                     games: aug.games,
                                     recommendation: format!("胜率指数: {:.1}%", wr * 100.0),
                                 });

@@ -176,10 +176,10 @@ impl ItemOverlay {
             item_views.push(ItemCardView {
                 name: iname.to_string(),
                 id: item_id.clone(),
-                net_cost: item_cost.net_cost,
-                total_cost: item_cost.total_cost,
+                net_cost: item_cost.net_cost as i32,
+                total_cost: item_cost.total_cost as i32,
                 is_affordable: item_cost.is_affordable,
-                gold_diff: (item_cost.net_cost - current_gold as i32).max(0),
+                gold_diff: ((item_cost.net_cost - current_gold as i64).max(0)) as i32,
                 tactical_score: 95.0,
                 reason: reason.to_string(),
             });
