@@ -34,6 +34,24 @@ async fn fetch_slot_counters_and_synergies(
 
     let mut counters = Vec::new();
     if let Some(arr) = c_data.get("counters").and_then(|v| v.as_array()) {
+        for c in arr {
+            let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
+            let opp_name = db.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
+            let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+            let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+            let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
+            counters.push(crate::overlay::CounterHeroItem {
+                champion_id: opp_cid.parse().unwrap_or(0),
+                name: opp_name,
+                tier,
+                counter_win_rate: c_wr,
+                overall_win_rate: c_wr,
+                games,
+            });
+        }
+    }
+
+    let mut synergies = Vec::new();
     if let Some(arr) = syn_data.get("synergies").and_then(|v| v.as_array()) {
         for s in arr {
             let syn_cid = s.get("championId").and_then(|v| v.as_str()).unwrap_or("");
