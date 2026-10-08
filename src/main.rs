@@ -121,11 +121,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Start Global Hotkeys
     let ingame_clone = ingame_overlay.clone();
     let item_clone = item_overlay.clone();
+    let db_for_hotkey = db.clone();
     let hotkeys = HotkeyManager::new();
     hotkeys.start(
         move || {
             info!("Hotkey '[' pressed: Triggering InGame Augment Scan");
-            ingame_clone.trigger_scan();
+            ingame_clone.trigger_scan_with_db(&db_for_hotkey);
             TextToSpeech::speak("海克斯强化推演已激活");
         },
         move || {

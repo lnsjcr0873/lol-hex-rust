@@ -55,23 +55,20 @@ impl LiveClientDataReader {
 
         stats.is_in_game = true;
 
-        let mut active_summoner_name = String::new();
-        let mut active_riot_id = String::new();
-
-        if let Some(active) = data.get("activePlayer") {
+        let active_opt = data.get("activePlayer");
+        if let Some(active) = active_opt {
             stats.level = active.get("level").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
             stats.gold = active.get("currentGold").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            active_summoner_name = active.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            active_riot_id = active.get("riotId").and_then(|v| v.as_str()).unwrap_or("").to_string();
         }
 
         if let Some(players) = data.get("allPlayers").and_then(|v| v.as_array()) {
             let mut local_team = "";
             for p in players {
-                let p_summoner = p.get("summonerName").and_then(|v| v.as_str()).unwrap_or("");
-                let p_riot_id = p.get("riotId").and_then(|v| v.as_str()).unwrap_or("");
-                let is_local = (!active_summoner_name.is_empty() && p_summoner == active_summoner_name)
-                    || (!active_riot_id.is_empty() && p_riot_id == active_riot_id);
+                let is_local = if let Some(active) = active_opt {
+                    Self::check_is_local_player(active, p)
+                } else {
+                    false
+                };
 
                 if is_local {
                     local_team = p.get("team").and_then(|v| v.as_str()).unwrap_or("");
@@ -105,5 +102,41 @@ impl LiveClientDataReader {
         }
 
         stats
+    }
+
+    fn check_is_local_player(active: &Value, player: &Value) -> bool {
+        let a_sum = active.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let p_sum = player.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !a_sum.is_empty() && !p_sum.is_empty() && a_sum.eq_ignore_ascii_case(p_sum) {
+            return true;
+        }
+
+        let a_riot = active.get("riotId").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let p_riot = player.get("riotId").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !a_riot.is_empty() && !p_riot.is_empty() && a_riot.eq_ignore_ascii_case(p_riot) {
+            return true;
+        }
+
+        let a_game_name = active.get("riotIdGameName").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let p_game_name = player.get("riotIdGameName").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !a_game_name.is_empty() && !p_game_name.is_empty() && a_game_name.eq_ignore_ascii_case(p_game_name) {
+            return true;
+        }
+
+        // Compare riotId with summonerName when #TAG is stripped
+        if !a_riot.is_empty() && !p_sum.is_empty() {
+            let clean_a = a_riot.split('#').next().unwrap_or(a_riot).trim();
+            if clean_a.eq_ignore_ascii_case(p_sum) {
+                return true;
+            }
+        }
+        if !a_sum.is_empty() && !p_riot.is_empty() {
+            let clean_p = p_riot.split('#').next().unwrap_or(p_riot).trim();
+            if clean_p.eq_ignore_ascii_case(a_sum) {
+                return true;
+            }
+        }
+
+        false
     }
 }

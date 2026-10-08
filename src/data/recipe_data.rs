@@ -117,60 +117,66 @@ pub fn calculate_item_net_cost(
     let mut matched_components = Vec::new();
     let mut total_deducted: i64 = 0;
 
+    fn find_and_deduct_components(
+        req_item_id: &str,
+        available_owned: &mut Vec<String>,
+        depth: usize,
+        max_depth: usize,
+    ) -> Option<Vec<MatchedComponent>> {
+        if depth > max_depth {
+            return None;
+        }
+
+        // Direct match in player inventory
+        if let Some(pos) = available_owned.iter().position(|x| x == req_item_id) {
+            available_owned.remove(pos);
+            let price = RECIPE_META
+                .component_prices
+                .get(req_item_id)
+                .or_else(|| RECIPE_META.total_costs.get(req_item_id))
+                .copied()
+                .unwrap_or(300);
+            let name = RECIPE_META
+                .component_names
+                .get(req_item_id)
+                .cloned()
+                .unwrap_or_else(|| format!("散件#{}", req_item_id));
+
+            return Some(vec![MatchedComponent {
+                item_id: req_item_id.to_string(),
+                name,
+                price,
+                slot: if depth == 1 { "direct".to_string() } else { "nested".to_string() },
+            }]);
+        }
+
+        // Recurse into sub-components for multi-tier composite recipes
+        if let Some(sub_recipe) = RECIPE_META.recipes.get(req_item_id) {
+            let mut sub_matches = Vec::new();
+            for sub_id in sub_recipe {
+                if let Some(mut found) = find_and_deduct_components(sub_id, available_owned, depth + 1, max_depth) {
+                    sub_matches.append(&mut found);
+                }
+            }
+            if !sub_matches.is_empty() {
+                return Some(sub_matches);
+            }
+        }
+
+        None
+    }
+
     let recipe = RECIPE_META
         .recipes
         .get(&tid)
         .or_else(|| RECIPE_META.recipes.get(raw_tid));
 
     if let Some(recipe_items) = recipe {
-        let mut matched_direct_indices = std::collections::HashSet::new();
-
-        // Pass 1: Direct components
-        for (idx, req_cid) in recipe_items.iter().enumerate() {
-            if let Some(pos) = available_owned.iter().position(|x| x == req_cid) {
-                available_owned.remove(pos);
-                matched_direct_indices.insert(idx);
-                let price = *RECIPE_META.component_prices.get(req_cid).unwrap_or(&800);
-                total_deducted += price;
-                let name = RECIPE_META
-                    .component_names
-                    .get(req_cid)
-                    .cloned()
-                    .unwrap_or_else(|| format!("散件#{}", req_cid));
-
-                matched_components.push(MatchedComponent {
-                    item_id: req_cid.clone(),
-                    name,
-                    price,
-                    slot: "direct".to_string(),
-                });
-            }
-        }
-
-        // Pass 2: Nested sub-components for unmatched slots
-        for (idx, req_cid) in recipe_items.iter().enumerate() {
-            if matched_direct_indices.contains(&idx) {
-                continue;
-            }
-            if let Some(sub_recipe) = RECIPE_META.recipes.get(req_cid) {
-                for sub_cid in sub_recipe {
-                    if let Some(pos) = available_owned.iter().position(|x| x == sub_cid) {
-                        available_owned.remove(pos);
-                        let price = *RECIPE_META.component_prices.get(sub_cid).unwrap_or(&400);
-                        total_deducted += price;
-                        let name = RECIPE_META
-                            .component_names
-                            .get(sub_cid)
-                            .cloned()
-                            .unwrap_or_else(|| format!("小件#{}", sub_cid));
-
-                        matched_components.push(MatchedComponent {
-                            item_id: sub_cid.clone(),
-                            name,
-                            price,
-                            slot: "nested".to_string(),
-                        });
-                    }
+        for req_cid in recipe_items {
+            if let Some(matches) = find_and_deduct_components(req_cid, &mut available_owned, 1, 4) {
+                for m in matches {
+                    total_deducted += m.price;
+                    matched_components.push(m);
                 }
             }
         }

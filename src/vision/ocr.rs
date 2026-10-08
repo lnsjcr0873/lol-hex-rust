@@ -127,8 +127,51 @@ impl OcrScanner {
     }
 
     #[cfg(windows)]
+    pub async fn run_windows_ocr_bytes(bmp_bytes: &[u8]) -> Vec<String> {
+        if bmp_bytes.is_empty() {
+            return Vec::new();
+        }
+
+        let res = std::panic::catch_unwind(|| -> windows::core::Result<Vec<String>> {
+            use windows::Graphics::Imaging::BitmapDecoder;
+            use windows::Media::Ocr::OcrEngine;
+            use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
+
+            let stream = InMemoryRandomAccessStream::new()?;
+            let writer = DataWriter::CreateDataWriter(&stream)?;
+            writer.WriteBytes(bmp_bytes)?;
+            writer.StoreAsync()?.get()?;
+            writer.FlushAsync()?.get()?;
+
+            let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
+            let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;
+
+            let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+                .or_else(|_| {
+                    use windows::Globalization::Language;
+                    let lang = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN"))?;
+                    OcrEngine::TryCreateFromLanguage(&lang)
+                })?;
+
+            let ocr_result = engine.RecognizeAsync(&software_bitmap)?.get()?;
+            let mut lines = Vec::new();
+            for line in ocr_result.Lines()? {
+                let text = line.Text()?.to_string();
+                if !text.trim().is_empty() {
+                    lines.push(text);
+                }
+            }
+            Ok(lines)
+        });
+
+        match res {
+            Ok(Ok(lines)) => lines,
+            _ => Vec::new(),
+        }
+    }
+
+    #[cfg(not(windows))]
     pub async fn run_windows_ocr_bytes(_bmp_bytes: &[u8]) -> Vec<String> {
-        // In full Windows runtime, loads BitmapDecoder and calls OcrEngine::TryCreateFromLanguage
         Vec::new()
     }
 }

@@ -124,34 +124,78 @@ impl CounterItemEngine {
 
     pub fn get_urgent_counter_ids(
         threat: &ThreatProfile,
-        _arch: &ArchetypeInfo,
+        arch: &ArchetypeInfo,
     ) -> HashSet<String> {
-        let mut urgent = HashSet::new();
+        let is_ap_oriented = arch.favored_tags.iter().any(|t| t == "AP" || t == "MAGIC")
+            || arch.forbidden_tags.iter().any(|t| t == "AD" || t == "CRIT");
+        let is_ad_oriented = arch.favored_tags.iter().any(|t| t == "AD" || t == "CRIT" || t == "LETHALITY" || t == "ATTACK_SPEED")
+            || arch.forbidden_tags.iter().any(|t| t == "AP");
+        let is_tank_oriented = arch.favored_tags.iter().any(|t| t == "TANK" || t == "ARMOR" || t == "MAGIC_RESIST");
+
+        let mut candidate_ids = Vec::new();
 
         if threat.has_high_heal {
-            // Anti-heal items (Morello 3165, Mortal Reminder 3033, Chempunk Chainsword 6609, Thornmail 3075)
-            for id in ["3165", "3033", "6609", "3075"] {
-                urgent.insert(id.to_string());
+            // Anti-heal items
+            if is_ap_oriented {
+                candidate_ids.push("3165"); // Morellonomicon
+            }
+            if is_ad_oriented {
+                candidate_ids.push("3033"); // Mortal Reminder
+                candidate_ids.push("6609"); // Chempunk Chainsword
+            }
+            if is_tank_oriented || (!is_ap_oriented && !is_ad_oriented) {
+                candidate_ids.push("3075"); // Thornmail
+            }
+            if !is_ap_oriented && !is_ad_oriented && !is_tank_oriented {
+                candidate_ids.extend(&["3165", "3033", "6609", "3075"]);
             }
         }
 
         if threat.has_shield_heavy {
-            // Serpent's Fang (6695 巨蛇之牙)
-            urgent.insert("6695".to_string());
+            // Serpent's Fang (6695) is AD-lethality based
+            if is_ad_oriented || (!is_ap_oriented && !is_tank_oriented) {
+                candidate_ids.push("6695");
+            }
         }
 
         if threat.has_super_tank {
-            // Anti-tank penetration (Void Staff 3135, LDR 3036, Liandry 3151, BotRK 3153)
-            for id in ["3135", "3036", "3151", "3153"] {
-                urgent.insert(id.to_string());
+            // Anti-tank penetration
+            if is_ap_oriented {
+                candidate_ids.push("3135"); // Void Staff
+                candidate_ids.push("3151"); // Liandry's Torment
+            }
+            if is_ad_oriented {
+                candidate_ids.push("3036"); // Lord Dominik's Regards
+                candidate_ids.push("3153"); // Blade of the Ruined King
+            }
+            if !is_ap_oriented && !is_ad_oriented {
+                candidate_ids.extend(&["3135", "3036", "3151", "3153"]);
             }
         }
 
         if threat.has_high_cc {
-            // Anti-CC (Mercurial 3139, Banshee 3102, Edge of Night 3814)
-            for id in ["3139", "3102", "3814"] {
-                urgent.insert(id.to_string());
+            // Anti-CC
+            if is_ap_oriented {
+                candidate_ids.push("3102"); // Banshee's Veil
             }
+            if is_ad_oriented {
+                candidate_ids.push("3139"); // Mercurial Scimitar
+                candidate_ids.push("3814"); // Edge of Night
+            }
+            if !is_ap_oriented && !is_ad_oriented {
+                candidate_ids.extend(&["3139", "3102", "3814"]);
+            }
+        }
+
+        let mut urgent = HashSet::new();
+        for id in candidate_ids {
+            if let Some(item_tags) = ENGINE_META.item_feature_tags.get(id) {
+                let has_forbidden = item_tags.iter().any(|tag| arch.forbidden_tags.contains(tag));
+                if has_forbidden {
+                    continue;
+                }
+            }
+            urgent.insert(id.to_string());
         }
 
         urgent
@@ -160,12 +204,12 @@ impl CounterItemEngine {
     pub fn apply_counter_recommendations(
         candidate_items: &[Value],
         threat: &ThreatProfile,
-        _arch: &ArchetypeInfo,
+        arch: &ArchetypeInfo,
         _owned: &HashSet<String>,
         intensity: f64,
         _resolve_conflicts: bool,
     ) -> Vec<Value> {
-        let urgent = Self::get_urgent_counter_ids(threat, _arch);
+        let urgent = Self::get_urgent_counter_ids(threat, arch);
         let mut out = Vec::new();
 
         for it in candidate_items {

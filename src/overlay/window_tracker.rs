@@ -24,7 +24,7 @@ fn is_process_league_or_riot(pid: u32) -> bool {
 
         if res != 0 && size > 0 {
             let path = String::from_utf16_lossy(&buf[..size as usize]).to_lowercase();
-            return path.contains("league") || path.contains("riot") || path.contains("hex");
+            return path.contains("league") || path.contains("riot") || path.contains("leagueclient");
         }
     }
     false
@@ -49,9 +49,6 @@ impl WindowTracker {
             let mut fg_pid = 0u32;
             GetWindowThreadProcessId(fg, Some(&mut fg_pid));
             if fg_pid != 0 {
-                if fg_pid == std::process::id() {
-                    return true;
-                }
                 let lol_pid = crate::vision::capture::get_league_pid();
                 if lol_pid != 0 && fg_pid == lol_pid {
                     return true;
@@ -119,9 +116,6 @@ impl WindowTracker {
             let mut fg_pid = 0u32;
             GetWindowThreadProcessId(fg, Some(&mut fg_pid));
             if fg_pid != 0 {
-                if fg_pid == std::process::id() {
-                    return true;
-                }
                 let lol_pid = crate::vision::capture::get_league_pid();
                 if lol_pid != 0 && fg_pid == lol_pid {
                     return true;

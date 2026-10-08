@@ -896,10 +896,17 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
             let win_w = rect.width + actual_left_margin + actual_right_margin;
             let win_h = rect.height + actual_offset_y;
 
-            static mut LAST_WIN_GEOM: (i32, i32, i32, i32) = (-1, -1, -1, -1);
-            let (target_x, target_y, target_w, target_h) = (win_x, win_y, win_w, win_h);
-            if LAST_WIN_GEOM != (target_x, target_y, target_w, target_h) {
-                LAST_WIN_GEOM = (target_x, target_y, target_w, target_h);
+            use std::sync::Mutex;
+            static LAST_WIN_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
+            let target_geom = (win_x, win_y, win_w, win_h);
+            let mut geom_changed = false;
+            if let Ok(mut g) = LAST_WIN_GEOM.lock() {
+                if *g != target_geom {
+                    *g = target_geom;
+                    geom_changed = true;
+                }
+            }
+            if geom_changed {
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -911,10 +918,17 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                 );
             }
         } else {
-            static mut LAST_CLIENT_GEOM: (i32, i32, i32, i32) = (-1, -1, -1, -1);
-            let (target_x, target_y, target_w, target_h) = (rect.x, rect.y, rect.width, rect.height);
-            if LAST_CLIENT_GEOM != (target_x, target_y, target_w, target_h) {
-                LAST_CLIENT_GEOM = (target_x, target_y, target_w, target_h);
+            use std::sync::Mutex;
+            static LAST_CLIENT_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
+            let target_geom = (rect.x, rect.y, rect.width, rect.height);
+            let mut geom_changed = false;
+            if let Ok(mut g) = LAST_CLIENT_GEOM.lock() {
+                if *g != target_geom {
+                    *g = target_geom;
+                    geom_changed = true;
+                }
+            }
+            if geom_changed {
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -925,6 +939,24 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                     SWP_NOACTIVATE | SWP_SHOWWINDOW,
                 );
             }
+        }
+    }
+
+    // Dynamic Click-Through: In-Game (Augment/Item) overlays must be 100% click-through (WS_EX_TRANSPARENT)
+    // to prevent blocking character movement/skills during combat. Only Ranked draft HUD is clickable.
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
+        };
+        let is_interactive = matches!(&content_type, HudContent::Ranked(_));
+        let current_ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let desired_ex = if is_interactive {
+            current_ex & !(WS_EX_TRANSPARENT.0)
+        } else {
+            current_ex | WS_EX_TRANSPARENT.0
+        };
+        if desired_ex != current_ex {
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired_ex as isize);
         }
     }
 

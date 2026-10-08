@@ -4,12 +4,15 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 #[derive(Clone)]
 pub struct LcuClient {
     client: reqwest::Client,
     creds: Arc<RwLock<Option<LcuCredentials>>>,
     pub current_phase: Arc<RwLock<String>>,
     pub current_session: Arc<RwLock<Value>>,
+    consecutive_failures: Arc<AtomicU32>,
 }
 
 impl Default for LcuClient {
@@ -31,6 +34,7 @@ impl LcuClient {
             creds: Arc::new(RwLock::new(None)),
             current_phase: Arc::new(RwLock::new("None".to_string())),
             current_session: Arc::new(RwLock::new(Value::Null)),
+            consecutive_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -110,6 +114,7 @@ impl LcuClient {
         match self.client.get(&url).headers(headers).send().await {
             Ok(res) if res.status().is_success() => {
                 if let Ok(text) = res.text().await {
+                    self.consecutive_failures.store(0, Ordering::Relaxed);
                     let phase = text.trim().trim_matches('"').to_string();
                     let mut p_guard = self.current_phase.write().await;
                     *p_guard = phase.clone();
@@ -117,9 +122,11 @@ impl LcuClient {
                 }
             }
             _ => {
-                // Invalidate credentials on failure
-                let mut guard = self.creds.write().await;
-                *guard = None;
+                let fails = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
+                if fails >= 3 {
+                    let mut guard = self.creds.write().await;
+                    *guard = None;
+                }
             }
         }
         "None".to_string()

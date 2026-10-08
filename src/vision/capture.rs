@@ -332,4 +332,106 @@ impl ScreenCapture {
             height: (eff_h * 0.06) as i32,
         }
     }
+
+    #[cfg(windows)]
+    pub fn capture_rect_as_bmp(rect: &ViewportRect) -> Option<Vec<u8>> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Graphics::Gdi::{
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+            BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+        };
+
+        if rect.width <= 0 || rect.height <= 0 {
+            return None;
+        }
+
+        unsafe {
+            let hdc_screen = GetDC(HWND::default());
+            if hdc_screen.is_invalid() {
+                return None;
+            }
+
+            let hdc_mem = CreateCompatibleDC(hdc_screen);
+            let hbmp = CreateCompatibleBitmap(hdc_screen, rect.width, rect.height);
+            let old_bmp = SelectObject(hdc_mem, hbmp);
+
+            let _ = BitBlt(
+                hdc_mem,
+                0,
+                0,
+                rect.width,
+                rect.height,
+                hdc_screen,
+                rect.x,
+                rect.y,
+                SRCCOPY,
+            );
+
+            let mut bmi = BITMAPINFO::default();
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = rect.width;
+            bmi.bmiHeader.biHeight = rect.height;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB.0;
+
+            let row_stride = (rect.width * 4) as usize;
+            let image_bytes = row_stride * (rect.height as usize);
+            let mut pixels: Vec<u8> = vec![0u8; image_bytes];
+
+            let lines_copied = GetDIBits(
+                hdc_mem,
+                hbmp,
+                0,
+                rect.height as u32,
+                Some(pixels.as_mut_ptr() as *mut _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            );
+
+            let _ = SelectObject(hdc_mem, old_bmp);
+            let _ = DeleteObject(hbmp);
+            let _ = DeleteDC(hdc_mem);
+            let _ = ReleaseDC(HWND::default(), hdc_screen);
+
+            if lines_copied == 0 {
+                return None;
+            }
+
+            // Construct standard 54-byte BMP
+            let file_header_size = 14u32;
+            let info_header_size = 40u32;
+            let bf_off_bits = file_header_size + info_header_size;
+            let file_size = bf_off_bits + (image_bytes as u32);
+
+            let mut bmp = Vec::with_capacity(file_size as usize);
+            bmp.extend_from_slice(b"BM");
+            bmp.extend_from_slice(&file_size.to_le_bytes());
+            bmp.extend_from_slice(&0u16.to_le_bytes());
+            bmp.extend_from_slice(&0u16.to_le_bytes());
+            bmp.extend_from_slice(&bf_off_bits.to_le_bytes());
+
+            bmp.extend_from_slice(&info_header_size.to_le_bytes());
+            bmp.extend_from_slice(&(rect.width).to_le_bytes());
+            bmp.extend_from_slice(&(rect.height).to_le_bytes());
+            bmp.extend_from_slice(&1u16.to_le_bytes());
+            bmp.extend_from_slice(&32u16.to_le_bytes());
+            bmp.extend_from_slice(&0u32.to_le_bytes());
+            bmp.extend_from_slice(&(image_bytes as u32).to_le_bytes());
+            bmp.extend_from_slice(&0u32.to_le_bytes());
+            bmp.extend_from_slice(&0u32.to_le_bytes());
+            bmp.extend_from_slice(&0u32.to_le_bytes());
+            bmp.extend_from_slice(&0u32.to_le_bytes());
+
+            bmp.extend_from_slice(&pixels);
+
+            Some(bmp)
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn capture_rect_as_bmp(_rect: &ViewportRect) -> Option<Vec<u8>> {
+        None
+    }
 }
