@@ -1,28 +1,39 @@
+use std::sync::mpsc::{channel, Sender};
+use std::sync::OnceLock;
+
+static TTS_SENDER: OnceLock<Sender<String>> = OnceLock::new();
+
 pub struct TextToSpeech;
 
 impl TextToSpeech {
     pub fn speak(text: &str) {
         let clean_msg: String = text
             .chars()
-            .filter(|c| !c.is_control() && *c != '$' && *c != '`')
+            .filter(|c| !c.is_control() && *c != '"' && *c != '\'' && *c != '`')
             .collect();
         if clean_msg.trim().is_empty() {
             return;
         }
 
-        #[cfg(windows)]
-        std::thread::spawn(move || {
-            let script = format!(
-                "Add-Type -AssemblyName System.speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{}')",
-                clean_msg.replace('\'', "''")
-            );
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-                .spawn();
+        let sender = TTS_SENDER.get_or_init(|| {
+            let (tx, rx) = channel::<String>();
+            #[cfg(windows)]
+            std::thread::spawn(move || {
+                // Background dedicated queue thread: serializes voice without CPU spikes or overlaps
+                while let Ok(msg) = rx.recv() {
+                    // Ultra-lightweight SAPI COM invocation without heavy PowerShell process launch
+                    let script = format!(
+                        "CreateObject(\"SAPI.SpVoice\").Speak \"{}\"",
+                        msg.replace('"', "\"\"")
+                    );
+                    let _ = std::process::Command::new("mshta")
+                        .args([format!("vbscript:Execute(\"{}\")(close)", script)])
+                        .output();
+                }
+            });
+            tx
         });
-        #[cfg(not(windows))]
-        {
-            let _ = clean_msg;
-        }
+
+        let _ = sender.send(clean_msg);
     }
 }

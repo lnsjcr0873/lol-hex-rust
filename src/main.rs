@@ -82,6 +82,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("基于 1157万+ 局真实对局大数据的海克斯大乱斗实时决策辅助引擎");
     println!("============================================================");
 
+    // Set Per-Monitor V2 DPI Awareness to ensure pixel-perfect HUD alignment on 2K/4K scaling
+    #[cfg(windows)]
+    unsafe {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetProcessDpiAwarenessContext(value: isize) -> i32;
+        }
+        let _ = SetProcessDpiAwarenessContext(-4);
+    }
+
     // 1. Initialize In-Memory Database via Hexdata Cloud API (Zero disk clutter)
     let hexdata_client = Arc::new(HexdataCrawler::new());
     let mut initial_db = Database::new();
@@ -134,6 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let lcu_bg = lcu_client.clone();
+    let live_bg = live_client.clone();
+    let item_bg = item_overlay.clone();
     let draft_bg = ranked_draft.clone();
     let db_bg = db.clone();
     let bench_bg = bench_overlay.clone();
@@ -151,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     tokio::spawn(async move {
+        let mut last_level = 0i32;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
@@ -364,6 +377,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                     ranked_bg.stop();
+                }
+
+                // In-Game Live 2999 Port Monitoring Workflow
+                if phase == "InProgress" {
+                    let live_stats = live_bg.get_live_stats().await;
+                    if live_stats.is_in_game {
+                        // Level Milestone Perception (ARAM 3/7/11/15)
+                        let current_lvl = live_stats.level;
+                        if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
+                            if matches!(current_lvl, 3 | 7 | 11 | 15) {
+                                info!("Level milestone reached: Level {}! Triggering augment readiness", current_lvl);
+                                TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
+                            }
+                        }
+                        last_level = current_lvl;
+
+                        // Continuously push real-time gold, owned components, and enemy items to ItemOverlay
+                        item_bg.update_recommendations_from_live(
+                            &db_bg,
+                            &live_stats.hero_id,
+                            &live_stats.hero_name,
+                            live_stats.gold,
+                            &live_stats.current_items,
+                            &live_stats.enemy_team,
+                        );
+                    }
+                } else if last_level > 0 {
+                    // Match has terminated
+                    last_level = 0;
                 }
             }
         }

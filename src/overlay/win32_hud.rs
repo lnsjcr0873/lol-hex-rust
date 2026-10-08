@@ -690,8 +690,8 @@ fn run_win32_hud_loop(
             *guard = Some(hwnd.0 as isize);
         }
 
-        // 80ms timer for tracking active game window & auto-hiding
-        let _ = SetTimer(hwnd, 1, 80, None);
+        // 100ms timer for tracking active game window & auto-hiding (balanced 10Hz)
+        let _ = SetTimer(hwnd, 1, 100, None);
 
         let mut msg = MSG::default();
         while running.load(Ordering::SeqCst) && GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
@@ -896,25 +896,35 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
             let win_w = rect.width + actual_left_margin + actual_right_margin;
             let win_h = rect.height + actual_offset_y;
 
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                win_x,
-                win_y,
-                win_w,
-                win_h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+            static mut LAST_WIN_GEOM: (i32, i32, i32, i32) = (-1, -1, -1, -1);
+            let (target_x, target_y, target_w, target_h) = (win_x, win_y, win_w, win_h);
+            if LAST_WIN_GEOM != (target_x, target_y, target_w, target_h) {
+                LAST_WIN_GEOM = (target_x, target_y, target_w, target_h);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    win_x,
+                    win_y,
+                    win_w,
+                    win_h,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
         } else {
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+            static mut LAST_CLIENT_GEOM: (i32, i32, i32, i32) = (-1, -1, -1, -1);
+            let (target_x, target_y, target_w, target_h) = (rect.x, rect.y, rect.width, rect.height);
+            if LAST_CLIENT_GEOM != (target_x, target_y, target_w, target_h) {
+                LAST_CLIENT_GEOM = (target_x, target_y, target_w, target_h);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
         }
     }
 
@@ -933,6 +943,8 @@ unsafe fn render_hud(
     height: i32,
     content: &HudContent,
 ) {
+    use windows::Win32::Graphics::Gdi::{SetBkMode, BKMODE};
+    let _ = SetBkMode(hdc, BKMODE(1)); // 1 = TRANSPARENT background
     use windows::Win32::Graphics::Gdi::{GetStockObject, SelectObject, SetBkMode, DEFAULT_GUI_FONT, TRANSPARENT};
 
     SetBkMode(hdc, TRANSPARENT);
@@ -1744,8 +1756,8 @@ unsafe fn draw_text_line(
     y: i32,
     color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{SetTextColor, TextOutW};
-
+    use windows::Win32::Graphics::Gdi::{SetBkMode, SetTextColor, TextOutW, BKMODE};
+    let _ = SetBkMode(hdc, BKMODE(1));
     SetTextColor(hdc, color);
     let wide: Vec<u16> = text.encode_utf16().collect();
     let _ = TextOutW(hdc, x, y, &wide);

@@ -1,7 +1,5 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -11,7 +9,7 @@ pub struct OpggClient {
     region: String,
     tier_list_cache: RwLock<Option<(Instant, Value)>>,
     champion_details_cache: RwLock<HashMap<String, (Instant, Value)>>,
-    cache_dir: PathBuf,
+    synergies_cache: RwLock<HashMap<String, (Instant, Value)>>,
 }
 
 impl Default for OpggClient {
@@ -48,30 +46,12 @@ impl OpggClient {
             .build()
             .unwrap_or_default();
 
-        let cache_dir = PathBuf::from("data/opgg_cache");
-        let _ = fs::create_dir_all(&cache_dir);
-
-        let s = Self {
+        Self {
             client,
             region: "kr".to_string(),
             tier_list_cache: RwLock::new(None),
             champion_details_cache: RwLock::new(HashMap::new()),
-            cache_dir,
-        };
-        s.load_disk_tier_cache();
-        s
-    }
-
-    fn load_disk_tier_cache(&self) {
-        let path = self.cache_dir.join(format!("ranked_tier_list_{}.json", self.region));
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                    if let Ok(mut lock) = self.tier_list_cache.write() {
-                        *lock = Some((Instant::now(), val));
-                    }
-                }
-            }
+            synergies_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -95,78 +75,61 @@ impl OpggClient {
     }
 
     pub async fn get_ranked_tier_list(&self, force_refresh: bool) -> Value {
-        // 1. Check in-memory cache (TTL: 12 hours)
+        // 1. Check in-memory cache with 6 hours TTL
         if !force_refresh {
             if let Ok(lock) = self.tier_list_cache.read() {
                 if let Some((instant, ref val)) = *lock {
-                    if instant.elapsed() < Duration::from_secs(12 * 3600) {
+                    if instant.elapsed() < Duration::from_secs(6 * 3600) {
                         return val.clone();
                     }
                 }
             }
         }
 
-        let url = format!("https://lol-api-champion.op.gg/api/{}/champions/ranked", self.region);
+        let url = format!(
+            "https://lol-api-champion.op.gg/api/{}/champions/ranked?tier=all",
+            self.region
+        );
         info!("Fetching OP.GG ranked tier list: {}", url);
 
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(raw) = resp.json::<Value>().await {
-                    let mut parsed_champs = HashMap::new();
-                    if let Some(champ_list) = raw.get("data").and_then(|v| v.as_array()) {
-                        for item in champ_list {
+                    let mut parsed_champs = json!({});
+
+                    if let Some(arr) = raw.get("data").and_then(|v| v.as_array()) {
+                        for item in arr {
                             if let Some(cid) = item.get("id").and_then(|v| v.as_i64()) {
                                 let cid_str = cid.to_string();
-                                let avg = item.get("average_stats");
-                                let overall_tier = avg.and_then(|a| a.get("tier")).and_then(|v| v.as_i64()).unwrap_or(3);
-                                let overall_wr = avg.and_then(|a| a.get("win_rate")).and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                let overall_pr = avg.and_then(|a| a.get("pick_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                let overall_br = avg.and_then(|a| a.get("ban_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let mut positions = json!({});
 
-                                let mut positions = HashMap::new();
-                                let mut primary_pos = "MID".to_string();
-                                let mut max_role_rate = -1.0;
+                                if let Some(pos_arr) = item.get("positions").and_then(|v| v.as_array()) {
+                                    for p in pos_arr {
+                                        if let Some(pos_name) = p.get("name").and_then(|v| v.as_str()) {
+                                            let stats = p.get("stats");
+                                            let wr = stats.and_then(|s| s.get("win_rate")).and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                            let pr = stats.and_then(|s| s.get("pick_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                            let br = stats.and_then(|s| s.get("ban_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                            let tier = stats.and_then(|s| s.get("tier_data")).and_then(|t| t.get("tier")).and_then(|v| v.as_i64()).unwrap_or(3) as i32;
 
-                                if let Some(pos_list) = item.get("positions").and_then(|v| v.as_array()) {
-                                    for p in pos_list {
-                                        let pname = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
-                                        if pname.is_empty() { continue; }
-                                        let pstats = p.get("stats");
-                                        let tier_data = pstats.and_then(|s| s.get("tier_data"));
-                                        let ptier = tier_data.and_then(|t| t.get("tier")).and_then(|v| v.as_i64())
-                                            .or_else(|| pstats.and_then(|s| s.get("tier")).and_then(|v| v.as_i64()))
-                                            .unwrap_or(overall_tier);
-                                        let p_wr = pstats.and_then(|s| s.get("win_rate")).and_then(|v| v.as_f64()).unwrap_or(overall_wr);
-                                        let p_pr = pstats.and_then(|s| s.get("pick_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                        let p_rr = pstats.and_then(|s| s.get("role_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                                        let pos_cn = match pname.as_str() {
-                                            "TOP" => "上单",
-                                            "JUNGLE" => "打野",
-                                            "MID" => "中单",
-                                            "ADC" => "下路",
-                                            "SUPPORT" => "辅助",
-                                            _ => pname.as_str(),
-                                        };
-
-                                        if p_rr > max_role_rate {
-                                            max_role_rate = p_rr;
-                                            primary_pos = pname.clone();
+                                            positions[pos_name.to_uppercase()] = json!({
+                                                "position": pos_name.to_uppercase(),
+                                                "tier": tier,
+                                                "winRate": wr,
+                                                "pickRate": pr,
+                                                "banRate": br
+                                            });
                                         }
-
-                                        positions.insert(pname.clone(), json!({
-                                            "position": pname,
-                                            "positionCn": pos_cn,
-                                            "tier": ptier,
-                                            "winRate": p_wr,
-                                            "pickRate": p_pr,
-                                            "roleRate": p_rr
-                                        }));
                                     }
                                 }
 
-                                parsed_champs.insert(cid_str.clone(), json!({
-                                    "id": cid,
+                                let overall_tier = item.get("average_stats").and_then(|s| s.get("tier")).and_then(|v| v.as_i64()).unwrap_or(3) as i32;
+                                let overall_wr = item.get("average_stats").and_then(|s| s.get("win_rate")).and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                let overall_pr = item.get("average_stats").and_then(|s| s.get("pick_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let overall_br = item.get("average_stats").and_then(|s| s.get("ban_rate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let primary_pos = item.get("position").and_then(|v| v.as_str()).unwrap_or("MID").to_uppercase();
+
+                                parsed_champs[cid_str.clone()] = json!({
                                     "championId": cid_str,
                                     "overallTier": overall_tier,
                                     "overallWinRate": overall_wr,
@@ -174,7 +137,7 @@ impl OpggClient {
                                     "overallBanRate": overall_br,
                                     "primaryPosition": primary_pos,
                                     "positions": positions
-                                }));
+                                });
                             }
                         }
                     }
@@ -184,13 +147,10 @@ impl OpggClient {
                         "champions": parsed_champs
                     });
 
-                    // Save to in-memory cache
+                    // Store in memory cache ONLY (zero disk clutter)
                     if let Ok(mut lock) = self.tier_list_cache.write() {
                         *lock = Some((Instant::now(), result.clone()));
                     }
-                    // Save to disk cache
-                    let path = self.cache_dir.join(format!("ranked_tier_list_{}.json", self.region));
-                    let _ = fs::write(path, serde_json::to_string_pretty(&result).unwrap_or_default());
 
                     return result;
                 }
@@ -208,48 +168,31 @@ impl OpggClient {
             }
         }
 
-        json!({
-            "region": self.region,
-            "champions": {}
-        })
+        json!({ "region": self.region, "champions": {} })
     }
 
     pub async fn get_champion_detail(&self, champion_id: &str, position: &str) -> Option<Value> {
-        let pos_upper = match position.to_lowercase().as_str() {
-            "top" => "TOP",
-            "jungle" => "JUNGLE",
-            "middle" | "mid" => "MID",
-            "bottom" | "bot" | "adc" => "ADC",
-            "utility" | "support" => "SUPPORT",
-            _ => "MID",
+        let pos_upper = position.to_uppercase();
+        let pos_lower = match pos_upper.as_str() {
+            "TOP" => "top",
+            "JUNGLE" => "jungle",
+            "MID" => "mid",
+            "ADC" => "adc",
+            "SUPPORT" => "support",
+            _ => "mid",
         };
-        let pos_lower = pos_upper.to_lowercase();
-        let cache_key = format!("{}_{}", champion_id, pos_upper);
+        let cache_key = format!("{}_{}_{}", self.region, champion_id, pos_upper);
 
-        // 1. Check in-memory cache (TTL: 24h)
+        // 1. Check in-memory cache with 12 hours TTL
         if let Ok(lock) = self.champion_details_cache.read() {
             if let Some((instant, ref val)) = lock.get(&cache_key) {
-                if instant.elapsed() < Duration::from_secs(24 * 3600) {
+                if instant.elapsed() < Duration::from_secs(12 * 3600) {
                     return Some(val.clone());
                 }
             }
         }
 
-        // 2. Check disk cache
-        let disk_filename = format!("detail_{}_{}_{}.json", self.region, champion_id, pos_upper);
-        let disk_path = self.cache_dir.join(&disk_filename);
-        if disk_path.exists() {
-            if let Ok(content) = fs::read_to_string(&disk_path) {
-                if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                    if let Ok(mut lock) = self.champion_details_cache.write() {
-                        lock.insert(cache_key.clone(), (Instant::now(), val.clone()));
-                    }
-                    return Some(val);
-                }
-            }
-        }
-
-        // 3. Fetch from OP.GG
+        // 2. Fetch directly from OP.GG API
         let url = format!(
             "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}",
             self.region, champion_id, pos_lower
@@ -259,72 +202,81 @@ impl OpggClient {
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(raw) = resp.json::<Value>().await {
-                    let data = raw.get("data")?;
+                    let mut counter_map = json!({});
+                    let mut counters_list = Vec::new();
 
-                    // Parse counters
-                    let mut counters = Vec::new();
-                    let mut counter_map = HashMap::new();
-                    if let Some(arr) = data.get("counters").and_then(|v| v.as_array()) {
-                        for c in arr {
-                            if let Some(opp_id) = c.get("champion_id").and_then(|v| v.as_i64()) {
-                                let opp_str = opp_id.to_string();
-                                let play = c.get("play").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let win = c.get("win").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let wr = if play > 0 { win as f64 / play as f64 } else { 0.5 };
-                                let entry = json!({
+                    if let Some(counters_data) = raw.get("data").and_then(|d| d.get("counters")).and_then(|c| c.as_array()) {
+                        for c in counters_data {
+                            if let Some(opp_id) = c.get("opponent_champion_id").and_then(|v| v.as_i64()) {
+                                let opp_id_str = opp_id.to_string();
+                                let wr = c.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                let games = c.get("play").and_then(|v| v.as_i64()).unwrap_or(0);
+                                counter_map[opp_id_str.clone()] = json!({
                                     "opponentId": opp_id,
-                                    "opponentIdStr": opp_str,
-                                    "games": play,
-                                    "wins": win,
+                                    "opponentIdStr": opp_id_str.clone(),
                                     "winRate": wr,
-                                    "advantageDelta": wr - 0.5,
-                                    "isAdvantage": wr >= 0.5
+                                    "games": games
                                 });
-                                counters.push(entry.clone());
-                                counter_map.insert(opp_str, entry);
+                                counters_list.push(json!({
+                                    "opponentId": opp_id,
+                                    "opponentIdStr": opp_id_str,
+                                    "winRate": wr,
+                                    "games": games
+                                }));
                             }
                         }
                     }
 
-                    // Parse rune_pages
-                    let mut recommended_runes = Value::Null;
-                    if let Some(rune_pages) = data.get("rune_pages").and_then(|v| v.as_array()) {
-                        if let Some(top_page) = rune_pages.first() {
-                            let pri_style = top_page.get("primary_page_id").and_then(|v| v.as_i64()).unwrap_or(8000);
-                            let sec_style = top_page.get("secondary_page_id").and_then(|v| v.as_i64()).unwrap_or(8200);
-                            if let Some(build) = top_page.get("builds").and_then(|b| b.as_array()).and_then(|arr| arr.first()) {
-                                let pri_runes = build.get("primary_rune_ids").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                                let sec_runes = build.get("secondary_rune_ids").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                                let stat_mods = build.get("stat_mod_ids").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                                let mut all_perks = pri_runes.clone();
-                                all_perks.extend(sec_runes.clone());
-                                all_perks.extend(stat_mods.clone());
+                    // Parse Recommended Runes
+                    let mut rune_build = json!(null);
+                    if let Some(runes) = raw.get("data").and_then(|d| d.get("runes")).and_then(|r| r.as_array()) {
+                        if let Some(first_rune) = runes.first() {
+                            let primary_page_id = first_rune.get("primary_page_id").and_then(|v| v.as_i64()).unwrap_or(8000);
+                            let secondary_page_id = first_rune.get("secondary_page_id").and_then(|v| v.as_i64()).unwrap_or(8100);
+                            let primary_rune_ids: Vec<i64> = first_rune.get("primary_rune_ids")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                                .unwrap_or_default();
+                            let secondary_rune_ids: Vec<i64> = first_rune.get("secondary_rune_ids")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                                .unwrap_or_default();
+                            let stat_mod_ids: Vec<i64> = first_rune.get("stat_mod_ids")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                                .unwrap_or_default();
 
-                                recommended_runes = json!({
-                                    "primaryStyleId": pri_style,
-                                    "subStyleId": sec_style,
-                                    "selectedPerkIds": all_perks,
-                                    "primaryRunes": pri_runes,
-                                    "secondaryRunes": sec_runes,
-                                    "statMods": stat_mods,
-                                    "pickRate": build.get("pick_rate"),
-                                });
-                            }
+                            let mut all_selected_perks = Vec::new();
+                            all_selected_perks.extend(primary_rune_ids);
+                            all_selected_perks.extend(secondary_rune_ids);
+                            all_selected_perks.extend(stat_mod_ids);
+
+                            let wr = first_rune.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let pick_rate = first_rune.get("pick_rate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                            rune_build = json!({
+                                "primaryStyleId": primary_page_id,
+                                "subStyleId": secondary_page_id,
+                                "selectedPerkIds": all_selected_perks,
+                                "winRate": wr,
+                                "pickRate": pick_rate
+                            });
                         }
                     }
 
-                    // Parse summoner_spells
-                    let mut recommended_spells = Vec::new();
-                    if let Some(spells) = data.get("summoner_spells").and_then(|v| v.as_array()) {
-                        for s in spells {
-                            if let Some(ids) = s.get("ids").and_then(|v| v.as_array()) {
-                                if ids.len() >= 2 {
-                                    recommended_spells.push(json!({
-                                        "spell1Id": ids[0],
-                                        "spell2Id": ids[1],
-                                        "pickRate": s.get("pick_rate"),
-                                    }));
-                                }
+                    // Parse Recommended Core Item Builds
+                    let mut core_items = Vec::new();
+                    if let Some(items) = raw.get("data").and_then(|d| d.get("core_items")).and_then(|i| i.as_array()) {
+                        for build in items.iter().take(3) {
+                            if let Some(ids) = build.get("ids").and_then(|v| v.as_array()) {
+                                let item_ids: Vec<String> = ids.iter().filter_map(|x| x.as_i64().map(|n| n.to_string())).collect();
+                                let wr = build.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                let games = build.get("play").and_then(|v| v.as_i64()).unwrap_or(0);
+                                core_items.push(json!({
+                                    "itemIds": item_ids,
+                                    "winRate": wr,
+                                    "games": games
+                                }));
                             }
                         }
                     }
@@ -332,18 +284,16 @@ impl OpggClient {
                     let detail_result = json!({
                         "championId": champion_id,
                         "position": pos_upper,
-                        "counters": counters,
                         "counterMap": counter_map,
-                        "recommendedRunes": recommended_runes,
-                        "recommendedSpells": recommended_spells,
+                        "counters": counters_list,
+                        "recommendedRunes": rune_build,
+                        "coreItems": core_items
                     });
 
-                    // Store in memory
+                    // Store in memory cache ONLY (zero disk clutter)
                     if let Ok(mut lock) = self.champion_details_cache.write() {
                         lock.insert(cache_key, (Instant::now(), detail_result.clone()));
                     }
-                    // Store to disk
-                    let _ = fs::write(disk_path, serde_json::to_string_pretty(&detail_result).unwrap_or_default());
 
                     return Some(detail_result);
                 }
@@ -445,13 +395,13 @@ impl OpggClient {
             "SUPPORT" => "support",
             _ => "mid",
         };
-        let disk_filename = format!("synergies_{}_{}_{}.json", self.region, champion_id, pos_upper);
-        let disk_path = self.cache_dir.join(&disk_filename);
+        let cache_key = format!("{}_{}_{}", self.region, champion_id, pos_upper);
 
-        if disk_path.exists() {
-            if let Ok(content) = fs::read_to_string(&disk_path) {
-                if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                    return val;
+        // 1. Check in-memory cache with 12 hours TTL
+        if let Ok(lock) = self.synergies_cache.read() {
+            if let Some((instant, ref val)) = lock.get(&cache_key) {
+                if instant.elapsed() < Duration::from_secs(12 * 3600) {
+                    return val.clone();
                 }
             }
         }
@@ -497,7 +447,10 @@ impl OpggClient {
                         "synergies": list
                     });
 
-                    let _ = fs::write(&disk_path, serde_json::to_string_pretty(&res).unwrap_or_default());
+                    // Store in memory cache ONLY (zero disk clutter)
+                    if let Ok(mut lock) = self.synergies_cache.write() {
+                        lock.insert(cache_key, (Instant::now(), res.clone()));
+                    }
                     return res;
                 }
             }
