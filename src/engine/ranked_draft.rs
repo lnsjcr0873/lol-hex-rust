@@ -115,23 +115,24 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
-                let (cname, cavatar, mut cwr, mut ctier) = if let Some(database) = db {
+                let (cname, cavatar) = if let Some(database) = db {
                     if !cid.is_empty() {
                         let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
                         let name = database.resolve_hero_name(&resolved_id)
                             .unwrap_or_else(|| format!("队友{}", idx + 1));
                         let summary = database.heroes_map.get(&resolved_id);
                         let avatar = summary.map(|s| s.avatar_url.clone()).unwrap_or_default();
-                        let wr = summary.map(|s| s.win_rate).unwrap_or(0.505);
-                        let tier = summary.and_then(|s| s.tier).unwrap_or(2);
-                        (name, avatar, wr, tier)
+                        (name, avatar)
                     } else {
-                        (format!("队友{}", idx + 1), String::new(), 0.505, 2)
+                        (format!("队友{}", idx + 1), String::new())
                     }
                 } else {
-                    (format!("队友{}", idx + 1), String::new(), 0.505, 2)
+                    (format!("队友{}", idx + 1), String::new())
                 };
 
+                // Ranked ladder win rate and tier strictly from OP.GG (neutral 50.0% / T3 if loading)
+                let mut cwr = 0.500;
+                let mut ctier = 3;
                 if let Some(op) = opgg {
                     if !cid.is_empty() {
                         if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {
@@ -208,23 +209,24 @@ impl RankedDraftManager {
 
                 let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == pos).unwrap_or(idx % 5);
 
-                let (cname, cavatar, mut cwr, mut ctier) = if let Some(database) = db {
+                let (cname, cavatar) = if let Some(database) = db {
                     if !cid.is_empty() {
                         let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
                         let name = database.resolve_hero_name(&resolved_id)
                             .unwrap_or_else(|| format!("对手{}", idx + 1));
                         let summary = database.heroes_map.get(&resolved_id);
                         let avatar = summary.map(|s| s.avatar_url.clone()).unwrap_or_default();
-                        let wr = summary.map(|s| s.win_rate).unwrap_or(0.495);
-                        let tier = summary.and_then(|s| s.tier).unwrap_or(3);
-                        (name, avatar, wr, tier)
+                        (name, avatar)
                     } else {
-                        (format!("对手{}", idx + 1), String::new(), 0.495, 3)
+                        (format!("对手{}", idx + 1), String::new())
                     }
                 } else {
-                    (format!("对手{}", idx + 1), String::new(), 0.495, 3)
+                    (format!("对手{}", idx + 1), String::new())
                 };
 
+                // Ranked ladder win rate and tier strictly from OP.GG (neutral 50.0% / T3 if loading)
+                let mut cwr = 0.500;
+                let mut ctier = 3;
                 if let Some(op) = opgg {
                     if !cid.is_empty() {
                         if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {

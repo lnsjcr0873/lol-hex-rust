@@ -12,6 +12,9 @@ pub struct LiveGameStats {
     pub level: i32,
     pub current_items: Vec<String>,
     pub enemy_team: Vec<Value>,
+    pub game_mode: String,
+    pub map_number: i32,
+    pub is_aram: bool,
 }
 
 pub struct LiveClientDataReader {
@@ -54,6 +57,14 @@ impl LiveClientDataReader {
         };
 
         stats.is_in_game = true;
+
+        if let Some(game_data) = data.get("gameData") {
+            let gm = game_data.get("gameMode").and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
+            let mn = game_data.get("mapNumber").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            stats.is_aram = mn == 12 || mn == 30 || gm == "ARAM" || gm == "CHERRY";
+            stats.game_mode = gm;
+            stats.map_number = mn;
+        }
 
         let active_opt = data.get("activePlayer");
         if let Some(active) = active_opt {

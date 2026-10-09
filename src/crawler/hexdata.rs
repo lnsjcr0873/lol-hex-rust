@@ -1,12 +1,14 @@
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, COOKIE, REFERER, USER_AGENT};
 use serde_json::Value;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 pub struct HexdataCrawler {
     client: reqwest::Client,
-    base_url: String,
     base_domain: String,
+    cookie: Arc<RwLock<Option<String>>>,
+    last_handshake: Arc<RwLock<Option<Instant>>>,
 }
 
 impl Default for HexdataCrawler {
@@ -37,51 +39,96 @@ impl HexdataCrawler {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(6))
             .build()
             .unwrap_or_default();
 
         Self {
             client,
-            base_url: "https://hexdata.com.cn/api/hexdata".to_string(),
             base_domain: "https://hexdata.com.cn".to_string(),
+            cookie: Arc::new(RwLock::new(None)),
+            last_handshake: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub async fn handshake(&self) {
+    /// Refresh token / session cookie every 30 minutes to satisfy HexData WAF
+    pub async fn ensure_handshake(&self) {
+        if let Ok(lock) = self.last_handshake.read() {
+            if let Some(t) = *lock {
+                if t.elapsed() < Duration::from_secs(1800) {
+                    if let Ok(c_lock) = self.cookie.read() {
+                        if c_lock.is_some() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let check_url = format!("{}/?runtime-check={}", self.base_domain, now_ms);
-        let _ = self.client.get(&check_url).send().await;
+
+        match self.client.get(&check_url).send().await {
+            Ok(resp) => {
+                if let Some(set_cookie) = resp.headers().get("set-cookie") {
+                    if let Ok(cookie_str) = set_cookie.to_str() {
+                        let token = cookie_str.split(';').next().unwrap_or("").trim().to_string();
+                        if !token.is_empty() {
+                            info!("HexData session cookie refreshed: {}", token);
+                            if let Ok(mut c) = self.cookie.write() {
+                                *c = Some(token);
+                            }
+                            if let Ok(mut t) = self.last_handshake.write() {
+                                *t = Some(Instant::now());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("HexData handshake runtime-check failed: {}", e);
+            }
+        }
+    }
+
+    pub async fn handshake(&self) {
+        self.ensure_handshake().await;
     }
 
     pub async fn fetch_meta(&self) -> Option<Value> {
-        let url = format!("{}/meta", self.base_url);
+        let url = format!("{}/data/meta.json", self.base_domain);
         self.fetch_json(&url).await
     }
 
     pub async fn fetch_heroes_summary(&self) -> Option<Value> {
-        let url = format!("{}/heroes_summary", self.base_url);
+        let url = format!("{}/api/hexdata/heroes_summary", self.base_domain);
         self.fetch_json(&url).await
     }
 
     pub async fn fetch_augments_summary(&self) -> Option<Value> {
-        let url = format!("{}/augments_summary", self.base_url);
+        let url = format!("{}/api/hexdata/augments_summary", self.base_domain);
         self.fetch_json(&url).await
     }
 
+    /// On-demand single hero detail fetch (ARAM/Cherry mode only, strictly on-demand)
     pub async fn fetch_hero_detail(&self, hero_id: &str) -> Option<Value> {
-        // 1. Try API path
-        let api_url = format!("{}/heroes_detail/{}", self.base_url, hero_id);
-        if let Some(val) = self.fetch_json(&api_url).await {
+        let hid = hero_id.trim();
+        if hid.is_empty() {
+            return None;
+        }
+
+        // 1. Try static CDN data path: /data/heroes/{hero_id}.json
+        let cdn_url = format!("{}/data/heroes/{}.json", self.base_domain, hid);
+        if let Some(val) = self.fetch_json(&cdn_url).await {
             return Some(val);
         }
 
-        // 2. Try static CDN fallback path
-        let cdn_url = format!("{}/data/json/heroes_detail/{}.json", self.base_domain, hero_id);
-        if let Some(val) = self.fetch_json(&cdn_url).await {
+        // 2. Try API path: /api/hexdata/heroes/{hero_id}
+        let api_url = format!("{}/api/hexdata/heroes/{}", self.base_domain, hid);
+        if let Some(val) = self.fetch_json(&api_url).await {
             return Some(val);
         }
 
@@ -89,8 +136,19 @@ impl HexdataCrawler {
     }
 
     async fn fetch_json(&self, url: &str) -> Option<Value> {
+        self.ensure_handshake().await;
         debug!("Fetching Hexdata JSON: {}", url);
-        match self.client.get(url).send().await {
+
+        let mut req = self.client.get(url);
+        if let Ok(lock) = self.cookie.read() {
+            if let Some(ref c) = *lock {
+                if let Ok(header_val) = HeaderValue::from_str(c) {
+                    req = req.header(COOKIE, header_val);
+                }
+            }
+        }
+
+        match req.send().await {
             Ok(res) if res.status().is_success() => res.json::<Value>().await.ok(),
             Ok(res) => {
                 debug!("HTTP request to {} returned status {}", url, res.status());

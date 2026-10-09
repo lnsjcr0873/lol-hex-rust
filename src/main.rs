@@ -125,12 +125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if initial_db.heroes_summary.is_empty() {
         initial_db = Database::load_from_dir("../data");
     }
+    let hexdata_client = Arc::new(HexdataCrawler::new());
     if initial_db.heroes_summary.is_empty() {
         // Fallback to online API only if local files are completely missing
-        let hexdata_client = Arc::new(HexdataCrawler::new());
         initial_db.sync_from_api(&hexdata_client).await;
     }
     let db = Arc::new(initial_db);
+
+    // Warm up Hexdata session handshake in background
+    let hex_warmup = hexdata_client.clone();
+    tokio::spawn(async move {
+        hex_warmup.ensure_handshake().await;
+    });
 
     // 2. Initialize Subsystems
     let _config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
@@ -143,22 +149,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let item_overlay = Arc::new(ItemOverlay::new());
     let opgg_client = Arc::new(OpggClient::new());
 
-    // 3. Start Overlays
+    // 3. Track current game mode (ARAM vs Summoner's Rift) for hotkeys & overlays
+    let is_aram_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // 4. Start Overlays
     bench_overlay.start();
     ranked_overlay.start();
     ingame_overlay.start();
     item_overlay.start();
 
-    // 4. Start Global Hotkeys
+    // 5. Start Global Hotkeys
     let ingame_clone = ingame_overlay.clone();
     let item_clone = item_overlay.clone();
     let db_for_hotkey = db.clone();
+    let is_aram_for_hotkey = is_aram_active.clone();
     let hotkeys = HotkeyManager::new();
     hotkeys.start(
         move || {
-            info!("Hotkey '[' pressed: Triggering InGame Augment Scan");
-            ingame_clone.trigger_scan_with_db(&db_for_hotkey);
-            TextToSpeech::speak("海克斯强化推演已激活");
+            if is_aram_for_hotkey.load(std::sync::atomic::Ordering::SeqCst) {
+                info!("Hotkey '[' pressed: Triggering InGame Augment Scan (ARAM)");
+                ingame_clone.trigger_scan_with_db(&db_for_hotkey);
+                TextToSpeech::speak("海克斯强化推演已激活");
+            } else {
+                info!("Hotkey '[' pressed: Summoner's Rift active, skipping Hextech scan");
+                TextToSpeech::speak("当前为召唤师峡谷模式，海克斯强化仅在狂暴大乱斗模式生效");
+            }
         },
         move || {
             info!("Hotkey ']' pressed: Triggering Item Recommendation HUD");
@@ -166,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // 5. Background LCU & Game Polling Task
+    // 6. Background LCU & Game Polling Task
     let player_history = Arc::new(crate::engine::PlayerHistoryManager::new());
     if let Ok(mut gh) = crate::overlay::win32_hud::GLOBAL_HISTORY.write() {
         *gh = Some(player_history.clone());
@@ -185,6 +200,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opgg_bg = opgg_client.clone();
     let history_bg = player_history.clone();
     let ingame_bg = ingame_overlay.clone();
+    let hex_bg = hexdata_client.clone();
+    let is_aram_bg = is_aram_active.clone();
 
     // Warm up OP.GG tier list in background
     let opgg_warmup = opgg_client.clone();
@@ -209,6 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // 1. If benchEnabled or non-empty bench -> ARAM mode -> BenchOverlay HUD
                     let is_aram = session.get("benchEnabled").and_then(|v| v.as_bool()).unwrap_or(false)
                         || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
+                    is_aram_bg.store(is_aram, std::sync::atomic::Ordering::SeqCst);
 
                     if is_aram {
                         last_draft_sig.clear();
@@ -445,41 +463,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if phase == "InProgress" {
                     let live_stats = live_bg.get_live_stats().await;
                     if live_stats.is_in_game {
-                        // Level Milestone Perception (ARAM 3/7/11/15)
-                        let current_lvl = live_stats.level;
-                        let is_milestone = if last_level == 0 && current_lvl == 3 {
-                            true
-                        } else if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
-                            matches!(current_lvl, 3 | 7 | 11 | 15)
+                        is_aram_bg.store(live_stats.is_aram, std::sync::atomic::Ordering::SeqCst);
+                        if live_stats.is_aram {
+                            // ARAM only: on-demand fetch hero detail with cookie handshake
+                            if !live_stats.hero_id.is_empty() {
+                                let crawler = hex_bg.clone();
+                                let db_clone = db_bg.clone();
+                                let hero_id = live_stats.hero_id.clone();
+                                tokio::spawn(async move {
+                                    let _ = db_clone.fetch_and_cache_hero_detail(&hero_id, &crawler).await;
+                                });
+                            }
+
+                            // Level Milestone Perception (ARAM 3/7/11/15 only)
+                            let current_lvl = live_stats.level;
+                            let is_milestone = if last_level == 0 && current_lvl == 3 {
+                                true
+                            } else if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
+                                matches!(current_lvl, 3 | 7 | 11 | 15)
+                            } else {
+                                false
+                            };
+
+                            if is_milestone {
+                                info!("ARAM level milestone reached: Level {}! Triggering augment readiness", current_lvl);
+                                TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
+                                let ingame_auto = ingame_bg.clone();
+                                let db_auto = db_bg.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                    ingame_auto.trigger_scan_with_db(&db_auto);
+                                });
+                            }
+                            last_level = current_lvl;
+
+                            // Continuously push real-time gold, owned components, and enemy items to ItemOverlay
+                            item_bg.update_recommendations_from_live(
+                                &db_bg,
+                                &live_stats.hero_id,
+                                &live_stats.hero_name,
+                                live_stats.gold,
+                                &live_stats.current_items,
+                                &live_stats.enemy_team,
+                            );
                         } else {
-                            false
-                        };
-
-                        if is_milestone {
-                            info!("Level milestone reached: Level {}! Triggering augment readiness", current_lvl);
-                            TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
-                            let ingame_auto = ingame_bg.clone();
-                            let db_auto = db_bg.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-                                ingame_auto.trigger_scan_with_db(&db_auto);
-                            });
+                            // Summoner's Rift: Strictly NO hextech augment milestones or speech!
+                            last_level = live_stats.level;
+                            item_bg.update_recommendations_from_live(
+                                &db_bg,
+                                &live_stats.hero_id,
+                                &live_stats.hero_name,
+                                live_stats.gold,
+                                &live_stats.current_items,
+                                &live_stats.enemy_team,
+                            );
                         }
-                        last_level = current_lvl;
-
-                        // Continuously push real-time gold, owned components, and enemy items to ItemOverlay
-                        item_bg.update_recommendations_from_live(
-                            &db_bg,
-                            &live_stats.hero_id,
-                            &live_stats.hero_name,
-                            live_stats.gold,
-                            &live_stats.current_items,
-                            &live_stats.enemy_team,
-                        );
                     }
                 } else if last_level > 0 {
                     // Match has terminated
                     last_level = 0;
+                    is_aram_bg.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         }

@@ -291,37 +291,62 @@ impl Database {
     }
 
     fn load_hero_detail_from_disk(&self, hero_id: &str) -> Option<HeroDetail> {
-        if !self.detail_dir.exists() {
-            return None;
-        }
-
         let target_prefix = format!("{}_", hero_id);
         let target_exact = format!("{}.json", hero_id);
 
-        if let Ok(entries) = fs::read_dir(&self.detail_dir) {
-            for entry in entries.flatten() {
-                let fname = entry.file_name().to_string_lossy().to_string();
-                if fname.starts_with(&target_prefix) || fname == target_exact {
-                    if let Ok(content) = fs::read_to_string(entry.path()) {
-                        if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
-                            if detail.hero_name.is_empty() {
-                                if let Some(h) = self.heroes_map.get(hero_id) {
-                                    detail.hero_name = h.name.clone();
+        // 1. Check self.detail_dir (e.g. data/json/heroes_detail)
+        if self.detail_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&self.detail_dir) {
+                for entry in entries.flatten() {
+                    let fname = entry.file_name().to_string_lossy().to_string();
+                    if fname.starts_with(&target_prefix) || fname == target_exact {
+                        if let Ok(content) = fs::read_to_string(entry.path()) {
+                            if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
+                                if detail.hero_name.is_empty() {
+                                    if let Some(h) = self.heroes_map.get(hero_id) {
+                                        detail.hero_name = h.name.clone();
+                                    }
                                 }
+                                if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
+                                    detail.hero_id = serde_json::Value::String(hero_id.to_string());
+                                }
+                                return Some(detail);
                             }
-                            if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
-                                detail.hero_id = serde_json::Value::String(hero_id.to_string());
-                            }
-                            return Some(detail);
                         }
                     }
                 }
             }
         }
+
+        // 2. Check data/cache/*/heroes_detail/{hero_id}.json
+        let cache_root = Path::new("data/cache");
+        if cache_root.exists() {
+            if let Ok(patch_dirs) = fs::read_dir(cache_root) {
+                for patch_entry in patch_dirs.flatten() {
+                    let hero_file = patch_entry.path().join("heroes_detail").join(&target_exact);
+                    if hero_file.exists() {
+                        if let Ok(content) = fs::read_to_string(&hero_file) {
+                            if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
+                                if detail.hero_name.is_empty() {
+                                    if let Some(h) = self.heroes_map.get(hero_id) {
+                                        detail.hero_name = h.name.clone();
+                                    }
+                                }
+                                if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
+                                    detail.hero_id = serde_json::Value::String(hero_id.to_string());
+                                }
+                                return Some(detail);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         None
     }
 
-    /// On-demand online fetching into in-memory hot cache (Zero local disk file generation)
+    /// On-demand online fetching for active champion into in-memory hot cache and local disk cache
     pub async fn fetch_and_cache_hero_detail(
         &self,
         hero_id: &str,
@@ -336,7 +361,7 @@ impl Database {
 
         // 2. Fetch directly from cloud API ONLY if local files are missing
         if let Some(val) = crawler.fetch_hero_detail(&hid).await {
-            if let Ok(mut detail) = serde_json::from_value::<HeroDetail>(val) {
+            if let Ok(mut detail) = serde_json::from_value::<HeroDetail>(val.clone()) {
                 if detail.hero_name.is_empty() {
                     if let Some(h) = self.heroes_map.get(&hid) {
                         detail.hero_name = h.name.clone();
@@ -347,13 +372,27 @@ impl Database {
                 }
 
                 let detail_arc = Arc::new(detail);
-                // Update L1 in-memory cache ONLY (no local disk clutter)
+                // Update L1 in-memory cache
                 if let Ok(mut map) = self.heroes_detail.write() {
                     map.insert(hid.clone(), Arc::clone(&detail_arc));
                     if !detail_arc.hero_name.is_empty() {
                         map.insert(detail_arc.hero_name.clone(), Arc::clone(&detail_arc));
                     }
                 }
+
+                // Persist to local disk cache (data/cache/{patch}/heroes_detail/{hid}.json)
+                let patch = if !self.meta.report_patch.is_empty() {
+                    self.meta.report_patch.clone()
+                } else {
+                    "default".to_string()
+                };
+                let clean_patch = patch.replace(['/', '\\'], "_");
+                let cache_dir = Path::new("data/cache").join(&clean_patch).join("heroes_detail");
+                if let Ok(()) = fs::create_dir_all(&cache_dir) {
+                    let cache_file = cache_dir.join(format!("{}.json", hid));
+                    let _ = fs::write(cache_file, serde_json::to_string(&val).unwrap_or_default());
+                }
+
                 info!("⚡ Loaded hero detail from Hexdata Cloud API for {} ({})", hid, detail_arc.hero_name);
                 return Some(detail_arc);
             }
