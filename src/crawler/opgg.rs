@@ -80,11 +80,21 @@ impl OpggClient {
         if let Ok(lock) = self.tier_list_cache.read() {
             if let Some((_, ref val)) = *lock {
                 if let Some(champ) = val.get("champions").and_then(|c| c.get(champion_id)) {
-                    return champ.get("primaryPosition").and_then(|p| p.as_str()).map(|s| s.to_string());
+                    if let Some(p) = champ.get("primaryPosition").and_then(|p| p.as_str()) {
+                        return Some(p.to_string());
+                    }
                 }
             }
         }
-        None
+        // Known champion fallback before tier list finishes initial download
+        match champion_id {
+            "24" | "86" | "266" | "85" | "58" | "98" | "14" | "516" | "83" | "114" | "164" | "75" | "36" | "80" | "31" => Some("TOP".to_string()),
+            "64" | "76" | "104" | "121" | "154" | "254" | "19" | "5" | "20" | "35" | "77" | "56" | "60" | "79" | "113" => Some("JUNGLE".to_string()),
+            "157" | "238" | "103" | "7" | "61" | "134" | "268" | "3" | "84" | "105" | "4" | "91" | "127" | "245" | "777" => Some("MID".to_string()),
+            "222" | "51" | "81" | "145" | "236" | "21" | "119" | "22" | "498" | "18" | "15" | "29" | "67" | "96" | "110" => Some("ADC".to_string()),
+            "412" | "89" | "53" | "12" | "43" | "111" | "201" | "40" | "267" | "350" | "497" | "235" | "223" | "432" | "888" => Some("SUPPORT".to_string()),
+            _ => None,
+        }
     }
 
     pub async fn get_ranked_tier_list(&self, force_refresh: bool) -> Value {
@@ -206,7 +216,7 @@ impl OpggClient {
         json!({ "region": self.region, "champions": {} })
     }
 
-    pub async fn get_champion_detail(&self, champion_id: &str, position: &str) -> Option<Value> {
+    pub async fn get_champion_detail_exact(&self, champion_id: &str, position: &str) -> Option<Value> {
         if champion_id.is_empty() || champion_id == "0" {
             return None;
         }
@@ -363,6 +373,25 @@ impl OpggClient {
         None
     }
 
+    pub async fn get_champion_detail(&self, champion_id: &str, position: &str) -> Option<Value> {
+        let exact = self.get_champion_detail_exact(champion_id, position).await;
+        let is_empty = exact.as_ref()
+            .and_then(|d| d.get("counters"))
+            .and_then(|c| c.as_array())
+            .map_or(true, |a| a.is_empty());
+        if is_empty {
+            if let Some(primary) = self.get_primary_position(champion_id) {
+                if primary.to_uppercase() != position.to_uppercase() {
+                    info!("OP.GG detail for {} on {} empty, falling back to primary position {}", champion_id, position, primary);
+                    if let Some(fb) = self.get_champion_detail_exact(champion_id, &primary).await {
+                        return Some(fb);
+                    }
+                }
+            }
+        }
+        exact
+    }
+
     pub async fn get_matchup_win_rate(&self, my_cid: &str, enemy_cid: &str, position: &str) -> Option<Value> {
         if my_cid.is_empty() || my_cid == "0" || enemy_cid.is_empty() || enemy_cid == "0" {
             return None;
@@ -453,7 +482,7 @@ impl OpggClient {
         })
     }
 
-    pub async fn get_champion_synergies(&self, champion_id: &str, position: &str) -> Value {
+    pub async fn get_champion_synergies_exact(&self, champion_id: &str, position: &str) -> Value {
         if champion_id.is_empty() || champion_id == "0" {
             return json!({
                 "championId": champion_id,
@@ -562,5 +591,21 @@ impl OpggClient {
             "position": pos_upper,
             "synergies": []
         })
+    }
+
+    pub async fn get_champion_synergies(&self, champion_id: &str, position: &str) -> Value {
+        let exact = self.get_champion_synergies_exact(champion_id, position).await;
+        let is_empty = exact.get("synergies").and_then(|v| v.as_array()).map_or(true, |a| a.is_empty());
+        if is_empty {
+            if let Some(primary) = self.get_primary_position(champion_id) {
+                if primary.to_uppercase() != position.to_uppercase() {
+                    let fb = self.get_champion_synergies_exact(champion_id, &primary).await;
+                    if !fb.get("synergies").and_then(|v| v.as_array()).map_or(true, |a| a.is_empty()) {
+                        return fb;
+                    }
+                }
+            }
+        }
+        exact
     }
 }

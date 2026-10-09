@@ -274,13 +274,8 @@ impl InGameOverlay {
                     }
                 }
 
-                // 卡牌尚未弹出，普通对线待命：
-                // 若玩家阵亡或开局前 90 秒，提速至 0.5s 待命；正常战斗时 1.2s 一次（0.005ms 指纹检查，0 掉帧）
-                if stats.is_dead || stats.game_time < 90.0 {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                } else {
-                    tokio::time::sleep(Duration::from_millis(1200)).await;
-                }
+                // 卡牌尚未弹出，普通对局待命（0.005ms 指纹检查，0 掉帧）
+                tokio::time::sleep(Duration::from_millis(800)).await;
             }
         });
     }

@@ -325,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
-                            let (c_heroes, s_heroes) = if s.is_local_player {
+                            let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
                                 fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
                             } else {
                                 (Vec::new(), Vec::new())
@@ -363,7 +363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
-                            let (c_heroes, s_heroes) = if is_opp {
+                            let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
                                 fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
                             } else {
                                 (Vec::new(), Vec::new())
@@ -431,6 +431,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
+                        // Pick phase fallback: if local player has not locked or lane_counters is empty
+                        if lane_counters.is_empty() {
+                            let enemy_counterpart = d.state.their_team.iter().find(|s| s.position == local_pos && !s.champion_id.is_empty())
+                                .or_else(|| d.state.their_team.iter().find(|s| !s.champion_id.is_empty()));
+                            if let Some(enemy) = enemy_counterpart {
+                                let c_data = opgg_bg.get_counter_picks_against(&enemy.champion_id, &local_pos, Some(8)).await;
+                                if let Some(c_arr) = c_data.get("counters").and_then(|v| v.as_array()) {
+                                    for c in c_arr {
+                                        let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
+                                        let opp_name = db_bg.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
+                                        let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                        let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+                                        let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
+                                        lane_counters.push(crate::overlay::CounterHeroItem {
+                                            champion_id: opp_cid.parse().unwrap_or(0),
+                                            name: opp_name,
+                                            tier,
+                                            counter_win_rate: c_wr,
+                                            overall_win_rate: c_wr,
+                                            games,
+                                        });
+                                    }
+                                }
+                            }
+
+                            // If still empty (e.g. no enemy champions picked yet), pull top meta picks for local_pos
+                            if lane_counters.is_empty() && !local_pos.is_empty() {
+                                let tier_list = opgg_bg.get_ranked_tier_list(false).await;
+                                if let Some(champs) = tier_list.get("champions").and_then(|v| v.as_object()) {
+                                    let mut meta_picks: Vec<(i32, String, i32, f64, i64)> = Vec::new();
+                                    for (cid_str, cval) in champs {
+                                        if let Some(pos_obj) = cval.get("positions").and_then(|p| p.get(&local_pos)) {
+                                            let tier = pos_obj.get("tier").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
+                                            let wr = pos_obj.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                            let games = pos_obj.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+                                            let name = db_bg.resolve_hero_name(cid_str).unwrap_or_else(|| format!("Hero-{}", cid_str));
+                                            let cid_num = cid_str.parse::<i32>().unwrap_or(0);
+                                            meta_picks.push((cid_num, name, tier, wr, games));
+                                        }
+                                    }
+                                    meta_picks.sort_by(|a, b| {
+                                        a.2.cmp(&b.2).then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
+                                    });
+                                    for (cid_num, name, tier, wr, games) in meta_picks.into_iter().take(8) {
+                                        lane_counters.push(crate::overlay::CounterHeroItem {
+                                            champion_id: cid_num,
+                                            name,
+                                            tier,
+                                            counter_win_rate: wr,
+                                            overall_win_rate: wr,
+                                            games,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
                         let rec_text = if let Some(ref local) = local_slot {
                             if !local.champion_id.is_empty() {
                                 let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
@@ -448,7 +505,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     format!("已选[{}]: 推荐符文已就绪 · 召唤师技能: 闪现 + 点燃", local.champion_name)
                                 }
                             } else {
-                                "等待选择英雄 · 锁定后将自动推送一键符文与对位建议".to_string()
+                                let enemy_counterpart = d.state.their_team.iter().find(|s| s.position == local_pos && !s.champion_id.is_empty());
+                                if let Some(enemy) = enemy_counterpart {
+                                    format!("敌方已锁定 [{}]: 克制英雄推荐已呈现于顶部决策栏", enemy.champion_name)
+                                } else {
+                                    format!("[{}] 选人思考期: 当前分路版本强势英雄已推荐于顶部", local.position_cn)
+                                }
                             }
                         } else {
                             "排位选人辅助已激活 · 实时分析对位胜率".to_string()
