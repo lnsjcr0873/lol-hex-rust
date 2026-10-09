@@ -967,7 +967,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_hexdata_crawler_and_lazy_load() {
-        let db = Database::new();
+        let mut db = Database::load_from_dir("data");
+        if db.heroes_summary.is_empty() {
+            db = Database::load_from_dir("../data");
+        }
         let crawler = crate::crawler::HexdataCrawler::new();
 
         let initial_len = db.heroes_detail.read().unwrap().len();

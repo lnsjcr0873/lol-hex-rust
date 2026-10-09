@@ -363,7 +363,9 @@ impl Database {
         if let Some(val) = crawler.fetch_hero_detail(&hid).await {
             if let Ok(mut detail) = serde_json::from_value::<HeroDetail>(val.clone()) {
                 if detail.hero_name.is_empty() {
-                    if let Some(h) = self.heroes_map.get(&hid) {
+                    if let Some(name) = self.resolve_hero_name(&hid) {
+                        detail.hero_name = name;
+                    } else if let Some(h) = self.heroes_map.get(&hid) {
                         detail.hero_name = h.name.clone();
                     }
                 }
