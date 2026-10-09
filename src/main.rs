@@ -303,10 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if current_sig == last_draft_sig {
                             if let Some(ref cached) = cached_ranked_data {
                                 let my_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count();
-                                let their_ready = cached.their_team.iter().filter(|s| s.profile.is_some()).count();
-                                let my_done = my_ready >= 4 || my_ready == d.state.my_team.len();
-                                let their_done = their_ready > 0 || d.state.their_team.iter().all(|s| s.profile.is_none());
-                                if my_done && their_done {
+                                if my_ready >= 4 || my_ready == d.state.my_team.len() {
                                     ranked_bg.show_ranked_draft(cached.clone());
                                     continue;
                                 }

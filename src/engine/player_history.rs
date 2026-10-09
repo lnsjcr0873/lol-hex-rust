@@ -112,9 +112,6 @@ impl PlayerHistoryManager {
         let mut first_win = None;
 
         let mut champ_counts: HashMap<i32, (i32, i32)> = HashMap::new(); // cid -> (games, wins)
-        let mut total_k = 0i32;
-        let mut total_d = 0i32;
-        let mut total_a = 0i32;
 
         for m in slice {
             if m.is_win {
@@ -139,10 +136,6 @@ impl PlayerHistoryManager {
                     entry.1 += 1;
                 }
             }
-
-            total_k += m.kills;
-            total_d += m.deaths;
-            total_a += m.assists;
         }
 
         let m_losses = m_count - m_wins;
@@ -461,7 +454,7 @@ impl PlayerHistoryManager {
 
         // 2. Collect candidate teammates from chat conversation participants
         let chat_details = session.get("chatDetails");
-        let mut chat_room_id = chat_details
+        let chat_room_id = chat_details
             .and_then(|c| c.get("multiUserChatId").or_else(|| c.get("chatRoomId")).or_else(|| c.get("chatRoomName")))
             .and_then(|v| v.as_str())
             .or_else(|| session.get("chatRoomId").and_then(|v| v.as_str()))
@@ -482,7 +475,6 @@ impl PlayerHistoryManager {
                     let parts = lcu.get_chat_conversation_participants(c_id).await;
                     if !parts.is_empty() {
                         participants = parts;
-                        chat_room_id = Some(c_id.to_string());
                         break;
                     }
                 }

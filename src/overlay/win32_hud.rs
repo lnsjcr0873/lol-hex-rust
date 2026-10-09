@@ -1569,7 +1569,6 @@ unsafe fn render_ranked_hud(
 
             for (p_idx, item) in visible_items.iter().enumerate() {
                 let px1 = pill_start_x + p_idx as i32 * (pill_w + pill_gap);
-                let px2 = px1 + pill_w;
                 let (t_fg, t_bg) = match item.tier {
                     1 => (rgb(0, 230, 150), rgb(4, 47, 26)),
                     2 => (rgb(59, 130, 246), rgb(12, 43, 78)),
