@@ -158,6 +158,46 @@ impl LcuClient {
         Value::Null
     }
 
+    pub async fn get_gameflow_session(&self) -> Value {
+        if !self.ensure_credentials().await {
+            return Value::Null;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return Value::Null,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return Value::Null,
+        };
+
+        let url = format!("https://127.0.0.1:{}/lol-gameflow/v1/session", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                if let Ok(data) = res.json::<Value>().await {
+                    return data;
+                }
+            }
+        }
+        Value::Null
+    }
+
+    pub async fn get_rso_access_token(&self) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!("https://127.0.0.1:{}/lol-rso-auth/v1/authorization/access-token", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
     pub async fn swap_bench_champion(&self, champion_id: &str) -> bool {
         if !self.ensure_credentials().await {
             return false;

@@ -1,9 +1,22 @@
+use crate::engine::ranked_draft::{ORDERED_POSITIONS, SHORT_POS_NAMES_CN};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GameflowSlotInfo {
+    pub cell_id: i64,
+    pub puuid: String,
+    pub summoner_name: String,
+    pub champion_id: i32,
+    pub position: String,
+    pub position_cn: String,
+    pub is_local_player: bool,
+    pub profile: Option<PlayerTacticalProfile>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PlayerTacticalProfile {
@@ -154,18 +167,16 @@ impl PlayerHistoryManager {
         let cur_wr_pct = if cur_g > 0 {
             ((cur_w as f64 / cur_g as f64) * 100.0).round() as i32
         } else {
-            50
+            0
         };
 
         let cur_champ_tag = if current_champion_id > 0 {
-            if cur_g >= 3 && cur_wr_pct >= 60 {
+            if cur_g >= 4 && cur_wr_pct >= 60 {
                 format!("👑 绝活({}%)", cur_wr_pct)
             } else if cur_g >= 1 {
                 format!("近{}场 {}%", cur_g, cur_wr_pct)
-            } else if m_count >= 4 {
-                "⚠️ 试英雄(0场)".to_string()
             } else {
-                "近期未选".to_string()
+                "⚠️ 试英雄(0场)".to_string()
             }
         } else {
             String::new()
@@ -176,15 +187,15 @@ impl PlayerHistoryManager {
             format!("🔥 {}连胜大爹", streak_count)
         } else if streak_type == "loss" && streak_count >= 3 {
             format!("❄️ {}连败预警", streak_count)
-        } else if current_champion_id > 0 && cur_g >= 3 && cur_wr_pct >= 60 {
+        } else if current_champion_id > 0 && cur_g >= 4 && cur_wr_pct >= 60 {
             format!("👑 绝活({}%)", cur_wr_pct)
-        } else if current_champion_id > 0 && m_count >= 4 && cur_g == 0 {
+        } else if current_champion_id > 0 && cur_g == 0 && m_count >= 2 {
             "⚠️ 试英雄".to_string()
-        } else if win_rate_pct >= 70 && m_count >= 6 {
+        } else if win_rate_pct >= 70 && m_count >= 5 {
             "⚡ 通天代".to_string()
         } else if win_rate_pct >= 55 {
             "📈 稳定上分".to_string()
-        } else if win_rate_pct <= 42 && m_count >= 6 {
+        } else if win_rate_pct <= 42 && m_count >= 5 {
             "⚠️ 状态低迷".to_string()
         } else {
             "⚖️ 均势玩家".to_string()
@@ -336,43 +347,49 @@ impl PlayerHistoryManager {
                     }
                 }
 
-                let p = target_p.or_else(|| participants.first());
+                let part = match target_p {
+                    Some(p) => p,
+                    None => continue,
+                };
 
-                if let Some(part) = p {
-                    let stats = part.get("stats");
-                    let is_win = stats.and_then(|s| s.get("win"))
-                        .or_else(|| part.get("win"))
-                        .map(|w| {
-                            w.as_bool().unwrap_or_else(|| w.as_i64() == Some(1) || w.as_str() == Some("true") || w.as_str() == Some("Win"))
-                        })
-                        .unwrap_or(false);
+                let stats = part.get("stats");
+                let is_win = stats.and_then(|s| s.get("win"))
+                    .or_else(|| part.get("win"))
+                    .map(|w| {
+                        w.as_bool().unwrap_or_else(|| w.as_i64() == Some(1) || w.as_str() == Some("true") || w.as_str() == Some("Win"))
+                    })
+                    .unwrap_or(false);
 
-                    let cid = part.get("championId")
-                        .or_else(|| stats.and_then(|s| s.get("championId")))
-                        .and_then(|c| c.as_i64())
-                        .unwrap_or(0) as i32;
+                let cid = part.get("championId")
+                    .or_else(|| stats.and_then(|s| s.get("championId")))
+                    .and_then(|c| c.as_i64())
+                    .unwrap_or(0) as i32;
 
-                    let k = stats.and_then(|s| s.get("kills"))
-                        .or_else(|| part.get("kills"))
-                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let k = stats.and_then(|s| s.get("kills"))
+                    .or_else(|| part.get("kills"))
+                    .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-                    let d = stats.and_then(|s| s.get("deaths"))
-                        .or_else(|| part.get("deaths"))
-                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let d = stats.and_then(|s| s.get("deaths"))
+                    .or_else(|| part.get("deaths"))
+                    .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-                    let a = stats.and_then(|s| s.get("assists"))
-                        .or_else(|| part.get("assists"))
-                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let a = stats.and_then(|s| s.get("assists"))
+                    .or_else(|| part.get("assists"))
+                    .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-                    parsed_matches.push(ParsedMatchRecord {
-                        is_win,
-                        champion_id: cid,
-                        kills: k,
-                        deaths: d,
-                        assists: a,
-                    });
-                }
+                parsed_matches.push(ParsedMatchRecord {
+                    is_win,
+                    champion_id: cid,
+                    kills: k,
+                    deaths: d,
+                    assists: a,
+                });
             }
+        }
+
+        if parsed_matches.is_empty() && ranked.is_none() {
+            // Network failure or timeout: do not cache empty failure long-term
+            return None;
         }
 
         let record = CachedPlayerRecord {
@@ -518,37 +535,243 @@ impl PlayerHistoryManager {
         }
 
         // 4. Concurrently fetch or compute tactical profiles
-        let sample_limit = self.sample_count.load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let mut profiles = Vec::with_capacity(slot_count);
-
-        for (idx, slot) in assigned_puuids.iter().enumerate() {
+        let mut player_inputs = Vec::with_capacity(slot_count);
+        for (idx, slot) in assigned_puuids.into_iter().enumerate() {
             let cur_cid = my_team_cids.get(idx).copied().unwrap_or(0);
-            if let Some((ref puuid, ref name)) = slot {
+            if let Some((p, n)) = slot {
+                player_inputs.push((Some(p), Some(n), cur_cid));
+            } else {
+                player_inputs.push((None, None, cur_cid));
+            }
+        }
+
+        self.batch_resolve_players(&player_inputs, lcu).await
+    }
+
+    pub async fn resolve_opponents_champ_select(
+        &self,
+        session: &Value,
+        their_team_cids: &[i32],
+        lcu: &crate::lcu::LcuClient,
+    ) -> Vec<Option<PlayerTacticalProfile>> {
+        let slot_count = their_team_cids.len().max(5);
+        let mut player_inputs = Vec::with_capacity(slot_count);
+
+        let their_arr = session.get("theirTeam").and_then(|v| v.as_array());
+        for idx in 0..slot_count {
+            let cur_cid = their_team_cids.get(idx).copied().unwrap_or(0);
+            let mut puuid_opt = None;
+            let mut name_opt = None;
+
+            if let Some(arr) = their_arr {
+                if let Some(m) = arr.get(idx) {
+                    if let Some(p) = m.get("puuid").and_then(|v| v.as_str()) {
+                        if !p.is_empty() && p != "0" {
+                            puuid_opt = Some(p.to_string());
+                            let n = m.get("summonerName")
+                                .or_else(|| m.get("gameName"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            name_opt = Some(n.to_string());
+                        }
+                    }
+                }
+            }
+
+            player_inputs.push((puuid_opt, name_opt, cur_cid));
+        }
+
+        self.batch_resolve_players(&player_inputs, lcu).await
+    }
+
+    pub async fn batch_resolve_players(
+        &self,
+        players: &[(Option<String>, Option<String>, i32)],
+        lcu: &crate::lcu::LcuClient,
+    ) -> Vec<Option<PlayerTacticalProfile>> {
+        let sample_limit = self.sample_count.load(std::sync::atomic::Ordering::Relaxed) as usize;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+
+        let mut handles = Vec::with_capacity(players.len());
+        for (puuid_opt, name_opt, cur_cid) in players {
+            let p_opt = puuid_opt.clone();
+            let n_opt = name_opt.clone();
+            let cid = *cur_cid;
+            let mgr = self.clone();
+            let lcu_client = lcu.clone();
+            let sem = semaphore.clone();
+
+            handles.push(tokio::spawn(async move {
+                let puuid = match p_opt {
+                    Some(ref p) if !p.is_empty() && p != "0" => p.clone(),
+                    _ => return None,
+                };
+                let name = n_opt.unwrap_or_default();
+
                 let cached_record = {
-                    let guard = self.raw_cache.read().await;
-                    guard.get(puuid).cloned()
+                    let guard = mgr.raw_cache.read().await;
+                    guard.get(&puuid).cloned()
                 };
 
                 let record = if let Some(rec) = cached_record {
                     if rec.fetched_at.elapsed() < Duration::from_secs(600) {
                         Some(rec)
                     } else {
-                        self.fetch_and_cache_player(puuid, name, lcu).await
+                        let _permit = sem.acquire().await.ok()?;
+                        mgr.fetch_and_cache_player(&puuid, &name, &lcu_client).await
                     }
                 } else {
-                    self.fetch_and_cache_player(puuid, name, lcu).await
+                    let _permit = sem.acquire().await.ok()?;
+                    mgr.fetch_and_cache_player(&puuid, &name, &lcu_client).await
                 };
 
-                if let Some(rec) = record {
-                    profiles.push(Some(self.compute_tactical_profile(&rec, cur_cid, sample_limit)));
-                } else {
-                    profiles.push(None);
+                record.map(|r| mgr.compute_tactical_profile(&r, cid, sample_limit))
+            }));
+        }
+
+        let mut profiles = Vec::with_capacity(players.len());
+        for h in handles {
+            profiles.push(h.await.unwrap_or(None));
+        }
+        profiles
+    }
+
+    pub async fn resolve_gameflow_10_players(
+        &self,
+        session: &Value,
+        lcu: &crate::lcu::LcuClient,
+    ) -> Option<(Vec<GameflowSlotInfo>, Vec<GameflowSlotInfo>)> {
+        let game_data = session.get("gameData")?;
+        let team_one_raw = game_data.get("teamOne").and_then(|v| v.as_array())?;
+        let team_two_raw = game_data.get("teamTwo").and_then(|v| v.as_array())?;
+
+        if team_one_raw.is_empty() && team_two_raw.is_empty() {
+            return None;
+        }
+
+        let selections_raw = game_data.get("playerChampionSelections").and_then(|v| v.as_array());
+        let mut selection_map: HashMap<String, i32> = HashMap::new();
+        let mut cell_selection_map: HashMap<i64, i32> = HashMap::new();
+        if let Some(sels) = selections_raw {
+            for sel in sels {
+                let cid = sel.get("championId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                if cid > 0 {
+                    if let Some(p) = sel.get("puuid").and_then(|v| v.as_str()) {
+                        selection_map.insert(p.to_string(), cid);
+                    }
+                    if let Some(n) = sel.get("summonerInternalName").and_then(|v| v.as_str()) {
+                        selection_map.insert(n.to_string(), cid);
+                    }
+                    if let Some(cell) = sel.get("cellId").and_then(|v| v.as_i64()) {
+                        cell_selection_map.insert(cell, cid);
+                    }
                 }
-            } else {
-                profiles.push(None);
             }
         }
 
-        profiles
+        let mut local_puuid = {
+            let guard = self.cached_local_puuid.read().await;
+            guard.clone()
+        };
+        if local_puuid.is_none() {
+            if let Some(cur) = lcu.get_current_summoner().await {
+                if let Some(p) = cur.get("puuid").and_then(|v| v.as_str()) {
+                    let mut p_guard = self.cached_local_puuid.write().await;
+                    *p_guard = Some(p.to_string());
+                    local_puuid = Some(p.to_string());
+                }
+            }
+        }
+
+        let parse_team = |raw_team: &[Value]| -> Vec<GameflowSlotInfo> {
+            let mut slots = Vec::new();
+            for (idx, p) in raw_team.iter().enumerate() {
+                let puuid = p.get("puuid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let summoner_name = p.get("gameName")
+                    .or_else(|| p.get("summonerName"))
+                    .or_else(|| p.get("displayName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let cell_id = p.get("cellId").and_then(|v| v.as_i64()).unwrap_or(idx as i64);
+                let internal_name = p.get("summonerInternalName").and_then(|v| v.as_str()).unwrap_or("");
+
+                let mut cid = p.get("championId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                if cid == 0 && !puuid.is_empty() {
+                    cid = selection_map.get(&puuid).copied().unwrap_or(0);
+                }
+                if cid == 0 && !internal_name.is_empty() {
+                    cid = selection_map.get(internal_name).copied().unwrap_or(0);
+                }
+                if cid == 0 {
+                    cid = cell_selection_map.get(&cell_id).copied().unwrap_or(0);
+                }
+
+                let auto_pos = p.get("selectedPosition").and_then(|v| v.as_str()).and_then(|s| {
+                    match s.to_lowercase().as_str() {
+                        "top" => Some("TOP"),
+                        "jungle" => Some("JUNGLE"),
+                        "middle" | "mid" => Some("MID"),
+                        "bottom" | "bot" => Some("ADC"),
+                        "utility" | "support" => Some("SUPPORT"),
+                        _ => None,
+                    }
+                });
+                let pos = auto_pos.unwrap_or_else(|| ORDERED_POSITIONS[idx % 5]);
+                let pos_idx = ORDERED_POSITIONS.iter().position(|&op| op == pos).unwrap_or(idx % 5);
+
+                let is_local = if let Some(ref lp) = local_puuid {
+                    !puuid.is_empty() && puuid == *lp
+                } else {
+                    false
+                };
+
+                slots.push(GameflowSlotInfo {
+                    cell_id,
+                    puuid,
+                    summoner_name,
+                    champion_id: cid,
+                    position: pos.to_string(),
+                    position_cn: SHORT_POS_NAMES_CN[pos_idx].to_string(),
+                    is_local_player: is_local,
+                    profile: None,
+                });
+            }
+            slots
+        };
+
+        let team_one = parse_team(team_one_raw);
+        let team_two = parse_team(team_two_raw);
+
+        let team_one_has_local = team_one.iter().any(|s| s.is_local_player);
+        let team_two_has_local = team_two.iter().any(|s| s.is_local_player);
+
+        let (mut my_team, mut their_team) = if team_two_has_local && !team_one_has_local {
+            (team_two, team_one)
+        } else {
+            (team_one, team_two)
+        };
+
+        let mut inputs = Vec::new();
+        for s in &my_team {
+            inputs.push((Some(s.puuid.clone()), Some(s.summoner_name.clone()), s.champion_id));
+        }
+        for s in &their_team {
+            inputs.push((Some(s.puuid.clone()), Some(s.summoner_name.clone()), s.champion_id));
+        }
+
+        let profiles = self.batch_resolve_players(&inputs, lcu).await;
+        let my_len = my_team.len();
+        for (i, p) in profiles.into_iter().enumerate() {
+            if i < my_len {
+                my_team[i].profile = p;
+            } else if (i - my_len) < their_team.len() {
+                their_team[i - my_len].profile = p;
+            }
+        }
+
+        Some((my_team, their_team))
     }
 }
+

@@ -302,16 +302,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         if current_sig == last_draft_sig {
                             if let Some(ref cached) = cached_ranked_data {
-                                let profiles_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count();
-                                if profiles_ready >= 4 || profiles_ready == d.state.my_team.len() {
+                                let my_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count();
+                                let their_ready = cached.their_team.iter().filter(|s| s.profile.is_some()).count();
+                                let my_done = my_ready >= 4 || my_ready == d.state.my_team.len();
+                                let their_done = their_ready > 0 || d.state.their_team.iter().all(|s| s.profile.is_none());
+                                if my_done && their_done {
                                     ranked_bg.show_ranked_draft(cached.clone());
                                     continue;
                                 }
                             }
                         }
 
-                        // Resolve teammate profiles via enhanced multi-tier resolver
+                        // Resolve teammate and opponent profiles via enhanced multi-tier resolver
                         let profiles = history_bg.resolve_teammates(&session, &my_cids, &my_locals, &lcu_bg).await;
+                        let their_cids: Vec<i32> = d.state.their_team.iter().map(|s| s.champion_id.parse::<i32>().unwrap_or(0)).collect();
+                        let their_profiles = history_bg.resolve_opponents_champ_select(&session, &their_cids, &lcu_bg).await;
 
                         let local_slot = d.state.my_team.iter().find(|s| s.is_local_player).cloned();
                         let local_pos = local_slot.as_ref().map(|s| s.position.clone()).unwrap_or_default();
@@ -357,6 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let mut their_slots = Vec::new();
                         for (idx, s) in d.state.their_team.iter().enumerate() {
+                            let prof = their_profiles.get(idx).cloned().flatten();
                             let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
                             let is_opp = !local_pos.is_empty() && s.position == local_pos;
                             let my_opp = d.state.my_team.iter().find(|m| m.position == s.position);
@@ -387,7 +393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 is_locked: !s.champion_id.is_empty(),
                                 is_manual_pos: false,
                                 matchup_win_rate: m_wr,
-                                profile: None,
+                                profile: prof,
                                 counter_heroes: c_heroes,
                                 synergy_heroes: s_heroes,
                             });
@@ -545,87 +551,170 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                 }
+            } else if phase == "GameStart" {
+                if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                    bench_bg.stop();
+                }
+
+                // If 10 players are already resolved and in cache, keep displaying without spamming LCU
+                if let Some(ref cached) = cached_ranked_data {
+                    let total_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count()
+                        + cached.their_team.iter().filter(|s| s.profile.is_some()).count();
+                    if total_ready >= 8 {
+                        ranked_bg.show_ranked_draft(cached.clone());
+                        continue;
+                    }
+                }
+
+                let gf_session = lcu_bg.get_gameflow_session().await;
+                if !gf_session.is_null() {
+                    if let Some((my_team_info, their_team_info)) = history_bg.resolve_gameflow_10_players(&gf_session, &lcu_bg).await {
+                        let mut my_slots = Vec::new();
+                        for (idx, s) in my_team_info.into_iter().enumerate() {
+                            let cname = if s.champion_id > 0 {
+                                db_bg.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone())
+                            } else if !s.summoner_name.is_empty() {
+                                s.summoner_name.clone()
+                            } else {
+                                format!("队友{}", idx + 1)
+                            };
+                            let wr = s.profile.as_ref().map(|p| if p.cur_champ_win_rate_pct > 0 { p.cur_champ_win_rate_pct as f64 / 100.0 } else { p.win_rate_pct as f64 / 100.0 }).unwrap_or(0.5);
+                            my_slots.push(crate::overlay::RankedSlotView {
+                                slot_index: idx,
+                                position: s.position,
+                                position_cn: s.position_cn,
+                                champion_name: cname,
+                                champion_id: s.champion_id,
+                                win_rate: wr,
+                                tier: 3,
+                                is_local_player: s.is_local_player,
+                                is_locked: true,
+                                is_manual_pos: false,
+                                matchup_win_rate: None,
+                                profile: s.profile,
+                                counter_heroes: Vec::new(),
+                                synergy_heroes: Vec::new(),
+                            });
+                        }
+
+                        let mut their_slots = Vec::new();
+                        for (idx, s) in their_team_info.into_iter().enumerate() {
+                            let cname = if s.champion_id > 0 {
+                                db_bg.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone())
+                            } else if !s.summoner_name.is_empty() {
+                                s.summoner_name.clone()
+                            } else {
+                                format!("对手{}", idx + 1)
+                            };
+                            let wr = s.profile.as_ref().map(|p| if p.cur_champ_win_rate_pct > 0 { p.cur_champ_win_rate_pct as f64 / 100.0 } else { p.win_rate_pct as f64 / 100.0 }).unwrap_or(0.5);
+                            their_slots.push(crate::overlay::RankedSlotView {
+                                slot_index: idx,
+                                position: s.position,
+                                position_cn: s.position_cn,
+                                champion_name: cname,
+                                champion_id: s.champion_id,
+                                win_rate: wr,
+                                tier: 3,
+                                is_local_player: false,
+                                is_locked: true,
+                                is_manual_pos: false,
+                                matchup_win_rate: None,
+                                profile: s.profile,
+                                counter_heroes: Vec::new(),
+                                synergy_heroes: Vec::new(),
+                            });
+                        }
+
+                        let overlay_data = crate::overlay::RankedOverlayData {
+                            my_team: my_slots,
+                            their_team: their_slots,
+                            decision_card: Default::default(),
+                            recommendation: "对局加载中 · 双方10人实战画像已同步".to_string(),
+                        };
+                        ranked_bg.show_ranked_draft(overlay_data.clone());
+                        cached_ranked_data = Some(overlay_data);
+                    }
+                }
+            } else if phase == "InProgress" {
+                // In-Game Live 2999 Port Monitoring Workflow
+                let mut live_stats = live_bg.get_live_stats().await;
+                if live_stats.is_in_game {
+                    if live_stats.hero_id.is_empty() && !live_stats.hero_name.is_empty() {
+                        if let Some(resolved) = db_bg.resolve_hero_id(&live_stats.hero_name) {
+                            live_stats.hero_id = resolved;
+                        }
+                    }
+
+                    is_aram_bg.store(live_stats.is_aram, std::sync::atomic::Ordering::SeqCst);
+                    if live_stats.is_aram {
+                        // ARAM mode: transition from ranked overlay to augments
+                        if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
+                            ranked_bg.stop();
+                        }
+                        if !live_stats.hero_id.is_empty() {
+                            let crawler = hex_bg.clone();
+                            let db_clone = db_bg.clone();
+                            let hero_id = live_stats.hero_id.clone();
+                            tokio::spawn(async move {
+                                let _ = db_clone.fetch_and_cache_hero_detail(&hero_id, &crawler).await;
+                            });
+                        }
+
+                        let current_lvl = live_stats.level;
+                        let is_milestone = if last_level == 0 {
+                            matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
+                        } else if current_lvl > 0 && current_lvl != last_level {
+                            matches!(current_lvl, 3 | 7 | 11 | 15)
+                        } else {
+                            false
+                        };
+
+                        if is_milestone {
+                            info!("ARAM level milestone reached: Level {}! Triggering augment readiness", current_lvl);
+                            TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
+                            let ingame_auto = ingame_bg.clone();
+                            let db_auto = db_bg.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                ingame_auto.trigger_scan_with_db(&db_auto);
+                            });
+                        }
+                        last_level = current_lvl;
+
+                        item_bg.update_recommendations_from_live(
+                            &db_bg,
+                            &live_stats.hero_id,
+                            &live_stats.hero_name,
+                            live_stats.gold,
+                            &live_stats.current_items,
+                            &live_stats.enemy_team,
+                        );
+                    } else {
+                        // Summoner's Rift: keep ranked overlay for loading/early game, update item recommendation
+                        last_level = live_stats.level;
+                        item_bg.update_recommendations_from_live(
+                            &db_bg,
+                            &live_stats.hero_id,
+                            &live_stats.hero_name,
+                            live_stats.gold,
+                            &live_stats.current_items,
+                            &live_stats.enemy_team,
+                        );
+                    }
+                }
             } else {
+                // Out of match: Lobby, Matchmaking, EndOfGame, etc. -> Clean up!
                 last_draft_sig.clear();
                 cached_ranked_data = None;
+                if last_level > 0 {
+                    last_level = 0;
+                    is_aram_bg.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
                 }
                 if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                     ranked_bg.stop();
-                }
-
-                // In-Game Live 2999 Port Monitoring Workflow (Active whenever in game or phase == InProgress)
-                let mut live_stats = live_bg.get_live_stats().await;
-                if phase == "InProgress" || live_stats.is_in_game {
-                    if live_stats.is_in_game {
-                        // 补齐并保证 hero_id 的准确性 (通过英文/中文英雄名在本地字典反查)
-                        if live_stats.hero_id.is_empty() && !live_stats.hero_name.is_empty() {
-                            if let Some(resolved) = db_bg.resolve_hero_id(&live_stats.hero_name) {
-                                live_stats.hero_id = resolved;
-                            }
-                        }
-
-                        is_aram_bg.store(live_stats.is_aram, std::sync::atomic::Ordering::SeqCst);
-                        if live_stats.is_aram {
-                            // ARAM only: on-demand fetch hero detail with cookie handshake
-                            if !live_stats.hero_id.is_empty() {
-                                let crawler = hex_bg.clone();
-                                let db_clone = db_bg.clone();
-                                let hero_id = live_stats.hero_id.clone();
-                                tokio::spawn(async move {
-                                    let _ = db_clone.fetch_and_cache_hero_detail(&hero_id, &crawler).await;
-                                });
-                            }
-
-                            // Level Milestone Perception (ARAM 3/7/11/15 only)
-                            let current_lvl = live_stats.level;
-                            let is_milestone = if last_level == 0 {
-                                matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
-                            } else if current_lvl > 0 && current_lvl != last_level {
-                                matches!(current_lvl, 3 | 7 | 11 | 15)
-                            } else {
-                                false
-                            };
-
-                            if is_milestone {
-                                info!("ARAM level milestone reached: Level {}! Triggering augment readiness", current_lvl);
-                                TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
-                                let ingame_auto = ingame_bg.clone();
-                                let db_auto = db_bg.clone();
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-                                    ingame_auto.trigger_scan_with_db(&db_auto);
-                                });
-                            }
-                            last_level = current_lvl;
-
-                            // Continuously push real-time gold, owned components, and enemy items to ItemOverlay
-                            item_bg.update_recommendations_from_live(
-                                &db_bg,
-                                &live_stats.hero_id,
-                                &live_stats.hero_name,
-                                live_stats.gold,
-                                &live_stats.current_items,
-                                &live_stats.enemy_team,
-                            );
-                        } else {
-                            // Summoner's Rift: Strictly NO hextech augment milestones or speech!
-                            last_level = live_stats.level;
-                            item_bg.update_recommendations_from_live(
-                                &db_bg,
-                                &live_stats.hero_id,
-                                &live_stats.hero_name,
-                                live_stats.gold,
-                                &live_stats.current_items,
-                                &live_stats.enemy_team,
-                            );
-                        }
-                    }
-                } else if last_level > 0 {
-                    // Match has terminated
-                    last_level = 0;
-                    is_aram_bg.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         }

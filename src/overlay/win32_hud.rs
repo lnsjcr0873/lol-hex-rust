@@ -378,24 +378,37 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         }
     }
 
-    // 10. Hero Inspection slot buttons (click slot to inspect that hero)
-    for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.inspect_slot_btns {
+    // 10. Pos buttons (left click cycles position pill - checked before slot card)
+    let mut hit_pos_btn = false;
+    for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.pos_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
-            if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                if inter.inspect_slot == Some((*is_my_team, *slot_index)) {
-                    inter.inspect_slot = None;
-                } else {
-                    inter.inspect_closed = false;
-                    inter.inspect_slot = Some((*is_my_team, *slot_index));
-                    inter.inspect_scroll_offset = 0;
-                }
-                repaint_needed = true;
-            }
+            cycle_slot_position(*is_my_team, *slot_index);
+            repaint_needed = true;
+            hit_pos_btn = true;
             break;
         }
     }
 
-    // 11. Hero Inspection nav buttons
+    // 11. Hero Inspection slot buttons (click slot card to inspect that hero)
+    if !hit_pos_btn {
+        for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.inspect_slot_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+                if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                    if inter.inspect_slot == Some((*is_my_team, *slot_index)) {
+                        inter.inspect_slot = None;
+                    } else {
+                        inter.inspect_closed = false;
+                        inter.inspect_slot = Some((*is_my_team, *slot_index));
+                        inter.inspect_scroll_offset = 0;
+                    }
+                    repaint_needed = true;
+                }
+                break;
+            }
+        }
+    }
+
+    // 12. Hero Inspection nav buttons
     for ((x1, y1, x2, y2), delta) in &hotzones.inspect_nav_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
             if let Ok(mut inter) = RANKED_INTERACTION.write() {
@@ -404,15 +417,6 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
                 inter.inspect_scroll_offset = next;
                 repaint_needed = true;
             }
-            break;
-        }
-    }
-
-    // 12. Pos buttons (left click cycles as well)
-    for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.pos_btns {
-        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
-            cycle_slot_position(*is_my_team, *slot_index);
-            repaint_needed = true;
             break;
         }
     }
@@ -1779,11 +1783,93 @@ unsafe fn render_ranked_hud(
             draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, if is_inspected { rgb(251, 191, 36) } else { rgb(225, 29, 72) });
             new_hotzones.inspect_slot_btns.push(((wx1, cy1, wx2, cy1 + card_h), false, idx));
 
-            let enemy_cname = if slot.champion_name.is_empty() { format!("敌方{}楼", idx + 1) } else { slot.champion_name.clone() };
-            let row1_text = format!("[{}] {}", slot.position_cn, enemy_cname);
-            draw_text_line(hdc, &row1_text, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
-            draw_text_line(hdc, "🔒 选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
-            draw_text_line(hdc, "⚔️ 进入对局后自动解锁", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+            let enemy_cname = if slot.champion_name.is_empty() {
+                format!("敌方{}楼", idx + 1)
+            } else {
+                slot.champion_name.clone()
+            };
+
+            let slot_name = if let Some(ref p) = slot.profile {
+                if !p.summoner_name.is_empty() {
+                    let raw_n = p.summoner_name.clone();
+                    if raw_n.chars().count() > 6 { format!("{}…", raw_n.chars().take(5).collect::<String>()) } else { raw_n }
+                } else {
+                    enemy_cname.clone()
+                }
+            } else {
+                enemy_cname.clone()
+            };
+
+            let is_real_champ = !slot.champion_name.is_empty()
+                && !slot.champion_name.starts_with("对手")
+                && !slot.champion_name.starts_with("敌方");
+
+            let row1_left = if is_real_champ && slot.champion_name != slot_name {
+                format!("[{}] {} · {}", slot.position_cn, slot_name, slot.champion_name)
+            } else {
+                format!("[{}] {}", slot.position_cn, slot_name)
+            };
+            let disp_row1 = if row1_left.chars().count() > 14 {
+                format!("{}…", row1_left.chars().take(13).collect::<String>())
+            } else {
+                row1_left
+            };
+            draw_text_line(hdc, &disp_row1, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
+
+            if let Some(ref p) = slot.profile {
+                let tier_str = format!("{} {}P", p.tier_str, p.lp);
+                draw_text_line(hdc, &tier_str, wx2 - 62, cy1 + 5, rgb(200, 170, 110));
+
+                if (p.recent_wins + p.recent_losses) > 0 {
+                    let (row2_text, wr_fg) = if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
+                        let col = if p.cur_champ_win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.cur_champ_win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                        (format!("⭐该英雄近{}场 {}% ({}胜{}负)", p.cur_champ_games, p.cur_champ_win_rate_pct, p.cur_champ_wins, p.cur_champ_losses), col)
+                    } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
+                        (format!("近{}场 {}% · ⚠️试英雄(0场)", p.sample_count, p.win_rate_pct), rgb(251, 191, 36))
+                    } else {
+                        let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                        (format!("近{}场 {}% ({}胜{}负)", p.sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
+                    };
+                    draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
+
+                    let dot_start_x = wx2 - 48;
+                    let dot_cy = cy1 + 29;
+                    for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
+                        let dx = dot_start_x + d_idx as i32 * 9;
+                        let (fill_c, border_c) = if is_win {
+                            (rgb(16, 185, 129), rgb(52, 211, 153))
+                        } else {
+                            (rgb(239, 68, 68), rgb(248, 113, 113))
+                        };
+                        draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
+                    }
+                } else if p.total_games > 0 {
+                    let s_text = format!("排位已获 {} 胜 (同步实战中...)", p.total_games);
+                    draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(56, 189, 248));
+                } else {
+                    draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
+                }
+
+                if (p.recent_wins + p.recent_losses) > 0 && !p.badge_text.is_empty() {
+                    let badge_w = 84.min(wx2 - wx1 - 12);
+                    let (b_bg, b_border, b_fg) = if p.streak_type == "win" || p.badge_text.contains("连胜") {
+                        (rgb(6, 78, 59), rgb(52, 211, 153), rgb(52, 211, 153))
+                    } else if p.streak_type == "loss" || p.badge_text.contains("连败") {
+                        (rgb(69, 10, 10), rgb(248, 113, 113), rgb(248, 113, 113))
+                    } else if p.badge_text.contains("通天代") || p.badge_text.contains("绝活") {
+                        (rgb(30, 58, 138), rgb(96, 165, 250), rgb(96, 165, 250))
+                    } else {
+                        (rgb(17, 24, 39), rgb(148, 163, 184), rgb(148, 163, 184))
+                    };
+                    draw_card_rect(hdc, wx1 + 6, cy1 + 44, badge_w, 18, b_bg, b_border);
+                    draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
+                } else {
+                    draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+                }
+            } else {
+                draw_text_line(hdc, "🔒 选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
+                draw_text_line(hdc, "⚔️ 进入对局后自动解锁", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+            }
         }
     }
 
@@ -1829,6 +1915,10 @@ unsafe fn render_ranked_hud(
         let wr_str = if let Some(ref p) = slot.profile {
             if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
                 format!("实战: {}%", p.cur_champ_win_rate_pct)
+            } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
+                "试英雄(0场)".to_string()
+            } else if p.sample_count > 0 {
+                format!("近期: {}%", p.win_rate_pct)
             } else {
                 format!("梯队: {:.1}%", slot.win_rate * 100.0)
             }
@@ -1884,7 +1974,19 @@ unsafe fn render_ranked_hud(
         draw_text_line(hdc, &pos_label, pos_bx1 + 3, sy1 + 5, p_fg);
         new_hotzones.pos_btns.push(((pos_bx1, sy1 + 4, pos_bx2, sy1 + 18), false, idx));
 
-        let wr_str = format!("梯队: {:.1}%", slot.win_rate * 100.0);
+        let wr_str = if let Some(ref p) = slot.profile {
+            if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
+                format!("实战: {}%", p.cur_champ_win_rate_pct)
+            } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
+                "试英雄(0场)".to_string()
+            } else if p.sample_count > 0 {
+                format!("近期: {}%", p.win_rate_pct)
+            } else {
+                format!("梯队: {:.1}%", slot.win_rate * 100.0)
+            }
+        } else {
+            format!("梯队: {:.1}%", slot.win_rate * 100.0)
+        };
         draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
         new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, actual_left_margin + cw, sy1 + slot_card_h), false, idx));
 
