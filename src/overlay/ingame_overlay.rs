@@ -58,7 +58,7 @@ impl InGameOverlay {
     pub fn start_auto_sensing_loop(
         self: &Arc<Self>,
         db: Arc<crate::data::loader::Database>,
-        live_client: Arc<crate::live::LiveClientDataReader>,
+        live_client: Arc<crate::lcu::LiveClientDataReader>,
         lcu_client: Arc<crate::lcu::LcuClient>,
         is_aram_active: Arc<std::sync::atomic::AtomicBool>,
     ) {

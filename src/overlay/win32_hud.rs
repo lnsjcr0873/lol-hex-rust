@@ -1187,7 +1187,7 @@ unsafe fn render_augment_hud(
         let bx1 = cx - badge_w / 2;
         let by1 = badge_cy - badge_h / 2;
 
-        let is_best = (i + 1 == best_slot_idx);
+        let is_best = i + 1 == best_slot_idx;
         let is_trap = card.tier == "TRAP" || card.delta_win_rate <= -0.005;
 
         let (fill_col, outline_col, wr_col, sub_col, sub_text) = if is_best {
