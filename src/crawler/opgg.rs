@@ -10,6 +10,7 @@ pub struct OpggClient {
     tier_list_cache: RwLock<Option<(Instant, Value)>>,
     champion_details_cache: RwLock<HashMap<String, (Instant, Value)>>,
     synergies_cache: RwLock<HashMap<String, (Instant, Value)>>,
+    cooldown_until: RwLock<Option<Instant>>,
 }
 
 impl Default for OpggClient {
@@ -52,6 +53,7 @@ impl OpggClient {
             tier_list_cache: RwLock::new(None),
             champion_details_cache: RwLock::new(HashMap::new()),
             synergies_cache: RwLock::new(HashMap::new()),
+            cooldown_until: RwLock::new(None),
         }
     }
 
@@ -93,6 +95,20 @@ impl OpggClient {
                     if instant.elapsed() < Duration::from_secs(6 * 3600) {
                         return val.clone();
                     }
+                }
+            }
+        }
+
+        // Check if currently under rate-limit cooldown
+        if let Ok(lock) = self.cooldown_until.read() {
+            if let Some(until) = *lock {
+                if Instant::now() < until {
+                    if let Ok(c_lock) = self.tier_list_cache.read() {
+                        if let Some((_, ref val)) = *c_lock {
+                            return val.clone();
+                        }
+                    }
+                    return json!({ "region": self.region, "champions": {} });
                 }
             }
         }
@@ -166,10 +182,18 @@ impl OpggClient {
                     return result;
                 }
             }
+            Ok(resp) => {
+                let status = resp.status();
+                if status.as_u16() == 403 || status.as_u16() == 429 {
+                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    if let Ok(mut lock) = self.cooldown_until.write() {
+                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                    }
+                }
+            }
             Err(e) => {
                 warn!("Failed to fetch OP.GG ranked tier list: {}", e);
             }
-            _ => {}
         }
 
         // Return fallback cache if available
@@ -183,6 +207,19 @@ impl OpggClient {
     }
 
     pub async fn get_champion_detail(&self, champion_id: &str, position: &str) -> Option<Value> {
+        if champion_id.is_empty() || champion_id == "0" {
+            return None;
+        }
+
+        // Check if currently under rate-limit cooldown
+        if let Ok(lock) = self.cooldown_until.read() {
+            if let Some(until) = *lock {
+                if Instant::now() < until {
+                    return None;
+                }
+            }
+        }
+
         let pos_upper = position.to_uppercase();
         let pos_lower = match pos_upper.as_str() {
             "TOP" => "top",
@@ -309,16 +346,28 @@ impl OpggClient {
                     return Some(detail_result);
                 }
             }
+            Ok(resp) => {
+                let status = resp.status();
+                if status.as_u16() == 403 || status.as_u16() == 429 {
+                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    if let Ok(mut lock) = self.cooldown_until.write() {
+                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                    }
+                }
+            }
             Err(e) => {
                 warn!("Failed to fetch OP.GG champion detail: {}", e);
             }
-            _ => {}
         }
 
         None
     }
 
     pub async fn get_matchup_win_rate(&self, my_cid: &str, enemy_cid: &str, position: &str) -> Option<Value> {
+        if my_cid.is_empty() || my_cid == "0" || enemy_cid.is_empty() || enemy_cid == "0" {
+            return None;
+        }
+
         let detail = self.get_champion_detail(my_cid, position).await;
         if let Some(ref d) = detail {
             if let Some(matchup) = d.get("counterMap").and_then(|m| m.get(enemy_cid)) {
@@ -361,6 +410,14 @@ impl OpggClient {
     }
 
     pub async fn get_counter_picks_against(&self, enemy_cid: &str, position: &str, top_n: Option<usize>) -> Value {
+        if enemy_cid.is_empty() || enemy_cid == "0" {
+            return json!({
+                "enemyChampId": enemy_cid,
+                "position": position,
+                "counters": []
+            });
+        }
+
         let enemy_detail = self.get_champion_detail(enemy_cid, position).await;
         let mut candidates = Vec::new();
 
@@ -397,6 +454,27 @@ impl OpggClient {
     }
 
     pub async fn get_champion_synergies(&self, champion_id: &str, position: &str) -> Value {
+        if champion_id.is_empty() || champion_id == "0" {
+            return json!({
+                "championId": champion_id,
+                "position": position,
+                "synergies": []
+            });
+        }
+
+        // Check if currently under rate-limit cooldown
+        if let Ok(lock) = self.cooldown_until.read() {
+            if let Some(until) = *lock {
+                if Instant::now() < until {
+                    return json!({
+                        "championId": champion_id,
+                        "position": position,
+                        "synergies": []
+                    });
+                }
+            }
+        }
+
         let pos_upper = position.to_uppercase();
         let pos_lower = match pos_upper.as_str() {
             "TOP" => "top",
@@ -463,6 +541,15 @@ impl OpggClient {
                         lock.insert(cache_key, (Instant::now(), res.clone()));
                     }
                     return res;
+                }
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                if status.as_u16() == 403 || status.as_u16() == 429 {
+                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    if let Ok(mut lock) = self.cooldown_until.write() {
+                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                    }
                 }
             }
             Err(e) => {

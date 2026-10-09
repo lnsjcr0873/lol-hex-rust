@@ -329,14 +329,12 @@ impl Database {
     ) -> Option<Arc<HeroDetail>> {
         let hid = self.resolve_hero_id(hero_id).unwrap_or_else(|| hero_id.to_string());
 
-        // 1. Check L1 in-memory cache first
-        if let Ok(map) = self.heroes_detail.read() {
-            if let Some(detail) = map.get(&hid) {
-                return Some(Arc::clone(detail));
-            }
+        // 1. Check local in-memory or disk cache first (Instant 0ms, zero network requests)
+        if let Some(detail) = self.get_hero_detail(&hid) {
+            return Some(detail);
         }
 
-        // 2. Fetch directly from cloud API
+        // 2. Fetch directly from cloud API ONLY if local files are missing
         if let Some(val) = crawler.fetch_hero_detail(&hid).await {
             if let Ok(mut detail) = serde_json::from_value::<HeroDetail>(val) {
                 if detail.hero_name.is_empty() {
@@ -361,8 +359,7 @@ impl Database {
             }
         }
 
-        // 3. Fallback to existing memory or disk if available
-        self.get_hero_detail(&hid)
+        None
     }
 
     pub fn resolve_augment_id(&self, identifier: &str) -> Option<String> {

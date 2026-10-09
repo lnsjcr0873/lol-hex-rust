@@ -1,7 +1,7 @@
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub struct HexdataCrawler {
     client: reqwest::Client,
@@ -37,7 +37,7 @@ impl HexdataCrawler {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_secs(6))
+            .timeout(Duration::from_secs(4))
             .build()
             .unwrap_or_default();
 
@@ -89,15 +89,15 @@ impl HexdataCrawler {
     }
 
     async fn fetch_json(&self, url: &str) -> Option<Value> {
-        info!("Fetching {}", url);
+        debug!("Fetching Hexdata JSON: {}", url);
         match self.client.get(url).send().await {
             Ok(res) if res.status().is_success() => res.json::<Value>().await.ok(),
             Ok(res) => {
-                warn!("HTTP request to {} returned status {}", url, res.status());
+                debug!("HTTP request to {} returned status {}", url, res.status());
                 None
             }
             Err(e) => {
-                warn!("HTTP request to {} failed: {}", url, e);
+                debug!("HTTP request to {} failed: {}", url, e);
                 None
             }
         }

@@ -120,12 +120,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = SetProcessDpiAwarenessContext(-4);
     }
 
-    // 1. Initialize In-Memory Database via Hexdata Cloud API (Zero disk clutter)
-    let hexdata_client = Arc::new(HexdataCrawler::new());
-    let mut initial_db = Database::new();
-    initial_db.sync_from_api(&hexdata_client).await;
+    // 1. Initialize In-Memory Database: Prioritize local packaged data (Instant 0ms, Zero WAF 403)
+    let mut initial_db = Database::load_from_dir("data");
     if initial_db.heroes_summary.is_empty() {
-        initial_db = Database::load_from_dir("data");
+        initial_db = Database::load_from_dir("../data");
+    }
+    if initial_db.heroes_summary.is_empty() {
+        // Fallback to online API only if local files are completely missing
+        let hexdata_client = Arc::new(HexdataCrawler::new());
+        initial_db.sync_from_api(&hexdata_client).await;
     }
     let db = Arc::new(initial_db);
 
@@ -180,20 +183,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bench_bg = bench_overlay.clone();
     let ranked_bg = ranked_overlay.clone();
     let opgg_bg = opgg_client.clone();
-    let hexdata_bg = hexdata_client.clone();
     let history_bg = player_history.clone();
     let ingame_bg = ingame_overlay.clone();
 
-    // Warm up OP.GG tier list and HexData handshake in background
+    // Warm up OP.GG tier list in background
     let opgg_warmup = opgg_client.clone();
-    let hex_handshake = hexdata_client.clone();
     tokio::spawn(async move {
         let _ = opgg_warmup.get_ranked_tier_list(false).await;
-        hex_handshake.handshake().await;
     });
 
     tokio::spawn(async move {
         let mut last_level = 0i32;
+        let mut last_draft_sig = String::new();
+        let mut cached_ranked_data: Option<crate::overlay::RankedOverlayData> = None;
+
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
@@ -208,6 +211,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
 
                     if is_aram {
+                        last_draft_sig.clear();
+                        cached_ranked_data = None;
                         if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                             ranked_bg.stop();
                         }
@@ -237,8 +242,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             bench_bg.stop();
                         }
 
+                        // Compute draft session fingerprint: if unchanged, reuse cached HUD data to avoid spamming OP.GG API
+                        let mut current_sig = String::new();
+                        for s in &d.state.my_team {
+                            current_sig.push_str(&format!("M:{}:{}:{};", s.slot_index, s.champion_id, s.position));
+                        }
+                        for s in &d.state.their_team {
+                            current_sig.push_str(&format!("T:{}:{}:{};", s.slot_index, s.champion_id, s.position));
+                        }
+
+                        if current_sig == last_draft_sig {
+                            if let Some(ref cached) = cached_ranked_data {
+                                ranked_bg.show_ranked_draft(cached.clone());
+                                continue;
+                            }
+                        }
+
                         // Resolve teammate profiles via LCU chat participants
                         let profiles = history_bg.resolve_teammates(&session, &lcu_bg).await;
+
+                        let local_slot = d.state.my_team.iter().find(|s| s.is_local_player).cloned();
+                        let local_pos = local_slot.as_ref().map(|s| s.position.clone()).unwrap_or_default();
 
                         // 2. 5v5 Ranked / Normal Draft -> RankedOverlay HUD
                         let mut my_slots = Vec::new();
@@ -246,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let prof = profiles.get(idx).cloned();
                             let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
                             let opp_slot = d.state.their_team.iter().find(|t| t.position == s.position);
-                            let m_wr = if !s.champion_id.is_empty() {
+                            let m_wr = if s.is_local_player && !s.champion_id.is_empty() {
                                 if let Some(opp) = opp_slot {
                                     if !opp.champion_id.is_empty() {
                                         opgg_bg.get_matchup_win_rate(&s.champion_id, &opp.champion_id, &s.position).await
@@ -255,7 +279,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
-                            let (c_heroes, s_heroes) = fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await;
+                            let (c_heroes, s_heroes) = if s.is_local_player {
+                                fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
+                            } else {
+                                (Vec::new(), Vec::new())
+                            };
 
                             my_slots.push(crate::overlay::RankedSlotView {
                                 slot_index: idx,
@@ -278,8 +306,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut their_slots = Vec::new();
                         for (idx, s) in d.state.their_team.iter().enumerate() {
                             let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
+                            let is_opp = !local_pos.is_empty() && s.position == local_pos;
                             let my_opp = d.state.my_team.iter().find(|m| m.position == s.position);
-                            let m_wr = if !s.champion_id.is_empty() {
+                            let m_wr = if is_opp && !s.champion_id.is_empty() {
                                 if let Some(opp) = my_opp {
                                     if !opp.champion_id.is_empty() {
                                         opgg_bg.get_matchup_win_rate(&opp.champion_id, &s.champion_id, &s.position).await
@@ -288,7 +317,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else { None }
                             } else { None };
 
-                            let (c_heroes, s_heroes) = fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await;
+                            let (c_heroes, s_heroes) = if is_opp {
+                                fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
+                            } else {
+                                (Vec::new(), Vec::new())
+                            };
 
                             their_slots.push(crate::overlay::RankedSlotView {
                                 slot_index: idx,
@@ -308,19 +341,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             });
                         }
 
-                        let local_slot = d.state.my_team.iter().find(|s| s.is_local_player);
                         let mut rune_guide = None;
                         let mut lane_counters = Vec::new();
 
-                        if let Some(local) = local_slot {
+                        if let Some(ref local) = local_slot {
                             if !local.champion_id.is_empty() {
-                                let cid_clone = local.champion_id.clone();
-                                let db_clone = db_bg.clone();
-                                let hex_crawler = hexdata_bg.clone();
-                                tokio::spawn(async move {
-                                    let _ = db_clone.fetch_and_cache_hero_detail(&cid_clone, &hex_crawler).await;
-                                });
-
                                 if let Some(detail) = opgg_bg.get_champion_detail(&local.champion_id, &local.position).await {
                                     if let Some(runes) = detail.get("recommendedRunes") {
                                         if !runes.is_null() {
@@ -360,7 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        let rec_text = if let Some(local) = local_slot {
+                        let rec_text = if let Some(ref local) = local_slot {
                             if !local.champion_id.is_empty() {
                                 let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
                                 if let Some(enemy) = enemy_slot {
@@ -385,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let decision_card = crate::overlay::RankedDecisionCard {
                             mode: "counter".to_string(),
-                            my_locked: local_slot.map_or(false, |l| !l.champion_id.is_empty()),
+                            my_locked: local_slot.as_ref().map_or(false, |l| !l.champion_id.is_empty()),
                             default_tab: if rune_guide.is_some() { "runes".to_string() } else { "lane_counter".to_string() },
                             rune_guide,
                             lane_counters,
@@ -393,16 +418,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             synergy_picks: Vec::new(),
                         };
 
-                        ranked_bg.show_ranked_draft(crate::overlay::RankedOverlayData {
+                        let overlay_data = crate::overlay::RankedOverlayData {
                             my_team: my_slots,
                             their_team: their_slots,
                             decision_card,
                             recommendation: rec_text,
-                        });
+                        };
+
+                        ranked_bg.show_ranked_draft(overlay_data.clone());
+                        cached_ranked_data = Some(overlay_data);
+                        last_draft_sig = current_sig;
                     }
 
                 }
             } else {
+                last_draft_sig.clear();
+                cached_ranked_data = None;
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
                 }
