@@ -12,10 +12,26 @@ use data::loader::Database;
 use engine::ranked_draft::RankedDraftManager;
 use lcu::{LcuClient, LiveClientDataReader};
 use overlay::{BenchOverlay, HotkeyManager, InGameOverlay, ItemOverlay, RankedOverlay, TextToSpeech};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
+
+pub static GLOBAL_TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+pub fn spawn_task<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    if let Some(handle) = GLOBAL_TOKIO_HANDLE.get() {
+        handle.spawn(future);
+    } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+    } else {
+        tracing::error!("Cannot spawn task: Tokio runtime handle unavailable");
+    }
+}
+
 
 async fn fetch_slot_counters_and_synergies(
     opgg: &crate::crawler::OpggClient,
@@ -79,6 +95,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(Level::INFO)
         .finish();
     let _ = tracing::subscriber::set_global_default(subscriber);
+
+    // 1. Cache Tokio runtime handle so non-Tokio worker threads (Win32 Hook, GDI loop) can safely spawn async tasks
+    let _ = GLOBAL_TOKIO_HANDLE.set(tokio::runtime::Handle::current());
+
+    // 2. Global panic hook to log panics gracefully without silent crashes
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("💥 HexBrain Caught Panic: {}", info);
+        tracing::error!("💥 HexBrain Caught Panic: {}", info);
+    }));
 
     println!("============================================================");
     println!("⚡ HexBrain - 英雄联盟海克斯大乱斗决策系统 (Rust 原生版) ⚡");

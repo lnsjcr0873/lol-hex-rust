@@ -216,7 +216,7 @@ pub fn apply_current_runes_now() {
         None
     };
 
-    tokio::spawn(async move {
+    crate::spawn_task(async move {
         let success = if let Some(payload) = rune_data {
             let lcu = if let Ok(guard) = GLOBAL_LCU.read() {
                 guard.clone()

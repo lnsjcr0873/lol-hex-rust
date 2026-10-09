@@ -140,7 +140,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         let vk_code = *(lparam as *const u32);
         // VK_OEM_4 = 0xDB ('['), VK_OEM_6 = 0xDD (']')
         if vk_code == 0xDB {
-            std::thread::spawn(|| {
+            crate::spawn_task(async move {
                 if crate::overlay::WindowTracker::is_league_active() {
                     if let Ok(guard) = CALLBACK_LEFT.lock() {
                         if let Some(ref cb) = *guard {
@@ -150,7 +150,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
                 }
             });
         } else if vk_code == 0xDD {
-            std::thread::spawn(|| {
+            crate::spawn_task(async move {
                 if crate::overlay::WindowTracker::is_league_active() {
                     if let Ok(guard) = CALLBACK_RIGHT.lock() {
                         if let Some(ref cb) = *guard {

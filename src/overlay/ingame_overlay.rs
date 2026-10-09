@@ -65,10 +65,12 @@ impl InGameOverlay {
         GLOBAL_HUD.show_augments(placeholder, Duration::from_secs(12));
 
         let db_clone = db.clone();
-        tokio::spawn(async move {
+        crate::spawn_task(async move {
             let rect = crate::vision::ScreenCapture::get_augment_title_band_rect();
             if let Some(bmp) = crate::vision::ScreenCapture::capture_rect_as_bmp(&rect) {
+                tracing::info!("Augment OCR: Captured screen band ({}x{}), recognizing text...", rect.width, rect.height);
                 let lines = crate::vision::OcrScanner::run_windows_ocr_bytes(&bmp).await;
+                tracing::info!("Augment OCR: Recognized {} text lines", lines.len());
                 if !lines.is_empty() {
                     let matched_ids = crate::vision::OcrScanner::match_augments_from_texts(&db_clone, &lines);
                     if !matched_ids.is_empty() {
