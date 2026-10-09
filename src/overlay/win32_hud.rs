@@ -1643,7 +1643,7 @@ unsafe fn render_ranked_hud(
             let slot_name = if let Some(ref p) = slot.profile {
                 if !p.summoner_name.is_empty() {
                     let raw_n = p.summoner_name.clone();
-                    if raw_n.len() > 7 { format!("{}…", &raw_n[..6]) } else { raw_n }
+                    if raw_n.chars().count() > 6 { format!("{}…", raw_n.chars().take(5).collect::<String>()) } else { raw_n }
                 } else if slot.champion_name.is_empty() {
                     format!("我方{}楼", idx + 1)
                 } else {
@@ -1655,49 +1655,67 @@ unsafe fn render_ranked_hud(
                 slot.champion_name.clone()
             };
 
-            let row1_left = if !slot.champion_name.is_empty() {
-                format!("[{}] {} ({})", slot.position_cn, slot_name, slot.champion_name)
+            let is_real_champ = !slot.champion_name.is_empty()
+                && !slot.champion_name.starts_with("队友")
+                && !slot.champion_name.starts_with("我方");
+
+            let row1_left = if is_real_champ && slot.champion_name != slot_name {
+                format!("[{}] {} · {}", slot.position_cn, slot_name, slot.champion_name)
             } else {
                 format!("[{}] {}", slot.position_cn, slot_name)
             };
-            draw_text_line(hdc, &row1_left, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
+            let disp_row1 = if row1_left.chars().count() > 14 {
+                format!("{}…", row1_left.chars().take(13).collect::<String>())
+            } else {
+                row1_left
+            };
+            draw_text_line(hdc, &disp_row1, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
 
             let tier_str = if let Some(ref p) = slot.profile {
                 format!("{} {}P", p.tier_str, p.lp)
             } else {
                 format!("T{}级", slot.tier)
             };
-            draw_text_line(hdc, &tier_str, wx2 - 58, cy1 + 5, rgb(200, 170, 110));
+            draw_text_line(hdc, &tier_str, wx2 - 62, cy1 + 5, rgb(200, 170, 110));
 
             if let Some(ref p) = slot.profile {
-                let (row2_text, wr_fg) = if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
-                    let col = if p.cur_champ_win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.cur_champ_win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
-                    (format!("⭐该英雄近{}场 {}% ({}胜{}负)", p.cur_champ_games, p.cur_champ_win_rate_pct, p.cur_champ_wins, p.cur_champ_losses), col)
-                } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
-                    (format!("近{}场 {}% · ⚠️试英雄(0场)", sample_count, p.win_rate_pct), rgb(251, 191, 36))
-                } else {
-                    let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
-                    (format!("近{}场 {}% ({}胜{}负)", sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
-                };
-                draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
-
-                let dot_start_x = wx2 - 48;
-                let dot_cy = cy1 + 29;
-                for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
-                    let dx = dot_start_x + d_idx as i32 * 9;
-                    let (fill_c, border_c) = if is_win {
-                        (rgb(16, 185, 129), rgb(52, 211, 153))
+                if (p.recent_wins + p.recent_losses) > 0 {
+                    let (row2_text, wr_fg) = if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
+                        let col = if p.cur_champ_win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.cur_champ_win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                        (format!("⭐该英雄近{}场 {}% ({}胜{}负)", p.cur_champ_games, p.cur_champ_win_rate_pct, p.cur_champ_wins, p.cur_champ_losses), col)
+                    } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
+                        (format!("近{}场 {}% · ⚠️试英雄(0场)", p.sample_count, p.win_rate_pct), rgb(251, 191, 36))
                     } else {
-                        (rgb(239, 68, 68), rgb(248, 113, 113))
+                        let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                        (format!("近{}场 {}% ({}胜{}负)", p.sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
                     };
-                    draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
+                    draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
+
+                    let dot_start_x = wx2 - 48;
+                    let dot_cy = cy1 + 29;
+                    for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
+                        let dx = dot_start_x + d_idx as i32 * 9;
+                        let (fill_c, border_c) = if is_win {
+                            (rgb(16, 185, 129), rgb(52, 211, 153))
+                        } else {
+                            (rgb(239, 68, 68), rgb(248, 113, 113))
+                        };
+                        draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
+                    }
+                } else {
+                    if p.total_games > 0 {
+                        let s_text = format!("排位已获 {} 胜 (同步实战中...)", p.total_games);
+                        draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(56, 189, 248));
+                    } else {
+                        draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
+                    }
                 }
             } else {
                 draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
             }
 
             if let Some(ref p) = slot.profile {
-                if !p.badge_text.is_empty() {
+                if (p.recent_wins + p.recent_losses) > 0 && !p.badge_text.is_empty() {
                     let badge_w = 84.min(wx2 - wx1 - 12);
                     let (b_bg, b_border, b_fg) = if p.streak_type == "win" || p.badge_text.contains("连胜") {
                         (rgb(6, 78, 59), rgb(52, 211, 153), rgb(52, 211, 153))
@@ -1711,6 +1729,8 @@ unsafe fn render_ranked_hud(
 
                     draw_card_rect(hdc, wx1 + 6, cy1 + 44, badge_w, 18, b_bg, b_border);
                     draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
+                } else {
+                    draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
                 }
             } else {
                 draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));

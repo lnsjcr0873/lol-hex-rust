@@ -137,7 +137,7 @@ impl PlayerHistoryManager {
 
         let win_rate_pct = if m_count > 0 {
             ((m_wins as f64 / m_count as f64) * 100.0).round() as i32
-        } else if (record.ranked_wins + record.ranked_losses) > 0 {
+        } else if record.ranked_losses > 0 && (record.ranked_wins + record.ranked_losses) > 0 {
             let total = record.ranked_wins + record.ranked_losses;
             ((record.ranked_wins as f64 / total as f64) * 100.0).round() as i32
         } else {
@@ -271,47 +271,98 @@ impl PlayerHistoryManager {
         let mut real_name = candidate_name.to_string();
 
         if let Some(h) = &history {
-            if let Some(games) = h.get("games").and_then(|g| g.get("games")).and_then(|v| v.as_array()) {
-                for g in games {
-                    let target_participant_id = g.get("participantIdentities")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| {
-                            arr.iter().find(|pi| {
-                                let pl = pi.get("player");
-                                let pl_puuid = pl.and_then(|p| p.get("puuid")).and_then(|v| v.as_str());
-                                let inline_puuid = pi.get("puuid").and_then(|v| v.as_str());
-                                if pl_puuid == Some(puuid) || inline_puuid == Some(puuid) {
-                                    if real_name.is_empty() {
-                                        if let Some(n) = pl.and_then(|p| p.get("gameName").or_else(|| p.get("summonerName"))).and_then(|v| v.as_str()) {
-                                            real_name = n.to_string();
-                                        }
-                                    }
-                                    true
-                                } else {
-                                    false
+            let empty_vec = Vec::new();
+            let games = h.get("games")
+                .and_then(|g| {
+                    if let Some(arr) = g.as_array() {
+                        Some(arr)
+                    } else {
+                        g.get("games").and_then(|v| v.as_array())
+                    }
+                })
+                .or_else(|| h.get("matches").and_then(|v| v.as_array()))
+                .or_else(|| h.as_array())
+                .unwrap_or(&empty_vec);
+
+            for g in games {
+                let empty_parts = Vec::new();
+                let participants = g.get("participants")
+                    .and_then(|p| p.as_array())
+                    .unwrap_or(&empty_parts);
+
+                let empty_idents = Vec::new();
+                let identities = g.get("participantIdentities")
+                    .and_then(|p| p.as_array())
+                    .unwrap_or(&empty_idents);
+
+                let mut target_p = None;
+
+                // 1. Match directly by puuid in participant
+                for p in participants {
+                    if let Some(p_puuid) = p.get("puuid").and_then(|v| v.as_str()) {
+                        if p_puuid.eq_ignore_ascii_case(puuid) {
+                            target_p = Some(p);
+                            break;
+                        }
+                    }
+                }
+
+                // 2. Match by participantIdentities
+                if target_p.is_none() && !identities.is_empty() {
+                    let mut target_pid = None;
+                    for pi in identities {
+                        let pl = pi.get("player");
+                        let pl_puuid = pl.and_then(|p| p.get("puuid")).and_then(|v| v.as_str());
+                        let inline_puuid = pi.get("puuid").and_then(|v| v.as_str());
+                        if pl_puuid.map(|s| s.eq_ignore_ascii_case(puuid)).unwrap_or(false)
+                            || inline_puuid.map(|s| s.eq_ignore_ascii_case(puuid)).unwrap_or(false)
+                        {
+                            target_pid = pi.get("participantId").and_then(|v| v.as_i64());
+                            if real_name.is_empty() {
+                                if let Some(n) = pl.and_then(|p| p.get("gameName").or_else(|| p.get("summonerName"))).and_then(|v| v.as_str()) {
+                                    real_name = n.to_string();
                                 }
-                            })
-                        })
-                        .and_then(|pi| pi.get("participantId"))
-                        .and_then(|v| v.as_i64());
-
-                    let participant = g.get("participants")
-                        .and_then(|p| p.as_array())
-                        .and_then(|arr| {
-                            if let Some(pid) = target_participant_id {
-                                arr.iter().find(|p| p.get("participantId").and_then(|v| v.as_i64()) == Some(pid))
-                            } else {
-                                arr.iter().find(|p| p.get("puuid").and_then(|v| v.as_str()) == Some(puuid))
                             }
-                            .or_else(|| arr.first())
-                        });
+                            break;
+                        }
+                    }
+                    if let Some(pid) = target_pid {
+                        for p in participants {
+                            if p.get("participantId").and_then(|v| v.as_i64()) == Some(pid) {
+                                target_p = Some(p);
+                                break;
+                            }
+                        }
+                    }
+                }
 
-                    let stats = participant.and_then(|p| p.get("stats"));
-                    let is_win = stats.and_then(|s| s.get("win")).and_then(|w| w.as_bool()).unwrap_or(false);
-                    let cid = participant.and_then(|p| p.get("championId")).and_then(|c| c.as_i64()).unwrap_or(0) as i32;
-                    let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                    let d = stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                    let a = stats.and_then(|s| s.get("assists")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let p = target_p.or_else(|| participants.first());
+
+                if let Some(part) = p {
+                    let stats = part.get("stats");
+                    let is_win = stats.and_then(|s| s.get("win"))
+                        .or_else(|| part.get("win"))
+                        .map(|w| {
+                            w.as_bool().unwrap_or_else(|| w.as_i64() == Some(1) || w.as_str() == Some("true") || w.as_str() == Some("Win"))
+                        })
+                        .unwrap_or(false);
+
+                    let cid = part.get("championId")
+                        .or_else(|| stats.and_then(|s| s.get("championId")))
+                        .and_then(|c| c.as_i64())
+                        .unwrap_or(0) as i32;
+
+                    let k = stats.and_then(|s| s.get("kills"))
+                        .or_else(|| part.get("kills"))
+                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+                    let d = stats.and_then(|s| s.get("deaths"))
+                        .or_else(|| part.get("deaths"))
+                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+                    let a = stats.and_then(|s| s.get("assists"))
+                        .or_else(|| part.get("assists"))
+                        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
                     parsed_matches.push(ParsedMatchRecord {
                         is_win,
