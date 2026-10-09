@@ -232,9 +232,11 @@ impl InGameOverlay {
 
                             if !cards.is_empty() {
                                 if let Some(best) = cards.iter().max_by(|a, b| a.win_rate.partial_cmp(&b.win_rate).unwrap_or(std::cmp::Ordering::Equal)) {
-                                    last_recommended_name = Some(best.name.clone());
-                                    let slot_pos = cards.iter().position(|c| c.name == best.name).unwrap_or(0) + 1;
-                                    crate::overlay::TextToSpeech::speak(&format!("推荐选第{}张，{}", slot_pos, best.name));
+                                    if last_recommended_name.as_deref() != Some(&best.name) {
+                                        last_recommended_name = Some(best.name.clone());
+                                        let slot_pos = cards.iter().position(|c| c.name == best.name).unwrap_or(0) + 1;
+                                        crate::overlay::TextToSpeech::speak(&format!("推荐选第{}张，{}", slot_pos, best.name));
+                                    }
                                 }
                                 overlay.is_showing.store(true, Ordering::SeqCst);
                                 let data = AugmentOverlayData {

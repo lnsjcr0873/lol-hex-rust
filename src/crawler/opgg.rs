@@ -380,10 +380,11 @@ impl OpggClient {
             .and_then(|c| c.as_array())
             .map_or(true, |a| a.is_empty());
         if is_empty {
-            if let Some(primary) = self.get_primary_position(champion_id) {
-                if primary.to_uppercase() != position.to_uppercase() {
+            let primary_pos = self.get_primary_position(champion_id);
+            if let Some(ref primary) = primary_pos {
+                if !primary.eq_ignore_ascii_case(position) {
                     info!("OP.GG detail for {} on {} empty, falling back to primary position {}", champion_id, position, primary);
-                    if let Some(fb) = self.get_champion_detail_exact(champion_id, &primary).await {
+                    if let Some(fb) = self.get_champion_detail_exact(champion_id, primary).await {
                         return Some(fb);
                     }
                 }
@@ -597,9 +598,10 @@ impl OpggClient {
         let exact = self.get_champion_synergies_exact(champion_id, position).await;
         let is_empty = exact.get("synergies").and_then(|v| v.as_array()).map_or(true, |a| a.is_empty());
         if is_empty {
-            if let Some(primary) = self.get_primary_position(champion_id) {
-                if primary.to_uppercase() != position.to_uppercase() {
-                    let fb = self.get_champion_synergies_exact(champion_id, &primary).await;
+            let primary_pos = self.get_primary_position(champion_id);
+            if let Some(ref primary) = primary_pos {
+                if !primary.eq_ignore_ascii_case(position) {
+                    let fb = self.get_champion_synergies_exact(champion_id, primary).await;
                     if !fb.get("synergies").and_then(|v| v.as_array()).map_or(true, |a| a.is_empty()) {
                         return fb;
                     }
