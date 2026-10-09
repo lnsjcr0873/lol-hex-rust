@@ -840,24 +840,28 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         HudContent::None => None,
     };
 
-    if target_rect.is_none() && is_test {
-        // Fallback for test mode: Center 1280x720 on screen (identical to Python test behavior)
+    if target_rect.is_none() {
         let vp = crate::vision::ScreenCapture::get_effective_viewport();
-        let cw = 1280.min(vp.width);
-        let ch = 720.min(vp.height);
-        target_rect = Some(crate::vision::ViewportRect {
-            x: (vp.width - cw) / 2,
-            y: (vp.height - ch) / 2,
-            width: cw,
-            height: ch,
-        });
+        if is_test {
+            // Test mode: Center 1280x720 window on desktop
+            let cw = 1280.min(vp.width);
+            let ch = 720.min(vp.height);
+            target_rect = Some(crate::vision::ViewportRect {
+                x: vp.x + (vp.width - cw) / 2,
+                y: vp.y + (vp.height - ch) / 2,
+                width: cw,
+                height: ch,
+            });
+        } else {
+            // Real in-game: Use full effective viewport (1080p, 2K, 4K, Ultrawide) to align precisely with game UI
+            target_rect = Some(vp);
+        }
     }
 
-    let is_league_active = crate::overlay::WindowTracker::is_league_active();
     let should_hide = match &content_type {
         HudContent::None => true,
         HudContent::Augment(_) | HudContent::Item(_) => {
-            target_rect.is_none() || !is_league_active
+            target_rect.is_none()
         }
         HudContent::Ranked(_) | HudContent::Bench(_) => {
             target_rect.is_none()
@@ -1076,11 +1080,16 @@ unsafe fn render_augment_hud(
     }
 
     if total_cards == 0 {
-        let msg_w = 340;
+        let msg_w = 420;
         let msg_x = (width - msg_w) / 2;
+        let tip1 = if data.hero_name.is_empty() {
+            "正在检测海克斯强化卡片..."
+        } else {
+            &data.hero_name
+        };
         draw_card_rect(hdc, msg_x, start_y, msg_w, 70, COLORREF(0x0023190f), COLORREF(0x00a0a0a0));
-        draw_text_line(hdc, "正在检测海克斯强化卡片...", msg_x + 20, start_y + 16, COLORREF(0x00ffffff));
-        draw_text_line(hdc, "按 [ 键立即触发全局推演", msg_x + 20, start_y + 40, COLORREF(0x0000e5ff));
+        draw_text_line(hdc, tip1, msg_x + 20, start_y + 16, COLORREF(0x00ffffff));
+        draw_text_line(hdc, "按 [ 或 【 键可随时重试识别推演", msg_x + 20, start_y + 40, COLORREF(0x0000e5ff));
     }
 }
 

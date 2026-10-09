@@ -182,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opgg_bg = opgg_client.clone();
     let hexdata_bg = hexdata_client.clone();
     let history_bg = player_history.clone();
+    let ingame_bg = ingame_overlay.clone();
 
     // Warm up OP.GG tier list and HexData handshake in background
     let opgg_warmup = opgg_client.clone();
@@ -414,12 +415,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let live_stats = live_bg.get_live_stats().await;
                     if live_stats.is_in_game {
                         // Level Milestone Perception (ARAM 3/7/11/15)
-                        let current_lvl = live_stats.level;
-                        if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
-                            if matches!(current_lvl, 3 | 7 | 11 | 15) {
-                                info!("Level milestone reached: Level {}! Triggering augment readiness", current_lvl);
-                                TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
-                            }
+                        let is_milestone = if last_level == 0 && current_lvl == 3 {
+                            true
+                        } else if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
+                            matches!(current_lvl, 3 | 7 | 11 | 15)
+                        } else {
+                            false
+                        };
+
+                        if is_milestone {
+                            info!("Level milestone reached: Level {}! Triggering augment readiness", current_lvl);
+                            TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
+                            let ingame_auto = ingame_bg.clone();
+                            let db_auto = db_bg.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                ingame_auto.trigger_scan_with_db(&db_auto);
+                            });
                         }
                         last_level = current_lvl;
 

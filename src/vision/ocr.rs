@@ -89,30 +89,41 @@ impl OcrScanner {
                 }
             }
 
-            // 2. Substring match (e.g. OCR returned extra prefixes/suffixes)
-            let mut found_substring = false;
+            // 2. Substring match with Longest Match Principle to prevent random HashMap iteration from picking short names
+            let mut best_sub_match: Option<(&String, usize)> = None;
             for (aug_norm, aid) in &db.norm_name_to_augment_id {
-                if aug_norm.len() >= 2 && (norm.contains(aug_norm) || (aug_norm.len() <= norm.len() && norm.starts_with(aug_norm))) {
+                if aug_norm.len() >= 2 && norm.contains(aug_norm) {
                     if !matched_ids.contains(aid) {
-                        matched_ids.push(aid.clone());
-                        found_substring = true;
-                        break;
+                        let match_len = aug_norm.chars().count();
+                        if let Some((_, best_len)) = best_sub_match {
+                            if match_len > best_len {
+                                best_sub_match = Some((aid, match_len));
+                            }
+                        } else {
+                            best_sub_match = Some((aid, match_len));
+                        }
                     }
                 }
             }
-            if found_substring {
+            if let Some((aid, _)) = best_sub_match {
+                matched_ids.push(aid.clone());
                 continue;
             }
 
-            // 3. Fuzzy match with jaro_winkler using pre-normalized names
+            // 3. Fuzzy match with jaro_winkler (bounded by character length delta <= 3)
             let mut best_id = None;
             let mut best_score = 0.0;
+            let norm_char_count = norm.chars().count() as i32;
 
             for (aug_norm, aid) in &db.norm_name_to_augment_id {
-                let score = jaro_winkler(&norm, aug_norm);
-                if score > 0.82 && score > best_score {
-                    best_score = score;
-                    best_id = Some(aid.clone());
+                let aug_char_count = aug_norm.chars().count() as i32;
+                let len_diff = (norm_char_count - aug_char_count).abs();
+                if len_diff <= 3 {
+                    let score = jaro_winkler(&norm, aug_norm);
+                    if score > 0.82 && score > best_score {
+                        best_score = score;
+                        best_id = Some(aid.clone());
+                    }
                 }
             }
 
@@ -151,6 +162,8 @@ impl OcrScanner {
             writer.WriteBytes(bmp_bytes)?;
             writer.StoreAsync()?.get()?;
             writer.FlushAsync()?.get()?;
+            let _ = writer.DetachStream();
+            stream.Seek(0)?;
 
             let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
             let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;

@@ -54,7 +54,22 @@ impl ScreenCapture {
             }
         }
 
-        // Fallback default 1080p
+        // Fallback to primary screen metrics
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+            let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+            let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+            if sw > 0 && sh > 0 {
+                return ViewportRect {
+                    x: 0,
+                    y: 0,
+                    width: sw,
+                    height: sh,
+                };
+            }
+        }
+
         ViewportRect {
             x: 0,
             y: 0,
@@ -327,24 +342,75 @@ impl ScreenCapture {
 
         ViewportRect {
             x: (vp.x as f64 + eff_w * 0.23) as i32,
-            y: (vp.y as f64 + eff_h * 0.385) as i32,
+            y: (vp.y as f64 + eff_h * 0.380) as i32,
             width: (eff_w * 0.55) as i32,
-            height: (eff_h * 0.06) as i32,
+            height: (eff_h * 0.075) as i32,
+        }
+    }
+
+    pub fn get_augment_slot_rects() -> [ViewportRect; 3] {
+        let vp = Self::get_effective_viewport();
+        let eff_w = vp.width as f64;
+        let eff_h = vp.height as f64;
+        let base_x = vp.x as f64;
+        let base_y = vp.y as f64;
+
+        [
+            ViewportRect {
+                x: (base_x + eff_w * 0.230) as i32,
+                y: (base_y + eff_h * 0.380) as i32,
+                width: (eff_w * 0.155) as i32,
+                height: (eff_h * 0.075) as i32,
+            },
+            ViewportRect {
+                x: (base_x + eff_w * 0.425) as i32,
+                y: (base_y + eff_h * 0.380) as i32,
+                width: (eff_w * 0.155) as i32,
+                height: (eff_h * 0.075) as i32,
+            },
+            ViewportRect {
+                x: (base_x + eff_w * 0.620) as i32,
+                y: (base_y + eff_h * 0.380) as i32,
+                width: (eff_w * 0.155) as i32,
+                height: (eff_h * 0.075) as i32,
+            },
+        ]
+    }
+
+    pub fn get_augment_center_rect() -> ViewportRect {
+        let vp = Self::get_effective_viewport();
+        let eff_w = vp.width as f64;
+        let eff_h = vp.height as f64;
+
+        ViewportRect {
+            x: (vp.x as f64 + eff_w * 0.20) as i32,
+            y: (vp.y as f64 + eff_h * 0.28) as i32,
+            width: (eff_w * 0.60) as i32,
+            height: (eff_h * 0.46) as i32,
         }
     }
 
     #[cfg(windows)]
     pub fn capture_rect_as_bmp(rect: &ViewportRect) -> Option<Vec<u8>> {
-        use windows::Win32::Foundation::HWND;
+        Self::capture_rect_with_pad_as_bmp(rect, 20)
+    }
+
+    #[cfg(windows)]
+    pub fn capture_rect_with_pad_as_bmp(rect: &ViewportRect, pad: i32) -> Option<Vec<u8>> {
+        use windows::Win32::Foundation::{COLORREF, HWND, RECT};
         use windows::Win32::Graphics::Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-            BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+            DeleteObject, FillRect, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO,
+            BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         };
 
         if rect.width <= 0 || rect.height <= 0 {
             return None;
         }
+
+        let pad = pad.max(0);
+        let out_w = rect.width + pad * 2;
+        let out_h = rect.height + pad * 2;
 
         unsafe {
             let hdc_screen = GetDC(HWND::default());
@@ -358,7 +424,7 @@ impl ScreenCapture {
                 return None;
             }
 
-            let hbmp = CreateCompatibleBitmap(hdc_screen, rect.width, rect.height);
+            let hbmp = CreateCompatibleBitmap(hdc_screen, out_w, out_h);
             if hbmp.is_invalid() {
                 let _ = DeleteDC(hdc_mem);
                 let _ = ReleaseDC(HWND::default(), hdc_screen);
@@ -367,10 +433,21 @@ impl ScreenCapture {
 
             let old_bmp = SelectObject(hdc_mem, hbmp);
 
+            // Black padding background ensures OCR edge line segmenters won't discard text touching boundaries
+            let fill_r = RECT {
+                left: 0,
+                top: 0,
+                right: out_w,
+                bottom: out_h,
+            };
+            let black_brush = CreateSolidBrush(COLORREF(0));
+            FillRect(hdc_mem, &fill_r, black_brush);
+            let _ = DeleteObject(black_brush);
+
             let _ = BitBlt(
                 hdc_mem,
-                0,
-                0,
+                pad,
+                pad,
                 rect.width,
                 rect.height,
                 hdc_screen,
@@ -381,21 +458,21 @@ impl ScreenCapture {
 
             let mut bmi = BITMAPINFO::default();
             bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = rect.width;
-            bmi.bmiHeader.biHeight = rect.height;
+            bmi.bmiHeader.biWidth = out_w;
+            bmi.bmiHeader.biHeight = out_h;
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB.0;
 
-            let row_stride = (rect.width * 4) as usize;
-            let image_bytes = row_stride * (rect.height as usize);
+            let row_stride = (out_w * 4) as usize;
+            let image_bytes = row_stride * (out_h as usize);
             let mut pixels: Vec<u8> = vec![0u8; image_bytes];
 
             let lines_copied = GetDIBits(
                 hdc_mem,
                 hbmp,
                 0,
-                rect.height as u32,
+                out_h as u32,
                 Some(pixels.as_mut_ptr() as *mut _),
                 &mut bmi,
                 DIB_RGB_COLORS,
@@ -424,8 +501,8 @@ impl ScreenCapture {
             bmp.extend_from_slice(&bf_off_bits.to_le_bytes());
 
             bmp.extend_from_slice(&info_header_size.to_le_bytes());
-            bmp.extend_from_slice(&(rect.width).to_le_bytes());
-            bmp.extend_from_slice(&(rect.height).to_le_bytes());
+            bmp.extend_from_slice(&out_w.to_le_bytes());
+            bmp.extend_from_slice(&out_h.to_le_bytes());
             bmp.extend_from_slice(&1u16.to_le_bytes());
             bmp.extend_from_slice(&32u16.to_le_bytes());
             bmp.extend_from_slice(&0u32.to_le_bytes());
@@ -443,6 +520,11 @@ impl ScreenCapture {
 
     #[cfg(not(windows))]
     pub fn capture_rect_as_bmp(_rect: &ViewportRect) -> Option<Vec<u8>> {
+        None
+    }
+
+    #[cfg(not(windows))]
+    pub fn capture_rect_with_pad_as_bmp(_rect: &ViewportRect, _pad: i32) -> Option<Vec<u8>> {
         None
     }
 }

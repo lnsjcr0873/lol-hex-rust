@@ -134,31 +134,61 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
     extern "system" {
         fn CallNextHookEx(hhk: *mut core::ffi::c_void, ncode: i32, wparam: usize, lparam: isize) -> isize;
     }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount64() -> u64;
+    }
+
+    static LAST_TRIGGER_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    #[repr(C)]
+    struct KbdLlHookStruct {
+        vk_code: u32,
+        scan_code: u32,
+        flags: u32,
+        time: u32,
+        extra_info: usize,
+    }
 
     // HC_ACTION = 0, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
     if code == 0 && (wparam == 0x0100 || wparam == 0x0104) && lparam != 0 {
-        let vk_code = *(lparam as *const u32);
-        // VK_OEM_4 = 0xDB ('['), VK_OEM_6 = 0xDD (']')
-        if vk_code == 0xDB {
-            crate::spawn_task(async move {
-                if crate::overlay::WindowTracker::is_league_active() {
+        let kb = &*(lparam as *const KbdLlHookStruct);
+        let vk_code = kb.vk_code;
+        let scan_code = kb.scan_code & 0xFF;
+        let is_extended = (kb.flags & 1) != 0;
+
+        // Support both Virtual Key (VK_OEM_4 / VK_OEM_6) and Physical Scan Code (0x1A for '[', 0x1B for ']')
+        // to ensure 100% trigger reliability regardless of Chinese/English IME, filtering out extended keypads
+        let is_left_bracket = !is_extended && (vk_code == 0xDB || scan_code == 0x1A);
+        let is_right_bracket = !is_extended && (vk_code == 0xDD || scan_code == 0x1B);
+
+        if is_left_bracket {
+            let now = GetTickCount64();
+            let last = LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
+            if now.saturating_sub(last) > 400 {
+                LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+                crate::spawn_task(async move {
                     if let Ok(guard) = CALLBACK_LEFT.lock() {
                         if let Some(ref cb) = *guard {
                             cb();
                         }
                     }
-                }
-            });
-        } else if vk_code == 0xDD {
-            crate::spawn_task(async move {
-                if crate::overlay::WindowTracker::is_league_active() {
+                });
+            }
+        } else if is_right_bracket {
+            let now = GetTickCount64();
+            let last = LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
+            if now.saturating_sub(last) > 400 {
+                LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+                crate::spawn_task(async move {
                     if let Ok(guard) = CALLBACK_RIGHT.lock() {
                         if let Some(ref cb) = *guard {
                             cb();
                         }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
