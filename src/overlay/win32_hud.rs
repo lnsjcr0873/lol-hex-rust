@@ -40,6 +40,7 @@ pub struct ItemOverlayData {
 
 #[derive(Debug, Clone)]
 pub struct BenchChampView {
+    pub slot_index: usize,
     pub champion_id: i32,
     pub champion_name: String,
     pub tier: String,
@@ -1132,29 +1133,68 @@ unsafe fn render_item_hud(
 unsafe fn render_bench_hud(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     width: i32,
-    _height: i32,
+    height: i32,
     data: &BenchOverlayData,
 ) {
-    use windows::Win32::Foundation::COLORREF;
+    if data.champions.is_empty() {
+        return;
+    }
 
-    let bar_w = 640.min(width - 40);
-    let bar_h = 75;
-    let bar_x = (width - bar_w) / 2;
-    let bar_y = 25;
+    let sx = width as f64 / 1280.0;
+    let sy = height as f64 / 720.0;
 
-    draw_card_rect(hdc, bar_x, bar_y, bar_w, bar_h, COLORREF(0x0023190f), COLORREF(0x003c9bc8));
-    draw_text_line(hdc, "⚡ 备战席英雄实时胜率推演 (按需点击交换)", bar_x + 16, bar_y + 10, COLORREF(0x0000d7ff));
+    // 1280x720 baseline geometry constants from Python bench_overlay.py:
+    // BENCH_START_X = 355.0, BENCH_PITCH_X = 58.0, BENCH_ICON_W = 46.0, BENCH_BADGE_Y = 59.0, BENCH_BADGE_H = 16.0
+    let badge_w = (46.0 * sx).round() as i32;
+    let badge_h = (16.0 * sy).round().max(14.0) as i32;
+    let badge_y = (59.0 * sy).round() as i32;
 
-    let mut offset_x = bar_x + 16;
-    for hero in data.champions.iter().take(5) {
-        let badge = format!("{}: {:.1}% ({})", hero.champion_name, hero.win_rate * 100.0, hero.tier);
-        let col = if hero.tier == "S" {
-            COLORREF(0x0000d7ff)
+    for champ in &data.champions {
+        let slot_x = ((355.0 + champ.slot_index as f64 * 58.0) * sx).round() as i32;
+        let wr_pct = champ.win_rate * 100.0;
+
+        let (bg_col, border_col, text_col, prefix) = if wr_pct >= 52.0 {
+            (
+                rgb(11, 43, 26),    // Emerald dark green
+                rgb(0, 230, 150),   // Bright aurora green
+                rgb(230, 255, 242), // Fluorescent white-green
+                "★",
+            )
+        } else if wr_pct >= 50.0 {
+            (
+                rgb(13, 32, 56),    // Hextech dark blue
+                rgb(56, 189, 248),  // Sky tech blue
+                rgb(224, 242, 254), // Light blue white
+                "",
+            )
+        } else if wr_pct >= 48.0 {
+            (
+                rgb(35, 25, 15),    // Classic dark gold
+                rgb(200, 155, 60),  // Hextech gold border
+                rgb(255, 235, 180), // Bright gold
+                "",
+            )
         } else {
-            COLORREF(0x00ffffff)
+            (
+                rgb(45, 15, 20),    // Warning dark crimson
+                rgb(239, 68, 68),   // Alert crimson border
+                rgb(254, 202, 202), // Light pink white
+                "▼",
+            )
         };
-        draw_text_line(hdc, &badge, offset_x, bar_y + 38, col);
-        offset_x += 120;
+
+        let badge_text = format!("{}{:.1}%", prefix, wr_pct);
+        draw_pill_badge(
+            hdc,
+            slot_x,
+            badge_y,
+            badge_w,
+            badge_h,
+            bg_col,
+            border_col,
+            text_col,
+            &badge_text,
+        );
     }
 }
 
@@ -1807,3 +1847,47 @@ unsafe fn draw_text_line(
     let wide: Vec<u16> = text.encode_utf16().collect();
     let _ = TextOutW(hdc, x, y, &wide);
 }
+
+#[cfg(windows)]
+unsafe fn draw_pill_badge(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    bg_color: windows::Win32::Foundation::COLORREF,
+    border_color: windows::Win32::Foundation::COLORREF,
+    text_color: windows::Win32::Foundation::COLORREF,
+    text: &str,
+) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, RoundRect, SelectObject, SetBkMode,
+        SetTextColor, DT_CENTER, DT_SINGLELINE, DT_VCENTER, PS_SOLID, TRANSPARENT,
+    };
+
+    let pen = CreatePen(PS_SOLID, 1, border_color);
+    let brush = CreateSolidBrush(bg_color);
+    let old_pen = SelectObject(hdc, pen);
+    let old_brush = SelectObject(hdc, brush);
+
+    let _ = RoundRect(hdc, x, y, x + w, y + h, 6, 6);
+
+    let _ = SelectObject(hdc, old_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = DeleteObject(brush);
+    let _ = DeleteObject(pen);
+
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, text_color);
+
+    let mut rect = RECT {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    let _ = DrawTextW(hdc, &mut wide, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+

@@ -187,13 +187,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(bench) = session.get("benchChampions").and_then(|b| b.as_array()) {
                             let mut views = Vec::new();
-                            for champ in bench {
+                            for (idx, champ) in bench.iter().enumerate() {
                                 if let Some(cid) = champ.get("championId").and_then(|c| c.as_i64()) {
                                     let id_str = cid.to_string();
                                     let hero_name = db_bg.resolve_hero_name(&id_str).unwrap_or_else(|| format!("Hero-{}", cid));
                                     let wr = db_bg.heroes_map.get(&id_str).map(|s| s.win_rate).unwrap_or(0.5);
-                                    let tier = if wr >= 0.54 { "S" } else if wr >= 0.51 { "A" } else { "B" };
+                                    let tier = if wr >= 0.52 { "S" } else if wr >= 0.50 { "A" } else if wr >= 0.48 { "B" } else { "C" };
                                     views.push(crate::overlay::BenchChampView {
+                                        slot_index: idx,
                                         champion_id: cid as i32,
                                         champion_name: hero_name,
                                         tier: tier.to_string(),
