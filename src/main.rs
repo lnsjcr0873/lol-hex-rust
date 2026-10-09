@@ -415,6 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let live_stats = live_bg.get_live_stats().await;
                     if live_stats.is_in_game {
                         // Level Milestone Perception (ARAM 3/7/11/15)
+                        let current_lvl = live_stats.level;
                         let is_milestone = if last_level == 0 && current_lvl == 3 {
                             true
                         } else if current_lvl > 0 && last_level > 0 && current_lvl != last_level {

@@ -13,6 +13,7 @@ pub use ingame_overlay::InGameOverlay;
 pub use item_overlay::ItemOverlay;
 pub use ranked_overlay::RankedOverlay;
 pub use tts::TextToSpeech;
+#[allow(unused_imports)]
 pub use window_tracker::WindowTracker;
 #[allow(unused_imports)]
 pub use win32_hud::{

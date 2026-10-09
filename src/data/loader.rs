@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Clone)]
 pub struct Database {
