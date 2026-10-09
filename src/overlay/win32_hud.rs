@@ -1227,7 +1227,7 @@ unsafe fn render_ranked_hud(
 
     let left_collapsed = inter.left_wing_collapsed;
     let right_collapsed = inter.right_wing_collapsed;
-    let mut active_tab = inter.active_tab.clone();
+    let active_tab = inter.active_tab.clone();
     let _offset = inter.counter_scroll_offset;
     let sample_count = inter.sample_match_count;
     let btn_status = inter.btn_status_text.as_ref().and_then(|txt| {
@@ -1245,7 +1245,6 @@ unsafe fn render_ranked_hud(
             if !inter.last_local_locked {
                 inter.last_local_locked = true;
                 inter.active_tab = "runes".to_string();
-                active_tab = "runes".to_string();
             }
         }
     }

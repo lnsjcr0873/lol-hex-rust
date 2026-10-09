@@ -555,7 +555,6 @@ impl OpggClient {
             Err(e) => {
                 warn!("Failed to fetch OP.GG synergies: {}", e);
             }
-            _ => {}
         }
 
         json!({

@@ -245,10 +245,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Compute draft session fingerprint: if unchanged, reuse cached HUD data to avoid spamming OP.GG API
                         let mut current_sig = String::new();
                         for s in &d.state.my_team {
-                            current_sig.push_str(&format!("M:{}:{}:{};", s.slot_index, s.champion_id, s.position));
+                            current_sig.push_str(&format!("M:{}:{}:{};", s.cell_id, s.champion_id, s.position));
                         }
                         for s in &d.state.their_team {
-                            current_sig.push_str(&format!("T:{}:{}:{};", s.slot_index, s.champion_id, s.position));
+                            current_sig.push_str(&format!("T:{}:{}:{};", s.cell_id, s.champion_id, s.position));
                         }
 
                         if current_sig == last_draft_sig {
