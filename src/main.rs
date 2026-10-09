@@ -108,6 +108,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
     println!("⚡ HexBrain - 英雄联盟海克斯大乱斗决策系统 (Rust 原生版) ⚡");
     println!("基于 1157万+ 局真实对局大数据的海克斯大乱斗实时决策辅助引擎");
+    println!("💡 局内感知提示: 请确保英雄联盟客户端视频设置设为【无边框窗口化】");
+    println!("💡 热键说明: 局内按【或 [ 随时推演海克斯强化，按 】或 ] 查看动态出装");
     println!("============================================================");
 
     // Set Per-Monitor V2 DPI Awareness to ensure pixel-perfect HUD alignment on 2K/4K scaling
@@ -461,8 +463,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // In-Game Live 2999 Port Monitoring Workflow
                 if phase == "InProgress" {
-                    let live_stats = live_bg.get_live_stats().await;
+                    let mut live_stats = live_bg.get_live_stats().await;
                     if live_stats.is_in_game {
+                        // 补齐并保证 hero_id 的准确性 (通过英文/中文英雄名在本地字典反查)
+                        if live_stats.hero_id.is_empty() && !live_stats.hero_name.is_empty() {
+                            if let Some(resolved) = db_bg.resolve_hero_id(&live_stats.hero_name) {
+                                live_stats.hero_id = resolved;
+                            }
+                        }
+
                         is_aram_bg.store(live_stats.is_aram, std::sync::atomic::Ordering::SeqCst);
                         if live_stats.is_aram {
                             // ARAM only: on-demand fetch hero detail with cookie handshake

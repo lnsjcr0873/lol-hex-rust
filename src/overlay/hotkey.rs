@@ -33,9 +33,9 @@ impl HotkeyManager {
         }
 
         {
-            let mut left_guard = CALLBACK_LEFT.lock().unwrap();
+            let mut left_guard = CALLBACK_LEFT.lock().unwrap_or_else(|e| e.into_inner());
             *left_guard = Some(Box::new(on_hotkey_bracket_left));
-            let mut right_guard = CALLBACK_RIGHT.lock().unwrap();
+            let mut right_guard = CALLBACK_RIGHT.lock().unwrap_or_else(|e| e.into_inner());
             *right_guard = Some(Box::new(on_hotkey_bracket_right));
         }
 
@@ -192,6 +192,5 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         }
     }
 
-    let hook_val = HOOK_HANDLE.lock().ok().and_then(|g| *g).unwrap_or(0);
-    CallNextHookEx(hook_val as *mut core::ffi::c_void, code, wparam, lparam)
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
 }

@@ -518,6 +518,16 @@ impl ScreenCapture {
         }
     }
 
+    pub fn is_bmp_mostly_black(bmp_bytes: &[u8]) -> bool {
+        if bmp_bytes.len() <= 54 {
+            return true;
+        }
+        let pixel_data = &bmp_bytes[54..];
+        // Sample every 16th byte; if all sampled bytes <= 12, it is treated as pure black screen
+        let has_light = pixel_data.iter().step_by(16).any(|&b| b > 12);
+        !has_light
+    }
+
     #[cfg(not(windows))]
     pub fn capture_rect_as_bmp(_rect: &ViewportRect) -> Option<Vec<u8>> {
         None
@@ -528,3 +538,4 @@ impl ScreenCapture {
         None
     }
 }
+

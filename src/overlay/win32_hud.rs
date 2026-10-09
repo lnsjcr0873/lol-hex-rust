@@ -497,7 +497,7 @@ impl NativeHud {
     pub fn show_augments(&self, data: AugmentOverlayData, duration: Duration) {
         self.start();
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::Augment(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
@@ -508,7 +508,7 @@ impl NativeHud {
     pub fn show_items(&self, data: ItemOverlayData, duration: Duration) {
         self.start();
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::Item(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
@@ -519,7 +519,7 @@ impl NativeHud {
     pub fn show_bench(&self, data: BenchOverlayData, duration: Duration) {
         self.start();
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::Bench(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
@@ -530,7 +530,7 @@ impl NativeHud {
     pub fn show_ranked(&self, data: RankedOverlayData, duration: Duration) {
         self.start();
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::Ranked(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
@@ -542,7 +542,7 @@ impl NativeHud {
     pub fn show_ranked_test(&self, data: RankedOverlayData, duration: Duration) {
         self.start();
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::Ranked(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
@@ -553,7 +553,7 @@ impl NativeHud {
 
     pub fn hide(&self) {
         {
-            let mut st = self.state.write().unwrap();
+            let mut st = self.state.write().unwrap_or_else(|e| e.into_inner());
             st.content = HudContent::None;
             st.expires_at = None;
             st.is_visible = false;

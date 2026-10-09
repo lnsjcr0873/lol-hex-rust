@@ -58,14 +58,14 @@ impl InGameOverlay {
     pub fn trigger_scan_with_db(&self, db: &Arc<crate::data::loader::Database>) {
         self.is_showing.store(true, Ordering::SeqCst);
 
-        let placeholder = AugmentOverlayData {
-            hero_name: "正在感知强化卡片...".to_string(),
-            cards: vec![],
-        };
-        GLOBAL_HUD.show_augments(placeholder, Duration::from_secs(12));
-
         let db_clone = db.clone();
         crate::spawn_task(async move {
+            // 1. 避让遮挡：若当前 HUD 窗口可见，必须先隐藏，以防置顶窗口内容被截屏截入，遮挡游戏卡片文字
+            if GLOBAL_HUD.is_visible() {
+                GLOBAL_HUD.hide();
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+
             let mut matched_ids = Vec::new();
             let mut recognized_any_text = false;
 
@@ -90,6 +90,18 @@ impl InGameOverlay {
             // Level 1: 标题横带物理感知（带20px安全黑边padding）
             let band_rect = crate::vision::ScreenCapture::get_augment_title_band_rect();
             if let Some(bmp) = crate::vision::ScreenCapture::capture_rect_as_bmp(&band_rect) {
+                // 黑屏熔断检测：若截屏全黑，提示玩家独占全屏设置
+                if crate::vision::ScreenCapture::is_bmp_mostly_black(&bmp) {
+                    tracing::warn!("Augment OCR: Captured frame is pure black. Suspected Exclusive Fullscreen mode.");
+                    crate::overlay::TextToSpeech::speak("检测到游戏画面纯黑，请将游戏视频设置由全屏更改为无边框窗口化");
+                    let error_data = AugmentOverlayData {
+                        hero_name: "画面纯黑: 请将游戏设置为【无边框窗口化】".to_string(),
+                        cards: vec![],
+                    };
+                    GLOBAL_HUD.show_augments(error_data, Duration::from_secs(6));
+                    return;
+                }
+
                 tracing::info!("Augment OCR L1: Captured title band ({}x{}), scanning...", band_rect.width, band_rect.height);
                 let lines = crate::vision::OcrScanner::run_windows_ocr_bytes(&bmp).await;
                 if !lines.is_empty() {

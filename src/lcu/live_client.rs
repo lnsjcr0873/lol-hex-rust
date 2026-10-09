@@ -90,6 +90,20 @@ impl LiveClientDataReader {
                         stats.hero_name = clean.to_string();
                     }
 
+                    if let Some(skin_id) = p.get("skinID").and_then(|v| v.as_i64()) {
+                        if skin_id > 0 {
+                            let cid = if skin_id >= 1000 { skin_id / 1000 } else { skin_id };
+                            stats.hero_id = cid.to_string();
+                        }
+                    }
+                    if stats.hero_id.is_empty() {
+                        if let Some(cid) = p.get("championId").and_then(|v| v.as_i64()) {
+                            if cid > 0 {
+                                stats.hero_id = cid.to_string();
+                            }
+                        }
+                    }
+
                     if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
                         for it in items {
                             if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {

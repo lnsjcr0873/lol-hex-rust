@@ -143,6 +143,13 @@ impl OcrScanner {
             return Vec::new();
         }
 
+        #[derive(Clone)]
+        struct SafeOcrEngine(windows::Media::Ocr::OcrEngine);
+        unsafe impl Send for SafeOcrEngine {}
+        unsafe impl Sync for SafeOcrEngine {}
+
+        static GLOBAL_OCR_ENGINE: std::sync::Mutex<Option<SafeOcrEngine>> = std::sync::Mutex::new(None);
+
         let res = std::panic::catch_unwind(|| -> windows::core::Result<Vec<String>> {
             #[link(name = "ole32")]
             extern "system" {
@@ -168,12 +175,28 @@ impl OcrScanner {
             let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
             let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;
 
-            let engine = OcrEngine::TryCreateFromUserProfileLanguages()
-                .or_else(|_| {
-                    use windows::Globalization::Language;
-                    let lang = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN"))?;
-                    OcrEngine::TryCreateFromLanguage(&lang)
-                })?;
+            let engine = {
+                let mut guard = GLOBAL_OCR_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+                if guard.is_none() {
+                    let created = OcrEngine::TryCreateFromUserProfileLanguages().or_else(|e1| {
+                        tracing::warn!("OcrEngine TryCreateFromUserProfileLanguages failed: {:?}, falling back to zh-Hans-CN...", e1);
+                        use windows::Globalization::Language;
+                        let lang = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN"))?;
+                        OcrEngine::TryCreateFromLanguage(&lang)
+                    });
+                    match created {
+                        Ok(eng) => {
+                            tracing::info!("WinRT OcrEngine successfully initialized and cached.");
+                            *guard = Some(SafeOcrEngine(eng));
+                        }
+                        Err(err) => {
+                            tracing::error!("Failed to create WinRT OcrEngine: {:?}. Please ensure Chinese (zh-Hans-CN) OCR package is installed in Windows.", err);
+                            return Err(err);
+                        }
+                    }
+                }
+                guard.as_ref().unwrap().0.clone()
+            };
 
             let ocr_result = engine.RecognizeAsync(&software_bitmap)?.get()?;
             let mut lines = Vec::new();
@@ -188,7 +211,14 @@ impl OcrScanner {
 
         match res {
             Ok(Ok(lines)) => lines,
-            _ => Vec::new(),
+            Ok(Err(e)) => {
+                tracing::warn!("Windows OCR recognition error: {:?}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::error!("Windows OCR panic caught");
+                Vec::new()
+            }
         }
     }
 
@@ -197,3 +227,4 @@ impl OcrScanner {
         Vec::new()
     }
 }
+
