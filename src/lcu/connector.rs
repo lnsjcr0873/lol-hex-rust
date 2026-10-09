@@ -24,7 +24,23 @@ const COMMON_LOL_PATHS: &[&str] = &[
 
 impl LcuConnector {
     pub fn sniff_credentials() -> Option<LcuCredentials> {
-        // Method 1: Check lockfile in known install paths
+        // Priority 1: Windows process commandline sniffing (100% reliable for WeGame/Tencent & Global Riot)
+        #[cfg(windows)]
+        {
+            if let Some(creds) = Self::sniff_from_commandline_win32() {
+                return Some(creds);
+            }
+        }
+
+        // Priority 2: Process path lockfile
+        #[cfg(windows)]
+        {
+            if let Some(creds) = Self::sniff_from_process_win32() {
+                return Some(creds);
+            }
+        }
+
+        // Priority 3: Check lockfile in known install paths
         for dir in COMMON_LOL_PATHS {
             let lockfile = Path::new(dir).join("lockfile");
             if lockfile.exists() {
@@ -33,14 +49,6 @@ impl LcuConnector {
                         return Some(creds);
                     }
                 }
-            }
-        }
-
-        // Method 2: On Windows, use process snapshot
-        #[cfg(windows)]
-        {
-            if let Some(creds) = Self::sniff_from_process_win32() {
-                return Some(creds);
             }
         }
 
@@ -87,6 +95,45 @@ impl LcuConnector {
         };
 
         Some(LcuCredentials { port, auth_token })
+    }
+
+    #[cfg(windows)]
+    pub fn sniff_from_commandline_win32() -> Option<LcuCredentials> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // 1. Try wmic (< 50ms)
+        if let Ok(output) = std::process::Command::new("wmic")
+            .args(&["process", "where", "name='LeagueClientUx.exe'", "get", "commandline"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(creds) = Self::parse_commandline(&text) {
+                    tracing::info!("Successfully sniffed LCU credentials via WMIC: port {}", creds.port);
+                    return Some(creds);
+                }
+            }
+        }
+
+        // 2. Fallback to PowerShell CIM
+        let ps_cmd = "Get-CimInstance Win32_Process -Filter \"Name = 'LeagueClientUx.exe'\" | Select-Object -ExpandProperty CommandLine";
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(&["-NoProfile", "-Command", ps_cmd])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(creds) = Self::parse_commandline(&text) {
+                    tracing::info!("Successfully sniffed LCU credentials via PowerShell: port {}", creds.port);
+                    return Some(creds);
+                }
+            }
+        }
+
+        None
     }
 
     #[cfg(windows)]

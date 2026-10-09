@@ -168,13 +168,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hotkeys = HotkeyManager::new();
     hotkeys.start(
         move || {
-            if is_aram_for_hotkey.load(std::sync::atomic::Ordering::SeqCst) {
-                info!("Hotkey '[' pressed: Triggering InGame Augment Scan (ARAM)");
+            let is_aram = is_aram_for_hotkey.load(std::sync::atomic::Ordering::SeqCst);
+            info!("Hotkey '[' pressed: is_aram = {}", is_aram);
+            if is_aram {
+                info!("Triggering InGame Augment Scan (ARAM)");
                 ingame_clone.trigger_scan_with_db(&db_for_hotkey);
                 TextToSpeech::speak("海克斯强化推演已激活");
             } else {
-                info!("Hotkey '[' pressed: Summoner's Rift active, skipping Hextech scan");
-                TextToSpeech::speak("当前为召唤师峡谷模式，海克斯强化仅在狂暴大乱斗模式生效");
+                let live_reader = LiveClientDataReader::new();
+                let ingame_fallback = ingame_clone.clone();
+                let db_fallback = db_for_hotkey.clone();
+                let is_aram_flag = is_aram_for_hotkey.clone();
+                crate::spawn_task(async move {
+                    let stats = live_reader.get_live_stats().await;
+                    if stats.is_in_game && stats.is_aram {
+                        is_aram_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        info!("Fast live probe confirmed ARAM! Triggering scan...");
+                        ingame_fallback.trigger_scan_with_db(&db_fallback);
+                        TextToSpeech::speak("海克斯强化推演已激活");
+                    } else if stats.is_in_game {
+                        info!("Hotkey '[' pressed: Summoner's Rift active, skipping Hextech scan");
+                        TextToSpeech::speak("当前为召唤师峡谷模式，海克斯强化仅在狂暴大乱斗模式生效");
+                    } else {
+                        info!("Hotkey '[' pressed outside match, attempting scan fallback");
+                        ingame_fallback.trigger_scan_with_db(&db_fallback);
+                        TextToSpeech::speak("正在尝试感知当前卡片画面");
+                    }
+                });
             }
         },
         move || {
@@ -461,9 +481,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ranked_bg.stop();
                 }
 
-                // In-Game Live 2999 Port Monitoring Workflow
-                if phase == "InProgress" {
-                    let mut live_stats = live_bg.get_live_stats().await;
+                // In-Game Live 2999 Port Monitoring Workflow (Active whenever in game or phase == InProgress)
+                let mut live_stats = live_bg.get_live_stats().await;
+                if phase == "InProgress" || live_stats.is_in_game {
                     if live_stats.is_in_game {
                         // 补齐并保证 hero_id 的准确性 (通过英文/中文英雄名在本地字典反查)
                         if live_stats.hero_id.is_empty() && !live_stats.hero_name.is_empty() {
@@ -486,9 +506,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Level Milestone Perception (ARAM 3/7/11/15 only)
                             let current_lvl = live_stats.level;
-                            let is_milestone = if last_level == 0 && current_lvl == 3 {
-                                true
-                            } else if current_lvl > 0 && last_level > 0 && current_lvl != last_level {
+                            let is_milestone = if last_level == 0 {
+                                matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
+                            } else if current_lvl > 0 && current_lvl != last_level {
                                 matches!(current_lvl, 3 | 7 | 11 | 15)
                             } else {
                                 false

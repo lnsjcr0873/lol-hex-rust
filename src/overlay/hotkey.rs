@@ -45,6 +45,11 @@ impl HotkeyManager {
             std::thread::spawn(move || {
                 run_keyboard_hook_loop(running);
             });
+
+            let running_async = self.running.clone();
+            std::thread::spawn(move || {
+                run_async_keystate_polling_loop(running_async);
+            });
         }
     }
 
@@ -61,6 +66,62 @@ impl HotkeyManager {
                 unsafe {
                     // WM_QUIT = 0x0012
                     let _ = PostThreadMessageW(tid, 0x0012, 0, 0);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(vkey: i32) -> i16;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount64() -> u64;
+    }
+
+    static LAST_ASYNC_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static LAST_ASYNC_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    // VK_OEM_4 = 0xDB ('[' and '【'), VK_OEM_6 = 0xDD (']' and '】')
+    while running.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(25)); // 40Hz polling, 0.00% CPU
+
+        unsafe {
+            let left_state = GetAsyncKeyState(0xDB);
+            if (left_state as u16 & 0x8000) != 0 {
+                let now = GetTickCount64();
+                let last = LAST_ASYNC_LEFT.load(Ordering::Relaxed);
+                if now.saturating_sub(last) > 400 {
+                    LAST_ASYNC_LEFT.store(now, Ordering::Relaxed);
+                    tracing::info!("GetAsyncKeyState detected '[' / '【' pressed");
+                    crate::spawn_task(async move {
+                        if let Ok(guard) = CALLBACK_LEFT.lock() {
+                            if let Some(ref cb) = *guard {
+                                cb();
+                            }
+                        }
+                    });
+                }
+            }
+
+            let right_state = GetAsyncKeyState(0xDD);
+            if (right_state as u16 & 0x8000) != 0 {
+                let now = GetTickCount64();
+                let last = LAST_ASYNC_RIGHT.load(Ordering::Relaxed);
+                if now.saturating_sub(last) > 400 {
+                    LAST_ASYNC_RIGHT.store(now, Ordering::Relaxed);
+                    tracing::info!("GetAsyncKeyState detected ']' / '】' pressed");
+                    crate::spawn_task(async move {
+                        if let Ok(guard) = CALLBACK_RIGHT.lock() {
+                            if let Some(ref cb) = *guard {
+                                cb();
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -100,18 +161,23 @@ fn run_keyboard_hook_loop(running: Arc<AtomicBool>) {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentThreadId() -> u32;
+        fn GetModuleHandleW(lpmodulename: *const u16) -> *mut core::ffi::c_void;
     }
 
     unsafe {
         let tid = GetCurrentThreadId();
         HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
 
+        let hmod = GetModuleHandleW(std::ptr::null());
         // WH_KEYBOARD_LL = 13
-        let hook = SetWindowsHookExW(13, Some(low_level_keyboard_proc), std::ptr::null_mut(), 0);
+        let hook = SetWindowsHookExW(13, Some(low_level_keyboard_proc), hmod, 0);
         if !hook.is_null() {
+            tracing::info!("Low-level keyboard hook registered successfully");
             if let Ok(mut guard) = HOOK_HANDLE.lock() {
                 *guard = Some(hook as usize);
             }
+        } else {
+            tracing::warn!("SetWindowsHookExW returned NULL, relying on GetAsyncKeyState hardware polling fallback");
         }
 
         let mut msg = std::mem::zeroed::<Msg>();
