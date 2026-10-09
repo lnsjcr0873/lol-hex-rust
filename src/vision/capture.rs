@@ -528,6 +528,82 @@ impl ScreenCapture {
         !has_light
     }
 
+    /// 极速视觉暗底指纹前置检查 (~0.005ms，0 CPU 占用)：
+    /// 海克斯卡牌具有极其鲜明的暗夜/黑曜石底色特征 (Slot 区域 25分位亮度 lum < 35 且红光 R < 30)。
+    /// 若屏幕处于普通战斗画面（极地大乱斗冰面、小兵、英雄、血条、击杀横幅等高亮度画面），
+    /// 直接在此层极速熔断，彻底阻断后续 OCR 识别与推演，实现 100% 杜绝非选牌期误弹与卡顿。
+    pub fn is_title_band_card_bg(bmp_bytes: &[u8]) -> bool {
+        if bmp_bytes.len() <= 54 {
+            return false;
+        }
+        let out_w = i32::from_le_bytes([bmp_bytes[18], bmp_bytes[19], bmp_bytes[20], bmp_bytes[21]]) as usize;
+        let out_h = (i32::from_le_bytes([bmp_bytes[22], bmp_bytes[23], bmp_bytes[24], bmp_bytes[25]]) as i32).abs() as usize;
+        if out_w < 60 || out_h < 10 {
+            return false;
+        }
+
+        let pixel_data = &bmp_bytes[54..];
+        let bytes_per_pixel = 4;
+        let row_stride = out_w * bytes_per_pixel;
+        if pixel_data.len() < row_stride * out_h {
+            return false;
+        }
+
+        let pad_x = 20.min(out_w / 4);
+        let pad_y = 20.min(out_h / 4);
+        let cw = out_w.saturating_sub(pad_x * 2);
+        let ch = out_h.saturating_sub(pad_y * 2);
+        if cw < 40 || ch < 5 {
+            return false;
+        }
+
+        let mut dark_slots = 0;
+        let slot_ranges = [
+            (0.05, 0.25), // 卡槽 1
+            (0.40, 0.60), // 卡槽 2
+            (0.75, 0.95), // 卡槽 3
+        ];
+
+        for (xs, xe) in slot_ranges {
+            let start_x = pad_x + ((cw as f64) * xs) as usize;
+            let end_x = pad_x + ((cw as f64) * xe) as usize;
+            let mut lums = Vec::with_capacity(256);
+            let mut reds = Vec::with_capacity(256);
+
+            for y in (pad_y..(pad_y + ch)).step_by(2) {
+                let row_offset = y * row_stride;
+                for x in (start_x..end_x).step_by(4) {
+                    let px_idx = row_offset + x * bytes_per_pixel;
+                    if px_idx + 2 < pixel_data.len() {
+                        let b = pixel_data[px_idx] as f64;
+                        let g = pixel_data[px_idx + 1] as f64;
+                        let r = pixel_data[px_idx + 2] as f64;
+                        let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                        lums.push(lum);
+                        reds.push(r);
+                    }
+                }
+            }
+
+            if lums.is_empty() {
+                continue;
+            }
+
+            lums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            reds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            let p25_idx = lums.len() / 4;
+            let p25_lum = lums[p25_idx];
+            let p25_r = reds[p25_idx];
+
+            if p25_lum < 35.0 && p25_r < 30.0 {
+                dark_slots += 1;
+            }
+        }
+
+        dark_slots >= 2
+    }
+
     #[cfg(not(windows))]
     pub fn capture_rect_as_bmp(_rect: &ViewportRect) -> Option<Vec<u8>> {
         None

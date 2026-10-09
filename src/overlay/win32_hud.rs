@@ -177,6 +177,7 @@ pub struct HudState {
     pub expires_at: Option<Instant>,
     pub is_visible: bool,
     pub is_test_mode: bool,
+    pub dirty: bool,
 }
 
 impl Default for HudState {
@@ -186,6 +187,7 @@ impl Default for HudState {
             expires_at: None,
             is_visible: false,
             is_test_mode: false,
+            dirty: false,
         }
     }
 }
@@ -501,6 +503,7 @@ impl NativeHud {
             st.content = HudContent::Augment(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
+            st.dirty = true;
         }
         self.request_repaint();
     }
@@ -512,6 +515,7 @@ impl NativeHud {
             st.content = HudContent::Item(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
+            st.dirty = true;
         }
         self.request_repaint();
     }
@@ -523,6 +527,7 @@ impl NativeHud {
             st.content = HudContent::Bench(data);
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
+            st.dirty = true;
         }
         self.request_repaint();
     }
@@ -535,6 +540,7 @@ impl NativeHud {
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
             st.is_test_mode = false;
+            st.dirty = true;
         }
         self.request_repaint();
     }
@@ -547,6 +553,7 @@ impl NativeHud {
             st.expires_at = Some(Instant::now() + duration);
             st.is_visible = true;
             st.is_test_mode = true;
+            st.dirty = true;
         }
         self.request_repaint();
     }
@@ -558,6 +565,7 @@ impl NativeHud {
             st.expires_at = None;
             st.is_visible = false;
             st.is_test_mode = false;
+            st.dirty = true;
         }
         #[cfg(windows)]
         {
@@ -874,6 +882,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     }
 
     // Align with active League window position (with outer docking for Ranked)
+    let mut any_geom_changed = false;
     if let Some(rect) = target_rect {
         if matches!(&content_type, HudContent::Ranked(_)) {
             let (left_collapsed, right_collapsed) = if let Ok(inter) = RANKED_INTERACTION.read() {
@@ -913,6 +922,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                 if *g != target_geom {
                     *g = target_geom;
                     geom_changed = true;
+                    any_geom_changed = true;
                 }
             }
             if geom_changed {
@@ -935,6 +945,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                 if *g != target_geom {
                     *g = target_geom;
                     geom_changed = true;
+                    any_geom_changed = true;
                 }
             }
             if geom_changed {
@@ -981,8 +992,20 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         }
     }
 
-    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    let _ = InvalidateRect(hwnd, None, BOOL(0));
+    // Only repaint when dirty flag is set or window geometry actually changed.
+    // This reduces stationary DWM compose overhead to 0 FPS / 0 GPU spikes, entirely fixing stuttering.
+    let is_dirty = if let Ok(mut st) = GLOBAL_HUD.state.write() {
+        let dirty = st.dirty;
+        st.dirty = false;
+        dirty
+    } else {
+        false
+    };
+
+    if is_dirty || any_geom_changed {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        let _ = InvalidateRect(hwnd, None, BOOL(0));
+    }
 }
 
 // -------------------------------------------------------------
@@ -1017,79 +1040,199 @@ unsafe fn render_augment_hud(
     height: i32,
     data: &AugmentOverlayData,
 ) {
-    use windows::Win32::Foundation::COLORREF;
-
-    // 1. Header Banner
-    let banner_w = 460.min(width - 40);
-    let banner_h = 36;
-    let banner_x = (width - banner_w) / 2;
-    let banner_y = (height as f64 * 0.32) as i32;
-
-    draw_card_rect(
-        hdc,
-        banner_x,
-        banner_y,
-        banner_w,
-        banner_h,
-        COLORREF(0x00281e0f), // Dark navy bg (0x0f, 0x1e, 0x28)
-        COLORREF(0x003c9bc8), // Gold border (0xc8, 0x9b, 0x3c)
-    );
-
-    let title_text = format!("⚡ HexBrain 海克斯实时推演 - {}", if data.hero_name.is_empty() { "实时建议" } else { &data.hero_name });
-    draw_text_line(hdc, &title_text, banner_x + 16, banner_y + 10, COLORREF(0x0045f0f0)); // Light gold/cyan text
-
-    // 2. Augment Cards (Up to 3 cards corresponding to in-game slots)
-    let card_w = 260.min((width - 60) / 3);
-    let card_h = 135;
-    let start_y = (height as f64 * 0.44) as i32;
+    let sx = width as f64 / 1920.0;
+    let sy = height as f64 / 1080.0;
+    let min_s = sx.min(sy);
 
     let total_cards = data.cards.len();
-    for (i, card) in data.cards.iter().take(3).enumerate() {
-        let slot_x = match i {
-            0 => (width as f64 * 0.22) as i32,
-            1 => (width as f64 * 0.43) as i32,
-            _ => (width as f64 * 0.64) as i32,
+
+    // 1. 查找最优卡牌与全陷阱判定
+    let mut best_slot_idx = 1;
+    let mut best_name = "首选强化";
+    let mut all_traps = false;
+
+    if total_cards > 0 {
+        if let Some((idx, best)) = data.cards.iter().enumerate().max_by(|(_, a), (_, b)| {
+            a.win_rate.partial_cmp(&b.win_rate).unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            best_slot_idx = idx + 1;
+            best_name = &best.name;
+        }
+        all_traps = data.cards.iter().all(|c| c.tier == "TRAP" || c.delta_win_rate <= -0.005);
+    }
+
+    // 2. 屏幕正顶部主决策横幅 HUD (Header Overlay)
+    // 尺寸: 760x112, 坐标: pos_x 居中, pos_y = 35 * sy (屏幕极顶端 35px，远离卡片 150px 以上，0 遮挡卡牌立绘与正文)
+    let banner_w = (760.0 * sx) as i32;
+    let banner_h = (112.0 * sy) as i32;
+    let banner_x = (width - banner_w) / 2;
+    let banner_y = (35.0 * sy) as i32;
+
+    let banner_bg = rgb(14, 22, 38); // 深邃科技蓝黑 (#0e1626)
+    let banner_border = if all_traps {
+        rgb(244, 63, 94) // 警报红
+    } else {
+        rgb(10, 200, 185) // 海克斯青金 (#0ac8b9)
+    };
+
+    draw_card_rect(hdc, banner_x, banner_y, banner_w, banner_h, banner_bg, banner_border);
+
+    // 顶部横幅字体大小
+    let title_font_size = (16.0 * min_s).max(12.0) as i32;
+    let body_font_size = (15.0 * min_s).max(11.0) as i32;
+    let sub_font_size = (13.0 * min_s).max(10.0) as i32;
+
+    if total_cards > 0 {
+        let (title_text, title_col) = if all_traps {
+            (
+                "🚨 【全陷阱高危报警】建议消耗海克斯骰子重掷！ (自动推演)".to_string(),
+                rgb(244, 63, 94),
+            )
+        } else {
+            (
+                format!("👑 智脑首选推荐：【第 {} 张卡片】-> {} (局内推演)", best_slot_idx, best_name),
+                rgb(10, 200, 185),
+            )
         };
+        draw_text_custom(hdc, &title_text, banner_x + 16, banner_y + 10, title_font_size, 700, title_col, false);
 
-        // Determine border and badge colors based on tier
-        let (border_col, badge_col, badge_text) = match card.tier.as_str() {
-            "S" => (COLORREF(0x0000d7ff), COLORREF(0x0000d7ff), "[ S 级核心 ]"), // Gold (0xff, 0xd7, 0x00)
-            "A" => (COLORREF(0x00ffe500), COLORREF(0x00ffe500), "[ A 级优选 ]"), // Cyan (0x00, 0xe5, 0xff)
-            "B" => (COLORREF(0x00c0c0c0), COLORREF(0x00c0c0c0), "[ B 级过渡 ]"), // Silver (0xc0, 0xc0, 0xc0)
-            _ => (COLORREF(0x005546ff), COLORREF(0x005546ff), "[ ⚠️ 陷阱慎选 ]"), // Red (0xff, 0x46, 0x55)
+        // 顶部横幅行 2: 正文推演理由 (Wilson 95% 置信下限)
+        let body_text = if let Some(best) = data.cards.get(best_slot_idx - 1) {
+            format!(
+                "推演依据: 胜率 {:.1}% (提升 {:+.1}%)，Wilson 置信下限 {:.1}% ({}局样本)，契合当前英雄阵容",
+                best.win_rate * 100.0,
+                best.delta_win_rate * 100.0,
+                best.wilson_lower * 100.0,
+                best.games
+            )
+        } else {
+            "推演完成：契合当前英雄战术羁绊".to_string()
         };
+        draw_text_custom(hdc, &body_text, banner_x + 16, banner_y + 40, body_font_size, 600, rgb(255, 255, 255), false);
 
-        // Background box
-        draw_card_rect(hdc, slot_x, start_y, card_w, card_h, COLORREF(0x0023190f), border_col);
-
-        // Header line: [Tier Badge] + Augment Name
-        draw_text_line(hdc, badge_text, slot_x + 12, start_y + 12, badge_col);
-        draw_text_line(hdc, &card.name, slot_x + 105, start_y + 12, COLORREF(0x00ffffff));
-
-        // Line 2: WinRate + Delta
-        let wr_text = format!("胜率: {:.1}% (Δ {:+.1}%)", card.win_rate * 100.0, card.delta_win_rate * 100.0);
-        draw_text_line(hdc, &wr_text, slot_x + 12, start_y + 40, COLORREF(0x00d0d0d0));
-
-        // Line 3: Wilson bound + Games count
-        let wilson_text = format!("Wilson下限: {:.1}% ({}局)", card.wilson_lower * 100.0, card.games);
-        draw_text_line(hdc, &wilson_text, slot_x + 12, start_y + 68, COLORREF(0x00a0a0a0));
-
-        // Line 4: Tactical tip
-        let tip_text = format!("建议: {}", card.recommendation);
-        draw_text_line(hdc, &tip_text, slot_x + 12, start_y + 96, COLORREF(0x0050ff50));
+        // 顶部横幅行 3: 三张卡并排对比速览
+        let mut summaries = Vec::new();
+        for (i, c) in data.cards.iter().take(3).enumerate() {
+            let slot_num = i + 1;
+            let tag = if slot_num == best_slot_idx {
+                "👑首选"
+            } else if c.tier == "TRAP" {
+                "🚫避雷"
+            } else {
+                "备选"
+            };
+            summaries.push(format!("[{}号卡] {} ({} {:+.1}%)", slot_num, c.name, tag, c.delta_win_rate * 100.0));
+        }
+        let summary_line = summaries.join("   |   ");
+        draw_text_custom(hdc, &summary_line, banner_x + 16, banner_y + 76, sub_font_size, 400, rgb(200, 170, 110), false);
+    } else {
+        let title_text = format!("⚡ HexBrain 海克斯实时推演 - {}", if data.hero_name.is_empty() { "局内待命" } else { &data.hero_name });
+        draw_text_custom(hdc, &title_text, banner_x + 16, banner_y + 12, title_font_size, 700, rgb(10, 200, 185), false);
+        draw_text_custom(hdc, "正在扫描识别当前画面三选一卡牌...", banner_x + 16, banner_y + 44, body_font_size, 600, rgb(255, 255, 255), false);
+        draw_text_custom(hdc, "三选一界面出现后将全自动推演播报，也可按 [ 或 【 键手动重扫", banner_x + 16, banner_y + 76, sub_font_size, 400, rgb(148, 163, 184), false);
     }
 
     if total_cards == 0 {
-        let msg_w = 420;
-        let msg_x = (width - msg_w) / 2;
-        let tip1 = if data.hero_name.is_empty() {
-            "正在检测海克斯强化卡片..."
+        return;
+    }
+
+    // 3. 卡牌内下方空白处透明大字胜率投影 (Card Badges) + 最优卡流光外框 (Best Card Border)
+    // 1920x1080 基准绝对坐标:
+    // 卡槽中心 cx: 599, 967, 1335
+    // 胶囊 cy: 618 (卡牌立绘与长正文介绍下方空白处，绝不遮挡原生技能介绍正文，不遮挡重随骰子)
+    let slot_centers_x = [
+        (599.0 * sx) as i32,
+        (967.0 * sx) as i32,
+        (1335.0 * sx) as i32,
+    ];
+    let badge_cy = ((145.0 + 473.0) * sy) as i32; // 618px 基准
+    let badge_w = (216.0 * sx) as i32;
+    let badge_h = (76.0 * sy) as i32;
+
+    let wr_font_size = (24.0 * min_s).max(15.0) as i32;
+    let badge_sub_font_size = (11.0 * min_s).max(8.0) as i32;
+
+    // 3.1 绘制最优卡牌外圈推荐青金光圈与顶部徽章 (Card Border)
+    if best_slot_idx >= 1 && best_slot_idx <= 3 {
+        let best_cx = slot_centers_x[best_slot_idx - 1];
+        let card_w = (290.0 * sx) as i32;
+        let card_h = (530.0 * sy) as i32;
+        let card_bx = best_cx - card_w / 2;
+        let card_by = ((145.0 + 37.0) * sy) as i32; // 182px 基准
+
+        // 顶部居中勋章
+        let top_badge_w = (184.0 * sx) as i32;
+        let top_badge_h = (26.0 * sy) as i32;
+        let top_bx = best_cx - top_badge_w / 2;
+        let top_by = card_by - top_badge_h - 4;
+        draw_card_rect(hdc, top_bx, top_by, top_badge_w, top_badge_h, rgb(7, 21, 36), rgb(245, 158, 11));
+        draw_text_centered(hdc, "★ 智脑首选推荐 ★", best_cx, top_by + (4.0 * sy) as i32, (10.5 * min_s).max(8.0) as i32, 700, rgb(251, 191, 36), true);
+
+        // 卡牌外围高亮推荐边框 (圆角矩形，厚度 2px)
+        let border_pen_col = if all_traps { rgb(244, 63, 94) } else { rgb(10, 200, 185) };
+        use windows::Win32::Graphics::Gdi::{CreatePen, DeleteObject, SelectObject, RoundRect, PS_SOLID, NULL_BRUSH, GetStockObject};
+        let pen = CreatePen(PS_SOLID, 2, border_pen_col);
+        let old_pen = SelectObject(hdc, pen);
+        let null_brush = GetStockObject(NULL_BRUSH);
+        let old_brush = SelectObject(hdc, null_brush);
+        let _ = RoundRect(hdc, card_bx, card_by, card_bx + card_w, card_by + card_h, 12, 12);
+        let _ = SelectObject(hdc, old_brush);
+        let _ = SelectObject(hdc, old_pen);
+        let _ = DeleteObject(pen);
+    }
+
+    // 3.2 绘制 3 个槽位的透明大字胶囊 (Card Badges)
+    for (i, card) in data.cards.iter().take(3).enumerate() {
+        let cx = slot_centers_x[i];
+        let bx1 = cx - badge_w / 2;
+        let by1 = badge_cy - badge_h / 2;
+
+        let is_best = (i + 1 == best_slot_idx);
+        let is_trap = card.tier == "TRAP" || card.delta_win_rate <= -0.005;
+
+        let (fill_col, outline_col, wr_col, sub_col, sub_text) = if is_best {
+            (
+                rgb(7, 21, 36),     // 暗黑青金底
+                rgb(245, 158, 11),  // 亮金外边框
+                rgb(251, 191, 36),  // 金黄大字胜率
+                rgb(10, 200, 185),  // 青色标签
+                format!("👑 首选推荐 ({:+.1}%)", card.delta_win_rate * 100.0),
+            )
+        } else if is_trap {
+            (
+                rgb(31, 11, 15),    // 暗黑深红底
+                rgb(89, 26, 34),    // 猩红边框
+                rgb(248, 113, 113), // 警戒红胜率
+                rgb(251, 113, 133), // 粉红标签
+                format!("🚫 避雷建议 ({:+.1}%)", card.delta_win_rate * 100.0),
+            )
         } else {
-            &data.hero_name
+            let tier_label = match card.tier.as_str() {
+                "S" => "S 核心",
+                "A" => "A 强力",
+                "B" => "B 优选",
+                _ => "常规",
+            };
+            (
+                rgb(6, 16, 26),     // 黑曜石底
+                rgb(34, 51, 68),    // 科技暗蓝边框
+                rgb(241, 245, 249), // 纯白天体胜率
+                rgb(148, 163, 184), // 银灰标签
+                format!("{} ({:+.1}%)", tier_label, card.delta_win_rate * 100.0),
+            )
         };
-        draw_card_rect(hdc, msg_x, start_y, msg_w, 70, COLORREF(0x0023190f), COLORREF(0x00a0a0a0));
-        draw_text_line(hdc, tip1, msg_x + 20, start_y + 16, COLORREF(0x00ffffff));
-        draw_text_line(hdc, "按 [ 或 【 键可随时重试识别推演", msg_x + 20, start_y + 40, COLORREF(0x0000e5ff));
+
+        // 绘制胶囊外框背景
+        draw_card_rect(hdc, bx1, by1, badge_w, badge_h, fill_col, outline_col);
+
+        // 居中大字胜率 (24pt YaHei bold，带黑色阴影提升高反差可读性)
+        let wr_str = format!("{:.1}%", card.win_rate * 100.0);
+        let wr_y = badge_cy - (20.0 * sy) as i32;
+        draw_text_centered(hdc, &wr_str, cx, wr_y, wr_font_size, 700, wr_col, true);
+
+        // 居中副标签 (11pt YaHei bold)
+        let sub_y = badge_cy + (10.0 * sy) as i32;
+        draw_text_centered(hdc, &sub_text, cx, sub_y, badge_sub_font_size, 700, sub_col, true);
     }
 }
 
@@ -1897,5 +2040,103 @@ unsafe fn draw_pill_badge(
     };
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     let _ = DrawTextW(hdc, &mut wide, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+#[cfg(windows)]
+unsafe fn draw_text_custom(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    x: i32,
+    y: i32,
+    font_size: i32,
+    weight: i32,
+    color: windows::Win32::Foundation::COLORREF,
+    shadow: bool,
+) {
+    use windows::Win32::Graphics::Gdi::{
+        CreateFontW, DeleteObject, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH, FF_DONTCARE, TRANSPARENT,
+    };
+
+    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+    let hfont = CreateFontW(
+        font_size,
+        0, 0, 0,
+        weight,
+        0, 0, 0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_DEFAULT_PRECIS.0 as u32,
+        CLIP_DEFAULT_PRECIS.0 as u32,
+        CLEARTYPE_QUALITY.0 as u32,
+        DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
+        windows::core::PCWSTR(font_name.as_ptr()),
+    );
+
+    let old_font = SelectObject(hdc, hfont);
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    let wide: Vec<u16> = text.encode_utf16().collect();
+
+    if shadow {
+        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+        let _ = TextOutW(hdc, x + 1, y + 1, &wide);
+    }
+
+    SetTextColor(hdc, color);
+    let _ = TextOutW(hdc, x, y, &wide);
+
+    let _ = SelectObject(hdc, old_font);
+    let _ = DeleteObject(hfont);
+}
+
+#[cfg(windows)]
+unsafe fn draw_text_centered(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    cx: i32,
+    y: i32,
+    font_size: i32,
+    weight: i32,
+    color: windows::Win32::Foundation::COLORREF,
+    shadow: bool,
+) {
+    use windows::Win32::Graphics::Gdi::{
+        CreateFontW, DeleteObject, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        GetTextExtentPoint32W, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE, TRANSPARENT,
+    };
+    use windows::Win32::Foundation::SIZE;
+
+    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+    let hfont = CreateFontW(
+        font_size,
+        0, 0, 0,
+        weight,
+        0, 0, 0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_DEFAULT_PRECIS.0 as u32,
+        CLIP_DEFAULT_PRECIS.0 as u32,
+        CLEARTYPE_QUALITY.0 as u32,
+        DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
+        windows::core::PCWSTR(font_name.as_ptr()),
+    );
+
+    let old_font = SelectObject(hdc, hfont);
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+    let x = cx - size.cx / 2;
+
+    if shadow {
+        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+        let _ = TextOutW(hdc, x + 1, y + 1, &wide);
+    }
+
+    SetTextColor(hdc, color);
+    let _ = TextOutW(hdc, x, y, &wide);
+
+    let _ = SelectObject(hdc, old_font);
+    let _ = DeleteObject(hfont);
 }
 

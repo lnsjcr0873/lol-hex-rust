@@ -158,6 +158,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bench_overlay.start();
     ranked_overlay.start();
     ingame_overlay.start();
+    ingame_overlay.start_auto_sensing_loop(
+        db.clone(),
+        live_client.clone(),
+        lcu_client.clone(),
+        is_aram_active.clone(),
+    );
     item_overlay.start();
 
     // 5. Start Global Hotkeys
