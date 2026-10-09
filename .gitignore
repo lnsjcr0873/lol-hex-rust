@@ -8,3 +8,5 @@ data/opgg_cache/
 *.tmp*
 .vscode/
 .idea/
+release_dist/
+*.exe
