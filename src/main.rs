@@ -297,15 +297,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             current_sig.push_str(&format!("T:{}:{}:{};", s.cell_id, s.champion_id, s.position));
                         }
 
+                        let my_cids: Vec<i32> = d.state.my_team.iter().map(|s| s.champion_id.parse::<i32>().unwrap_or(0)).collect();
+                        let my_locals: Vec<bool> = d.state.my_team.iter().map(|s| s.is_local_player).collect();
+
                         if current_sig == last_draft_sig {
                             if let Some(ref cached) = cached_ranked_data {
-                                ranked_bg.show_ranked_draft(cached.clone());
-                                continue;
+                                let profiles_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count();
+                                if profiles_ready >= 4 || profiles_ready == d.state.my_team.len() {
+                                    ranked_bg.show_ranked_draft(cached.clone());
+                                    continue;
+                                }
                             }
                         }
 
-                        // Resolve teammate profiles via LCU chat participants
-                        let profiles = history_bg.resolve_teammates(&session, &lcu_bg).await;
+                        // Resolve teammate profiles via enhanced multi-tier resolver
+                        let profiles = history_bg.resolve_teammates(&session, &my_cids, &my_locals, &lcu_bg).await;
 
                         let local_slot = d.state.my_team.iter().find(|s| s.is_local_player).cloned();
                         let local_pos = local_slot.as_ref().map(|s| s.position.clone()).unwrap_or_default();
@@ -313,7 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // 2. 5v5 Ranked / Normal Draft -> RankedOverlay HUD
                         let mut my_slots = Vec::new();
                         for (idx, s) in d.state.my_team.iter().enumerate() {
-                            let prof = profiles.get(idx).cloned();
+                            let prof = profiles.get(idx).cloned().flatten();
                             let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
                             let opp_slot = d.state.their_team.iter().find(|t| t.position == s.position);
                             let m_wr = if s.is_local_player && !s.champion_id.is_empty() {

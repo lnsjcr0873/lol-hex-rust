@@ -1640,8 +1640,26 @@ unsafe fn render_ranked_hud(
             draw_h_line(hdc, wx1 + 4, cy1 + 1, wx2 - 4, if is_inspected { rgb(251, 191, 36) } else { rgb(2, 132, 199) });
             new_hotzones.inspect_slot_btns.push(((wx1, cy1, wx2, cy1 + card_h), true, idx));
 
-            let slot_name = if slot.champion_name.is_empty() { format!("我方{}楼", idx + 1) } else { slot.champion_name.clone() };
-            let row1_left = format!("[{}] {}", slot.position_cn, slot_name);
+            let slot_name = if let Some(ref p) = slot.profile {
+                if !p.summoner_name.is_empty() {
+                    let raw_n = p.summoner_name.clone();
+                    if raw_n.len() > 7 { format!("{}…", &raw_n[..6]) } else { raw_n }
+                } else if slot.champion_name.is_empty() {
+                    format!("我方{}楼", idx + 1)
+                } else {
+                    slot.champion_name.clone()
+                }
+            } else if slot.champion_name.is_empty() {
+                format!("我方{}楼", idx + 1)
+            } else {
+                slot.champion_name.clone()
+            };
+
+            let row1_left = if !slot.champion_name.is_empty() {
+                format!("[{}] {} ({})", slot.position_cn, slot_name, slot.champion_name)
+            } else {
+                format!("[{}] {}", slot.position_cn, slot_name)
+            };
             draw_text_line(hdc, &row1_left, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
 
             let tier_str = if let Some(ref p) = slot.profile {
@@ -1652,33 +1670,35 @@ unsafe fn render_ranked_hud(
             draw_text_line(hdc, &tier_str, wx2 - 58, cy1 + 5, rgb(200, 170, 110));
 
             if let Some(ref p) = slot.profile {
-                let row2_text = format!("近{}场 {}%", sample_count, p.win_rate_pct);
-                let wr_fg = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                let (row2_text, wr_fg) = if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
+                    let col = if p.cur_champ_win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.cur_champ_win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                    (format!("⭐该英雄近{}场 {}% ({}胜{}负)", p.cur_champ_games, p.cur_champ_win_rate_pct, p.cur_champ_wins, p.cur_champ_losses), col)
+                } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
+                    (format!("近{}场 {}% · ⚠️试英雄(0场)", sample_count, p.win_rate_pct), rgb(251, 191, 36))
+                } else {
+                    let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
+                    (format!("近{}场 {}% ({}胜{}负)", sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
+                };
                 draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
 
                 let dot_start_x = wx2 - 48;
                 let dot_cy = cy1 + 29;
-                for d_idx in 0..5 {
-                    let dx = dot_start_x + d_idx * 9;
-                    let (fill_c, border_c) = if p.streak_type == "win" && d_idx < p.streak_count.min(5) {
-                        (rgb(16, 185, 129), rgb(52, 211, 153))
-                    } else if p.streak_type == "loss" && d_idx < p.streak_count.min(5) {
-                        (rgb(239, 68, 68), rgb(248, 113, 113))
-                    } else if (d_idx % 2 == 0 && p.win_rate_pct >= 50) || p.win_rate_pct >= 65 {
+                for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
+                    let dx = dot_start_x + d_idx as i32 * 9;
+                    let (fill_c, border_c) = if is_win {
                         (rgb(16, 185, 129), rgb(52, 211, 153))
                     } else {
-                        (rgb(30, 41, 59), rgb(51, 65, 85))
+                        (rgb(239, 68, 68), rgb(248, 113, 113))
                     };
                     draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
                 }
             } else {
-                let row2_text = format!("排位胜率 {:.1}%", slot.win_rate * 100.0);
-                draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, rgb(148, 163, 184));
+                draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
             }
 
             if let Some(ref p) = slot.profile {
                 if !p.badge_text.is_empty() {
-                    let badge_w = 82.min(wx2 - wx1 - 12);
+                    let badge_w = 84.min(wx2 - wx1 - 12);
                     let (b_bg, b_border, b_fg) = if p.streak_type == "win" || p.badge_text.contains("连胜") {
                         (rgb(6, 78, 59), rgb(52, 211, 153), rgb(52, 211, 153))
                     } else if p.streak_type == "loss" || p.badge_text.contains("连败") {
@@ -1693,7 +1713,7 @@ unsafe fn render_ranked_hud(
                     draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
                 }
             } else {
-                draw_text_line(hdc, "🎯 点击查看对位/协同 ▶", wx1 + 6, cy1 + 46, rgb(56, 189, 248));
+                draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
             }
         }
     }
@@ -1743,7 +1763,7 @@ unsafe fn render_ranked_hud(
             let row1_text = format!("[{}] {}", slot.position_cn, enemy_cname);
             draw_text_line(hdc, &row1_text, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
             draw_text_line(hdc, "🔒 选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
-            draw_text_line(hdc, "🎯 点击查看克制/协同 ▶", wx1 + 6, cy1 + 46, rgb(244, 63, 94));
+            draw_text_line(hdc, "⚔️ 进入对局后自动解锁", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
         }
     }
 
@@ -1786,8 +1806,16 @@ unsafe fn render_ranked_hud(
         draw_text_line(hdc, &pos_label, pos_bx1 + 3, sy1 + 5, p_fg);
         new_hotzones.pos_btns.push(((pos_bx1, sy1 + 4, pos_bx2, sy1 + 18), true, idx));
 
-        let wr_str = format!("{:.1}%", slot.win_rate * 100.0);
-        draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 40, sy1 + 5, rgb(203, 213, 225));
+        let wr_str = if let Some(ref p) = slot.profile {
+            if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
+                format!("实战: {}%", p.cur_champ_win_rate_pct)
+            } else {
+                format!("梯队: {:.1}%", slot.win_rate * 100.0)
+            }
+        } else {
+            format!("梯队: {:.1}%", slot.win_rate * 100.0)
+        };
+        draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
         new_hotzones.inspect_slot_btns.push(((actual_left_margin, sy1, left_slot_x + slot_card_w, sy1 + slot_card_h), true, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
@@ -1836,8 +1864,8 @@ unsafe fn render_ranked_hud(
         draw_text_line(hdc, &pos_label, pos_bx1 + 3, sy1 + 5, p_fg);
         new_hotzones.pos_btns.push(((pos_bx1, sy1 + 4, pos_bx2, sy1 + 18), false, idx));
 
-        let wr_str = format!("{:.1}%", slot.win_rate * 100.0);
-        draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 40, sy1 + 5, rgb(203, 213, 225));
+        let wr_str = format!("梯队: {:.1}%", slot.win_rate * 100.0);
+        draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
         new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, actual_left_margin + cw, sy1 + slot_card_h), false, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {

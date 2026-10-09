@@ -372,4 +372,45 @@ impl LcuClient {
         }
         None
     }
+
+    pub async fn get_current_summoner(&self) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!("https://127.0.0.1:{}/lol-summoner/v1/current-summoner", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn get_chat_conversations(&self) -> Vec<Value> {
+        if !self.ensure_credentials().await {
+            return Vec::new();
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
+
+        let url = format!("https://127.0.0.1:{}/lol-chat/v1/conversations", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                if let Ok(list) = res.json::<Vec<Value>>().await {
+                    return list;
+                }
+            }
+        }
+        Vec::new()
+    }
 }
+
