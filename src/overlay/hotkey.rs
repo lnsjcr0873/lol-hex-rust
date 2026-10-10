@@ -5,6 +5,8 @@ static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 static HOOK_HANDLE: Mutex<Option<usize>> = Mutex::new(None);
 static CALLBACK_LEFT: Mutex<Option<Box<dyn Fn() + Send + 'static>>> = Mutex::new(None);
 static CALLBACK_RIGHT: Mutex<Option<Box<dyn Fn() + Send + 'static>>> = Mutex::new(None);
+static SHARED_LAST_TRIGGER_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SHARED_LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub struct HotkeyManager {
     running: Arc<AtomicBool>,
@@ -83,21 +85,29 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
         fn GetTickCount64() -> u64;
     }
 
-    static LAST_ASYNC_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    static LAST_ASYNC_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
     // VK_OEM_4 = 0xDB ('[' and '【'), VK_OEM_6 = 0xDD (']' and '】')
     while running.load(Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(25)); // 40Hz polling, 0.00% CPU
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        // If low-level hook is registered successfully and active, do not poll to eliminate double-firing!
+        let hook_active = if let Ok(guard) = HOOK_HANDLE.lock() {
+            guard.is_some()
+        } else {
+            false
+        };
+        if hook_active {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            continue;
+        }
 
         unsafe {
             let left_state = GetAsyncKeyState(0xDB);
             if (left_state as u16 & 0x8000) != 0 {
                 let now = GetTickCount64();
-                let last = LAST_ASYNC_LEFT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 400 {
-                    LAST_ASYNC_LEFT.store(now, Ordering::Relaxed);
-                    tracing::info!("GetAsyncKeyState detected '[' / '【' pressed");
+                let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
+                if now.saturating_sub(last) > 350 {
+                    SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+                    tracing::info!("GetAsyncKeyState fallback detected '[' / '【' pressed");
                     crate::spawn_task(async move {
                         if let Ok(guard) = CALLBACK_LEFT.lock() {
                             if let Some(ref cb) = *guard {
@@ -111,10 +121,10 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
             let right_state = GetAsyncKeyState(0xDD);
             if (right_state as u16 & 0x8000) != 0 {
                 let now = GetTickCount64();
-                let last = LAST_ASYNC_RIGHT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 400 {
-                    LAST_ASYNC_RIGHT.store(now, Ordering::Relaxed);
-                    tracing::info!("GetAsyncKeyState detected ']' / '】' pressed");
+                let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
+                if now.saturating_sub(last) > 350 {
+                    SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+                    tracing::info!("GetAsyncKeyState fallback detected ']' / '】' pressed");
                     crate::spawn_task(async move {
                         if let Ok(guard) = CALLBACK_RIGHT.lock() {
                             if let Some(ref cb) = *guard {
@@ -205,9 +215,6 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         fn GetTickCount64() -> u64;
     }
 
-    static LAST_TRIGGER_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    static LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
     #[repr(C)]
     struct KbdLlHookStruct {
         vk_code: u32,
@@ -231,9 +238,9 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
 
         if is_left_bracket {
             let now = GetTickCount64();
-            let last = LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-            if now.saturating_sub(last) > 400 {
-                LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+            let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
+            if now.saturating_sub(last) > 350 {
+                SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
                 crate::spawn_task(async move {
                     if let Ok(guard) = CALLBACK_LEFT.lock() {
                         if let Some(ref cb) = *guard {
@@ -244,9 +251,9 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
             }
         } else if is_right_bracket {
             let now = GetTickCount64();
-            let last = LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-            if now.saturating_sub(last) > 400 {
-                LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+            let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
+            if now.saturating_sub(last) > 350 {
+                SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
                 crate::spawn_task(async move {
                     if let Ok(guard) = CALLBACK_RIGHT.lock() {
                         if let Some(ref cb) = *guard {

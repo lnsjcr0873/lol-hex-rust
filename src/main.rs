@@ -553,6 +553,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     bench_bg.stop();
                 }
 
+                let is_aram = is_aram_bg.load(std::sync::atomic::Ordering::SeqCst);
+                if is_aram {
+                    // ARAM Mode: Cleanly dismiss draft overlays immediately upon entering loading screen!
+                    if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
+                        ranked_bg.stop();
+                    }
+                    crate::overlay::win32_hud::GLOBAL_HUD.hide();
+                    continue;
+                }
+
                 // If 10 players are already resolved and in cache, keep displaying without spamming LCU
                 if let Some(ref cached) = cached_ranked_data {
                     let total_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count()
@@ -678,26 +688,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         last_level = current_lvl;
 
-                        item_bg.update_recommendations_from_live(
-                            &db_bg,
-                            &live_stats.hero_id,
-                            &live_stats.hero_name,
-                            live_stats.gold,
-                            &live_stats.current_items,
-                            &live_stats.enemy_team,
-                        );
                     } else {
-                        // Summoner's Rift: keep ranked overlay for loading/early game, update item recommendation
+                        // Summoner's Rift: keep ranked overlay for loading/early game
                         last_level = live_stats.level;
-                        item_bg.update_recommendations_from_live(
-                            &db_bg,
-                            &live_stats.hero_id,
-                            &live_stats.hero_name,
-                            live_stats.gold,
-                            &live_stats.current_items,
-                            &live_stats.enemy_team,
-                        );
                     }
+
+                    let assigned_pos = {
+                        let d = draft_bg.read().await;
+                        d.state.my_team.iter().find(|s| s.is_local_player).map(|s| s.position.clone()).unwrap_or_default()
+                    };
+
+                    item_bg.update_recommendations_from_live(
+                        &db_bg,
+                        &opgg_bg,
+                        live_stats.is_aram,
+                        &live_stats.hero_id,
+                        &live_stats.hero_name,
+                        &assigned_pos,
+                        live_stats.gold,
+                        &live_stats.current_items,
+                        &[],
+                        &live_stats.enemy_team,
+                        live_stats.game_time,
+                    ).await;
                 }
             } else {
                 // Out of match: Lobby, Matchmaking, EndOfGame, etc. -> Clean up!

@@ -34,8 +34,12 @@ pub struct ItemCardView {
 #[derive(Debug, Clone, Default)]
 pub struct ItemOverlayData {
     pub hero_name: String,
+    pub mode_title: String,
     pub current_gold: f64,
     pub items: Vec<ItemCardView>,
+    pub trio_names: Vec<String>,
+    pub trio_completed: usize,
+    pub boots_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1253,40 +1257,60 @@ unsafe fn render_item_hud(
 ) {
     use windows::Win32::Foundation::COLORREF;
 
-    let box_w = 390.min(width - 40);
-    let box_h = 240;
+    let box_w = 410.min(width - 40);
+    let box_h = if !data.trio_names.is_empty() { 270 } else { 235 };
     let box_x = width - box_w - 30;
     let box_y = height - box_h - 70;
 
     // Dark slate border with cyan accent
     draw_card_rect(hdc, box_x, box_y, box_w, box_h, COLORREF(0x0020140a), COLORREF(0x00ab9703));
 
-    // Title
-    let title = format!("⚡ HexBrain 出装推荐 (持有金币: {}G)", data.current_gold as i64);
+    // Title: Hero + Mode + Gold
+    let m_str = if !data.mode_title.is_empty() { format!(" [{}]", data.mode_title) } else { String::new() };
+    let title = format!("⚡ {}·出装推荐{} (持有: {}G)", data.hero_name, m_str, data.current_gold as i64);
     draw_text_line(hdc, &title, box_x + 14, box_y + 12, COLORREF(0x0000e5ff));
 
-    for (i, item) in data.items.iter().take(4).enumerate() {
-        let item_y = box_y + 42 + (i as i32 * 46);
+    let max_items = if !data.trio_names.is_empty() { 3 } else { 4 };
+    let mut current_y = box_y + 38;
+    for (i, item) in data.items.iter().take(max_items).enumerate() {
+        let prefix = if i == 0 { "★ 核心首选: " } else { "  备选神装: " };
+        let header = format!("{}{}{} (评分: {:.0})", i + 1, prefix, item.name, item.tactical_score);
+        draw_text_line(hdc, &header, box_x + 14, current_y, if i == 0 { rgb(251, 191, 36) } else { rgb(255, 255, 255) });
 
-        // Item name & tactical score
-        let header = format!("{}. {} (战术评分: {:.0})", i + 1, item.name, item.tactical_score);
-        draw_text_line(hdc, &header, box_x + 14, item_y, COLORREF(0x00ffffff));
-
-        // Affordability badge & net cost
         let (cost_text, cost_col) = if item.is_affordable {
             (
-                format!("  [可直接合成] 合成价: {}G (总价: {}G)", item.net_cost, item.total_cost),
-                COLORREF(0x0050ff50), // Green
+                format!("  [可直接全款] 散件抵扣后: {}G (总价: {}G)", item.net_cost, item.total_cost),
+                rgb(74, 222, 128),
             )
         } else {
             (
-                format!("  [差 {}G] 合成价: {}G (总价: {}G)", item.gold_diff, item.net_cost, item.total_cost),
-                COLORREF(0x0050c8ff), // Amber / Yellow
+                format!("  [差 {}G] 散件抵扣后: {}G (总价: {}G)", item.gold_diff, item.net_cost, item.total_cost),
+                rgb(251, 191, 36),
             )
         };
+        draw_text_line(hdc, &cost_text, box_x + 14, current_y + 18, cost_col);
 
-        draw_text_line(hdc, &cost_text, box_x + 14, item_y + 20, cost_col);
+        if !item.reason.is_empty() {
+            let r_text = if item.reason.chars().count() > 24 {
+                format!("  💡 {}…", item.reason.chars().take(23).collect::<String>())
+            } else {
+                format!("  💡 {}", item.reason)
+            };
+            draw_text_line(hdc, &r_text, box_x + 14, current_y + 36, rgb(148, 163, 184));
+            current_y += 56;
+        } else {
+            current_y += 42;
+        }
     }
+
+    if !data.trio_names.is_empty() {
+        let trio_str = format!("🏆 终局神装: {} (进度: {}/3)", data.trio_names.join(" + "), data.trio_completed);
+        draw_text_line(hdc, &trio_str, box_x + 14, box_y + box_h - 40, rgb(200, 170, 110));
+    }
+
+    let boot_str = if !data.boots_name.is_empty() { format!("👟 推荐鞋: {} · ", data.boots_name) } else { String::new() };
+    let hint = format!("{}[按 ] 或【 键随时关闭]", boot_str);
+    draw_text_line(hdc, &hint, box_x + 14, box_y + box_h - 20, rgb(100, 116, 139));
 }
 
 #[cfg(windows)]

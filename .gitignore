@@ -9,4 +9,6 @@ data/opgg_cache/
 .vscode/
 .idea/
 release_dist/
+dist-build/
+prompt_*.md
 *.exe

@@ -15,6 +15,7 @@ pub struct LiveGameStats {
     pub game_mode: String,
     pub map_number: i32,
     pub is_aram: bool,
+    pub game_time: f64,
 }
 
 pub struct LiveClientDataReader {
@@ -64,6 +65,7 @@ impl LiveClientDataReader {
             stats.is_aram = mn == 12 || mn == 30 || gm == "ARAM" || gm == "CHERRY" || gm == "KIWI";
             stats.game_mode = gm;
             stats.map_number = mn;
+            stats.game_time = game_data.get("gameTime").and_then(|v| v.as_f64()).unwrap_or(0.0);
         }
 
         let active_opt = data.get("activePlayer");

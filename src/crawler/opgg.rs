@@ -339,13 +339,61 @@ impl OpggClient {
                         }
                     }
 
+                    // Parse Starter Items
+                    let mut starter_items = Vec::new();
+                    if let Some(items) = raw.get("data").and_then(|d| d.get("starter_items")).and_then(|i| i.as_array()) {
+                        for build in items.iter().take(2) {
+                            if let Some(ids) = build.get("ids").and_then(|v| v.as_array()) {
+                                let item_ids: Vec<String> = ids.iter().filter_map(|x| x.as_i64().map(|n| n.to_string())).collect();
+                                let wr = build.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                starter_items.push(json!({
+                                    "itemIds": item_ids,
+                                    "winRate": wr,
+                                }));
+                            }
+                        }
+                    }
+
+                    // Parse Boots
+                    let mut boots_items = Vec::new();
+                    if let Some(items) = raw.get("data").and_then(|d| d.get("boots")).and_then(|i| i.as_array()) {
+                        for build in items.iter().take(3) {
+                            if let Some(ids) = build.get("ids").and_then(|v| v.as_array()) {
+                                let item_ids: Vec<String> = ids.iter().filter_map(|x| x.as_i64().map(|n| n.to_string())).collect();
+                                let wr = build.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                boots_items.push(json!({
+                                    "itemIds": item_ids,
+                                    "winRate": wr,
+                                }));
+                            }
+                        }
+                    }
+
+                    // Parse Last Items
+                    let mut last_items = Vec::new();
+                    if let Some(items) = raw.get("data").and_then(|d| d.get("last_items")).and_then(|i| i.as_array()) {
+                        for build in items.iter().take(4) {
+                            if let Some(ids) = build.get("ids").and_then(|v| v.as_array()) {
+                                let item_ids: Vec<String> = ids.iter().filter_map(|x| x.as_i64().map(|n| n.to_string())).collect();
+                                let wr = build.get("win").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                last_items.push(json!({
+                                    "itemIds": item_ids,
+                                    "winRate": wr,
+                                }));
+                            }
+                        }
+                    }
+
                     let detail_result = json!({
                         "championId": champion_id,
                         "position": pos_upper,
                         "counterMap": counter_map,
                         "counters": counters_list,
                         "recommendedRunes": rune_build,
-                        "coreItems": core_items
+                        "coreItems": core_items,
+                        "starterItems": starter_items,
+                        "boots": boots_items,
+                        "lastItems": last_items
                     });
 
                     // Store in memory cache ONLY (zero disk clutter)
