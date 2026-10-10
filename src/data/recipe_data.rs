@@ -10,11 +10,75 @@ pub struct RecipeMetadata {
     pub component_names: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemSummaryEntry {
+    #[serde(default)]
+    pub item_id: String,
+    #[serde(default)]
+    pub item_name: String,
+    #[serde(default)]
+    pub cdn_icon_url: Option<String>,
+}
+
 lazy_static! {
     pub static ref RECIPE_META: RecipeMetadata = {
         let raw = include_str!("../../data/recipe_metadata.json");
         serde_json::from_str(raw).expect("Failed to parse embedded recipe_metadata.json")
     };
+    pub static ref ITEMS_SUMMARY: HashMap<String, ItemSummaryEntry> = {
+        let raw = include_str!("../../data/items_summary.json");
+        serde_json::from_str(raw).unwrap_or_default()
+    };
+}
+
+pub fn resolve_item_name(item_id: &str) -> String {
+    let clean_id = normalize_item_id(item_id);
+    if let Some(entry) = ITEMS_SUMMARY.get(&clean_id) {
+        if !entry.item_name.is_empty() {
+            return entry.item_name.clone();
+        }
+    }
+    if let Some(name) = RECIPE_META.component_names.get(&clean_id) {
+        return name.clone();
+    }
+    match clean_id.as_str() {
+        "1054" => "多兰之盾".to_string(),
+        "1055" => "多兰之刃".to_string(),
+        "1056" => "多兰之戒".to_string(),
+        "1082" => "黑暗封印".to_string(),
+        "1083" => "萃取".to_string(),
+        "2003" => "生命药水".to_string(),
+        "2031" => "复用型药水".to_string(),
+        "2033" => "腐败药水".to_string(),
+        "2055" => "控制守卫".to_string(),
+        "3006" => "狂战士胫甲".to_string(),
+        "3009" => "轻灵之靴".to_string(),
+        "3020" => "法师之靴".to_string(),
+        "3047" => "铁板靴".to_string(),
+        "3111" => "水银之靴".to_string(),
+        "3117" => "疾行之靴".to_string(),
+        "3158" => "明朗之靴".to_string(),
+        "3010" => "共生草鞋".to_string(),
+        "3865" => "云游图标".to_string(),
+        "3866" => "符文罗盘".to_string(),
+        "3867" => "世界地图".to_string(),
+        "3869" => "星界异界".to_string(),
+        "3870" => "圆梦使者".to_string(),
+        "3871" => "扎兹沙克的溃口".to_string(),
+        "3876" => "血鸣".to_string(),
+        "3877" => "至尊极冰碎片".to_string(),
+        "1101" => "风行幼体".to_string(),
+        "1102" => "踏苔幼体".to_string(),
+        "1103" => "焰爪幼体".to_string(),
+        _ => {
+            if clean_id.is_empty() {
+                "未知装备".to_string()
+            } else {
+                format!("装备#{}", clean_id)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

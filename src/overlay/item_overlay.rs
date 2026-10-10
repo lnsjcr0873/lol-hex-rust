@@ -217,6 +217,7 @@ impl ItemOverlay {
             // === 狂暴大乱斗 (Kiwi/ARAM) 模式：HexBrain 1157万大数据海克斯联动推演 ===
             mode_title = "极地大乱斗·海克斯联动".to_string();
 
+            let default_cfg = crate::engine::decision::RecommendationConfig::default();
             let rec = DecisionEngine::get_item_recommendation(
                 db,
                 &resolved_id,
@@ -225,7 +226,7 @@ impl ItemOverlay {
                 1,
                 active_augments,
                 enemies,
-                None,
+                &default_cfg,
             );
 
             // 提取推荐神装路径
@@ -241,7 +242,7 @@ impl ItemOverlay {
                         .or_else(|| item_val.get("name"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| db.items_map.get(&iid).and_then(|it| it.name.clone()).unwrap_or_else(|| format!("装备-{}", iid)));
+                        .unwrap_or_else(|| db.resolve_item_name(&iid));
 
                     let score = item_val.get("tacticalScore").and_then(|v| v.as_f64()).unwrap_or(85.0);
                     let reason = item_val.get("reason").and_then(|v| v.as_str()).unwrap_or("海克斯协同与流派推荐神装").to_string();
@@ -267,6 +268,10 @@ impl ItemOverlay {
                     for n in names.iter().filter_map(|v| v.as_str()) {
                         trio_names.push(n.to_string());
                     }
+                } else if let Some(ids) = trio.get("itemIds").and_then(|v| v.as_array()) {
+                    for id_str in ids.iter().filter_map(|v| v.as_str()) {
+                        trio_names.push(db.resolve_item_name(id_str));
+                    }
                 }
                 if let Some(ids) = trio.get("itemIds").and_then(|v| v.as_array()) {
                     for id_str in ids.iter().filter_map(|v| v.as_str()) {
@@ -277,12 +282,17 @@ impl ItemOverlay {
                 }
             }
 
-            // 提取英雄专属适配鞋
-            if let Some(detail) = db.heroes_detail.read().unwrap().get(&resolved_id) {
-                if let Some(b) = detail.boots.first() {
-                    let b_id = b.item_id.to_string();
-                    boots_name = db.items_map.get(&b_id).and_then(|it| it.name.clone()).unwrap_or_else(|| "水银之靴/铁板靴".to_string());
+            // 提取 ARAM 适配鞋
+            let opgg_aram = opgg.get_champion_detail(&resolved_id, "ARAM").await;
+            if let Some(bts) = opgg_aram.as_ref().and_then(|d| d.get("boots")).and_then(|v| v.as_array()) {
+                if let Some(top_b) = bts.first().and_then(|b| b.get("itemIds")).and_then(|v| v.as_array()) {
+                    if let Some(bid) = top_b.first().and_then(|v| v.as_str()) {
+                        boots_name = db.resolve_item_name(bid);
+                    }
                 }
+            }
+            if boots_name.is_empty() {
+                boots_name = "水银之靴 / 铁板靴".to_string();
             }
         } else {
             // === 召唤师峡谷 (排位/匹配) 模式：OP.GG 官方天梯数据核心出装 ===
@@ -317,7 +327,7 @@ impl ItemOverlay {
                         for iid_val in first_set {
                             let iid = iid_val.as_str().unwrap_or("").to_string();
                             if iid.is_empty() || matches!(iid.as_str(), "2003" | "2031" | "3340") { continue; }
-                            let iname = db.items_map.get(&iid).and_then(|it| it.name.clone()).unwrap_or_else(|| format!("出门装-{}", iid));
+                            let iname = db.resolve_item_name(&iid);
                             let cost_info = calculate_item_net_cost(&iid, owned_item_ids, current_gold, "NET_DEDUCT");
                             item_views.push(ItemCardView {
                                 name: iname,
@@ -342,7 +352,7 @@ impl ItemOverlay {
                         for (idx, id_val) in ids.iter().enumerate() {
                             let iid = id_val.as_str().unwrap_or("").to_string();
                             if iid.is_empty() { continue; }
-                            let iname = db.items_map.get(&iid).and_then(|it| it.name.clone()).unwrap_or_else(|| format!("核心装-{}", iid));
+                            let iname = db.resolve_item_name(&iid);
                             trio_names.push(iname.clone());
                             if owned_set.contains(&iid) {
                                 trio_completed += 1;
@@ -415,7 +425,7 @@ impl ItemOverlay {
             if let Some(bts) = opgg_detail.as_ref().and_then(|d| d.get("boots")).and_then(|v| v.as_array()) {
                 if let Some(top_b) = bts.first().and_then(|b| b.get("itemIds")).and_then(|v| v.as_array()) {
                     if let Some(bid) = top_b.first().and_then(|v| v.as_str()) {
-                        boots_name = db.items_map.get(bid).and_then(|it| it.name.clone()).unwrap_or_else(|| "核心鞋子".to_string());
+                        boots_name = db.resolve_item_name(bid);
                     }
                 }
             }

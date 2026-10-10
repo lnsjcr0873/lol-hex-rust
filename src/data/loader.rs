@@ -261,6 +261,10 @@ impl Database {
         None
     }
 
+    pub fn resolve_item_name(&self, item_id: &str) -> String {
+        crate::data::recipe_data::resolve_item_name(item_id)
+    }
+
     pub fn get_hero_detail(&self, query: &str) -> Option<Arc<HeroDetail>> {
         let raw = query.trim();
         let hid = self.resolve_hero_id(raw).unwrap_or_else(|| raw.to_string());
