@@ -482,12 +482,11 @@ impl ItemOverlay {
             "当前英雄".to_string()
         };
 
-        // Cache db, opgg and context for instant recalculation upon UI interaction
+        // Cache db and context for instant recalculation upon UI interaction
         if let Ok(mut g) = self.cached_db.write() {
-            *g = Some(Arc::new(db.clone()));
-        }
-        if let Ok(mut g) = self.cached_opgg.write() {
-            *g = Some(Arc::new(opgg.clone()));
+            if g.is_none() {
+                *g = Some(Arc::new(db.clone()));
+            }
         }
         if let Ok(mut g) = self.last_live_context.write() {
             *g = Some(LastLiveContext {

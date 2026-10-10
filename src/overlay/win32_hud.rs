@@ -1501,7 +1501,6 @@ unsafe fn render_item_hud(
     draw_card_rect(hdc, box_x, box_y, box_w, box_h, rgb(10, 16, 29), rgb(120, 90, 40));
 
     // Hotzones tracking
-    let mut new_item_close = None;
     let mut new_item_algo_btns = Vec::new();
     let mut new_item_main_tabs = Vec::new();
     let mut new_item_subtabs = Vec::new();
@@ -1546,7 +1545,7 @@ unsafe fn render_item_hud(
     let close_x = box_x + box_w - 24;
     let close_y = box_y + 6;
     draw_text_custom(hdc, "✕", close_x + 4, close_y + 2, (12.0 * min_s).max(10.0) as i32, 700, rgb(148, 163, 184), false);
-    new_item_close = Some((close_x, close_y, close_x + 20, close_y + 20));
+    let new_item_close = Some((close_x, close_y, close_x + 20, close_y + 20));
 
     if is_analytics {
         // Analytics Subtabs Bar: [⭐ 精选] [⚔️ 成装] [🥾 鞋子] [🏆 三神装]
@@ -1663,7 +1662,7 @@ unsafe fn render_item_hud(
 
         let mut algo_btn_x = box_x + 46;
         for (key, label) in &presets {
-            let is_act = (key == &cur_algo);
+            let is_act = key == &cur_algo;
             let btn_w = 68;
             let btn_h = 18;
             let (bg_col, border_col, fg_col) = if is_act {
