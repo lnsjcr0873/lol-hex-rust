@@ -18,6 +18,6 @@ pub use window_tracker::WindowTracker;
 #[allow(unused_imports)]
 pub use win32_hud::{
     AugmentCardView, AugmentOverlayData, BenchChampView, BenchOverlayData, CounterHeroItem,
-    ItemCardView, ItemOverlayData, NativeHud, RankedDecisionCard, RankedOverlayData,
-    RankedSlotView, RuneGuideView, GLOBAL_HUD,
+    ItemCardView, ItemOverlayData, NativeHud, NextItemView, RankedDecisionCard, RankedOverlayData,
+    RankedSlotView, RuneGuideView, TrioItemView, GLOBAL_HUD,
 };

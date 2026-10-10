@@ -210,6 +210,39 @@ impl ScreenCapture {
     }
 
     #[cfg(windows)]
+    pub fn is_lol_client_active() -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetClassNameW};
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() {
+                return false;
+            }
+            let mut title_buf = [0u16; 256];
+            let len = GetWindowTextW(fg, &mut title_buf);
+            let title = String::from_utf16_lossy(&title_buf[..len as usize]).to_lowercase();
+            // If title contains "(tm)", it is the actual game client or loading screen, NOT the LCU client!
+            if title.contains("tm") {
+                return false;
+            }
+            let mut class_buf = [0u16; 256];
+            let clen = GetClassNameW(fg, &mut class_buf);
+            let class_name = String::from_utf16_lossy(&class_buf[..clen as usize]).to_lowercase();
+            if class_name.contains("rclient") {
+                return true;
+            }
+            if title.contains("league of legends") || title.contains("英雄联盟") {
+                return true;
+            }
+            false
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn is_lol_client_active() -> bool {
+        true
+    }
+
+    #[cfg(windows)]
     pub fn get_lol_game_rect() -> Option<ViewportRect> {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{

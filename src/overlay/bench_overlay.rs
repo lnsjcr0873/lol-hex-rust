@@ -60,6 +60,9 @@ impl BenchOverlay {
     }
 
     pub fn show_bench_heroes(&self, champions: Vec<BenchChampView>) {
+        if crate::vision::ScreenCapture::get_lol_game_rect().is_some() || !crate::vision::ScreenCapture::is_lol_client_active() {
+            return;
+        }
         self.is_showing.store(true, Ordering::SeqCst);
         let data = BenchOverlayData { champions };
         GLOBAL_HUD.show_bench(data, Duration::from_secs(30));

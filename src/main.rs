@@ -245,6 +245,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
+            if phase != "ChampSelect" {
+                if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
+                    bench_bg.stop();
+                }
+            }
+
             if phase == "ChampSelect" {
                 let session = lcu_bg.get_champ_select_session().await;
                 if !session.is_null() {
@@ -645,7 +651,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if phase == "InProgress" {
                 // In-Game Live 2999 Port Monitoring Workflow
                 let mut live_stats = live_bg.get_live_stats().await;
-                if live_stats.is_in_game {
+                if !live_stats.is_in_game {
+                    // Loading screen before game 2999 port is active: dismiss draft HUDs immediately
+                    let is_aram = is_aram_bg.load(std::sync::atomic::Ordering::SeqCst);
+                    if is_aram {
+                        if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
+                            ranked_bg.stop();
+                        }
+                        crate::overlay::win32_hud::GLOBAL_HUD.hide();
+                    }
+                } else {
                     if live_stats.hero_id.is_empty() && !live_stats.hero_name.is_empty() {
                         if let Some(resolved) = db_bg.resolve_hero_id(&live_stats.hero_name) {
                             live_stats.hero_id = resolved;

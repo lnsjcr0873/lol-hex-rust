@@ -7,6 +7,8 @@ static CALLBACK_LEFT: Mutex<Option<Box<dyn Fn() + Send + 'static>>> = Mutex::new
 static CALLBACK_RIGHT: Mutex<Option<Box<dyn Fn() + Send + 'static>>> = Mutex::new(None);
 static SHARED_LAST_TRIGGER_LEFT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SHARED_LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static IS_KEY_DOWN_LEFT: AtomicBool = AtomicBool::new(false);
+static IS_KEY_DOWN_RIGHT: AtomicBool = AtomicBool::new(false);
 
 pub struct HotkeyManager {
     running: Arc<AtomicBool>,
@@ -85,6 +87,9 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
         fn GetTickCount64() -> u64;
     }
 
+    let mut was_down_left = false;
+    let mut was_down_right = false;
+
     // VK_OEM_4 = 0xDB ('[' and '【'), VK_OEM_6 = 0xDD (']' and '】')
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(30));
@@ -102,10 +107,12 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
 
         unsafe {
             let left_state = GetAsyncKeyState(0xDB);
-            if (left_state as u16 & 0x8000) != 0 {
+            let is_down_left = (left_state as u16 & 0x8000) != 0;
+            if is_down_left && !was_down_left {
+                was_down_left = true;
                 let now = GetTickCount64();
                 let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 350 {
+                if now.saturating_sub(last) > 200 {
                     SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
                     tracing::info!("GetAsyncKeyState fallback detected '[' / '【' pressed");
                     crate::spawn_task(async move {
@@ -116,13 +123,17 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                         }
                     });
                 }
+            } else if !is_down_left {
+                was_down_left = false;
             }
 
             let right_state = GetAsyncKeyState(0xDD);
-            if (right_state as u16 & 0x8000) != 0 {
+            let is_down_right = (right_state as u16 & 0x8000) != 0;
+            if is_down_right && !was_down_right {
+                was_down_right = true;
                 let now = GetTickCount64();
                 let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 350 {
+                if now.saturating_sub(last) > 200 {
                     SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
                     tracing::info!("GetAsyncKeyState fallback detected ']' / '】' pressed");
                     crate::spawn_task(async move {
@@ -133,6 +144,8 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                         }
                     });
                 }
+            } else if !is_down_right {
+                was_down_right = false;
             }
         }
     }
@@ -224,8 +237,8 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         extra_info: usize,
     }
 
-    // HC_ACTION = 0, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
-    if code == 0 && (wparam == 0x0100 || wparam == 0x0104) && lparam != 0 {
+    // HC_ACTION = 0
+    if code == 0 && lparam != 0 {
         let kb = &*(lparam as *const KbdLlHookStruct);
         let vk_code = kb.vk_code;
         let scan_code = kb.scan_code & 0xFF;
@@ -236,31 +249,46 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
         let is_left_bracket = !is_extended && (vk_code == 0xDB || scan_code == 0x1A);
         let is_right_bracket = !is_extended && (vk_code == 0xDD || scan_code == 0x1B);
 
-        if is_left_bracket {
-            let now = GetTickCount64();
-            let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-            if now.saturating_sub(last) > 350 {
-                SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
-                crate::spawn_task(async move {
-                    if let Ok(guard) = CALLBACK_LEFT.lock() {
-                        if let Some(ref cb) = *guard {
-                            cb();
-                        }
-                    }
-                });
+        // WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105
+        if wparam == 0x0101 || wparam == 0x0105 {
+            if is_left_bracket {
+                IS_KEY_DOWN_LEFT.store(false, Ordering::SeqCst);
+            } else if is_right_bracket {
+                IS_KEY_DOWN_RIGHT.store(false, Ordering::SeqCst);
             }
-        } else if is_right_bracket {
-            let now = GetTickCount64();
-            let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-            if now.saturating_sub(last) > 350 {
-                SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
-                crate::spawn_task(async move {
-                    if let Ok(guard) = CALLBACK_RIGHT.lock() {
-                        if let Some(ref cb) = *guard {
-                            cb();
-                        }
+        } else if wparam == 0x0100 || wparam == 0x0104 {
+            // WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
+            // ONLY trigger on the rising edge (false -> true). Ignore all Windows auto-repeat keydown events!
+            if is_left_bracket {
+                if !IS_KEY_DOWN_LEFT.swap(true, Ordering::SeqCst) {
+                    let now = GetTickCount64();
+                    let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
+                    if now.saturating_sub(last) > 200 {
+                        SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+                        crate::spawn_task(async move {
+                            if let Ok(guard) = CALLBACK_LEFT.lock() {
+                                if let Some(ref cb) = *guard {
+                                    cb();
+                                }
+                            }
+                        });
                     }
-                });
+                }
+            } else if is_right_bracket {
+                if !IS_KEY_DOWN_RIGHT.swap(true, Ordering::SeqCst) {
+                    let now = GetTickCount64();
+                    let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
+                    if now.saturating_sub(last) > 200 {
+                        SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+                        crate::spawn_task(async move {
+                            if let Ok(guard) = CALLBACK_RIGHT.lock() {
+                                if let Some(ref cb) = *guard {
+                                    cb();
+                                }
+                            }
+                        });
+                    }
+                }
             }
         }
     }
