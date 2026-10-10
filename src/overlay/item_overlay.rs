@@ -217,7 +217,7 @@ impl ItemOverlay {
             // === 狂暴大乱斗 (Kiwi/ARAM) 模式：HexBrain 1157万大数据海克斯联动推演 ===
             mode_title = "极地大乱斗·海克斯联动".to_string();
 
-            let default_cfg = crate::engine::decision::RecommendationConfig::default();
+            let default_cfg = crate::config::RecommendationConfig::default();
             let rec = DecisionEngine::get_item_recommendation(
                 db,
                 &resolved_id,
