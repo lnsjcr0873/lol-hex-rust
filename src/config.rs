@@ -31,6 +31,27 @@ impl Default for RecommendationConfig {
     }
 }
 
+impl RecommendationConfig {
+    pub fn for_algorithm(algo: &str) -> Self {
+        let mut cfg = Self::default();
+        let key = match algo {
+            "HEXTECH" | "HEX_FUN" => "HEX_FUN",
+            "BLACK_TECH" | "HYBRID_FREE" => "HYBRID_FREE",
+            "IRON_BLOOD" | "IRON_COUNTER" => "IRON_COUNTER",
+            _ => "SMART",
+        };
+        let presets = get_preset_definitions();
+        if let Some(def) = presets.get(key) {
+            cfg.current_preset = algo.to_string();
+            cfg.hex_synergy_weight = def.hex_synergy_weight;
+            cfg.archetype_strictness = def.archetype_strictness;
+            cfg.counter_intensity = def.counter_intensity;
+            cfg.trio_mode = def.trio_mode.clone();
+        }
+        cfg
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresetDefinition {

@@ -1,5 +1,6 @@
 use super::win32_hud::{
-    ItemCardView, ItemOverlayData, NextItemView, TrioItemView, ACTIVE_ALGORITHM, GLOBAL_HUD,
+    AnalyticsItemRow, ItemCardView, ItemOverlayData, NextItemView, TrioItemView, ACTIVE_ALGORITHM,
+    GLOBAL_HUD,
 };
 use crate::crawler::OpggClient;
 use crate::data::loader::Database;
@@ -35,6 +36,20 @@ impl Default for ItemOverlayConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct LastLiveContext {
+    pub is_aram: bool,
+    pub hero_id: String,
+    pub hero_name: String,
+    pub assigned_position: String,
+    pub current_gold: f64,
+    pub owned_item_ids: Vec<String>,
+    pub active_augments: Vec<String>,
+    pub enemies: Vec<Value>,
+    pub game_time: f64,
+}
+
+#[derive(Clone)]
 pub struct ItemOverlay {
     pub config: Arc<RwLock<ItemOverlayConfig>>,
     pub is_showing: Arc<AtomicBool>,
@@ -43,6 +58,11 @@ pub struct ItemOverlay {
     pub last_toggle_instant: Arc<std::sync::Mutex<Instant>>,
     pub last_item_signature: Arc<std::sync::RwLock<String>>,
     pub cached_overlay_data: Arc<std::sync::RwLock<Option<ItemOverlayData>>>,
+    pub cached_db: Arc<std::sync::RwLock<Option<Arc<Database>>>>,
+    pub cached_opgg: Arc<std::sync::RwLock<Option<Arc<OpggClient>>>>,
+    pub last_live_context: Arc<std::sync::RwLock<Option<LastLiveContext>>>,
+    pub current_main_tab: Arc<std::sync::RwLock<String>>,
+    pub current_analytics_subtab: Arc<std::sync::RwLock<String>>,
 }
 
 impl Default for ItemOverlay {
@@ -61,6 +81,23 @@ impl ItemOverlay {
             last_toggle_instant: Arc::new(std::sync::Mutex::new(Instant::now() - Duration::from_secs(10))),
             last_item_signature: Arc::new(std::sync::RwLock::new(String::new())),
             cached_overlay_data: Arc::new(std::sync::RwLock::new(None)),
+            cached_db: Arc::new(std::sync::RwLock::new(None)),
+            cached_opgg: Arc::new(std::sync::RwLock::new(None)),
+            last_live_context: Arc::new(std::sync::RwLock::new(None)),
+            current_main_tab: Arc::new(std::sync::RwLock::new("recommend".to_string())),
+            current_analytics_subtab: Arc::new(std::sync::RwLock::new("featured".to_string())),
+        }
+    }
+
+    pub fn set_database(&self, db: Arc<Database>) {
+        if let Ok(mut g) = self.cached_db.write() {
+            *g = Some(db);
+        }
+    }
+
+    pub fn set_opgg(&self, opgg: Arc<OpggClient>) {
+        if let Ok(mut g) = self.cached_opgg.write() {
+            *g = Some(opgg);
         }
     }
 
@@ -86,9 +123,10 @@ impl ItemOverlay {
             *last = now;
         }
 
-        // 2. 精确 Toggle 控制：以 ITEM_MANUAL_OPEN 为基准
+        // 2. 精确 Toggle 控制：以 GLOBAL_HUD.is_visible() && ITEM_MANUAL_OPEN 为基准
+        let is_hud_visible = GLOBAL_HUD.is_visible();
         let is_open = ITEM_MANUAL_OPEN.load(Ordering::SeqCst);
-        if is_open {
+        if is_hud_visible && is_open {
             self.stop();
             return;
         }
@@ -104,6 +142,12 @@ impl ItemOverlay {
                 return;
             }
         }
+
+        let cur_algo = if let Ok(guard) = ACTIVE_ALGORITHM.read() {
+            guard.clone()
+        } else {
+            "SMART".to_string()
+        };
 
         let placeholder = ItemOverlayData {
             hero_name: "实时装备推演".to_string(),
@@ -126,9 +170,274 @@ impl ItemOverlay {
             trio_items: Vec::new(),
             trio_win_rate: 0.0,
             boots_name: String::new(),
-            active_algorithm: "SMART".to_string(),
+            active_algorithm: cur_algo,
+            active_main_tab: "recommend".to_string(),
+            analytics_subtab: "featured".to_string(),
+            analytics_rows: Vec::new(),
         };
         GLOBAL_HUD.show_items(placeholder, Duration::from_secs(3600));
+    }
+
+    pub fn trigger_recalculate(&self) {
+        if let Ok(mut sig) = self.last_item_signature.write() {
+            *sig = String::new();
+        }
+
+        let db_opt = self.cached_db.read().ok().and_then(|g| g.clone());
+        let opgg_opt = self.cached_opgg.read().ok().and_then(|g| g.clone());
+        let ctx_opt = self.last_live_context.read().ok().and_then(|g| g.clone());
+
+        if let (Some(db), Some(opgg), Some(ctx)) = (db_opt, opgg_opt, ctx_opt) {
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                self_clone.update_recommendations_from_live(
+                    &db,
+                    &opgg,
+                    ctx.is_aram,
+                    &ctx.hero_id,
+                    &ctx.hero_name,
+                    &ctx.assigned_position,
+                    ctx.current_gold,
+                    &ctx.owned_item_ids,
+                    &ctx.active_augments,
+                    &ctx.enemies,
+                    ctx.game_time,
+                ).await;
+            });
+        }
+    }
+
+    pub fn switch_main_tab(&self, tab_key: &str) {
+        if let Ok(mut mt) = self.current_main_tab.write() {
+            *mt = tab_key.to_string();
+        }
+        if let Ok(mut guard) = self.cached_overlay_data.write() {
+            if let Some(ref mut data) = *guard {
+                data.active_main_tab = tab_key.to_string();
+                if tab_key == "analytics" {
+                    let subtab = if data.analytics_subtab.is_empty() {
+                        "featured".to_string()
+                    } else {
+                        data.analytics_subtab.clone()
+                    };
+                    if let Ok(db_guard) = self.cached_db.read() {
+                        if let Some(ref db) = *db_guard {
+                            if let Ok(ctx_guard) = self.last_live_context.read() {
+                                if let Some(ref ctx) = *ctx_guard {
+                                    data.analytics_rows = Self::generate_analytics_rows(
+                                        db,
+                                        &ctx.hero_id,
+                                        &subtab,
+                                        ctx.is_aram,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                if ITEM_MANUAL_OPEN.load(Ordering::SeqCst) {
+                    GLOBAL_HUD.show_items(data.clone(), Duration::from_secs(3600));
+                }
+            }
+        }
+    }
+
+    pub fn switch_analytics_subtab(&self, sub_key: &str) {
+        if let Ok(mut st) = self.current_analytics_subtab.write() {
+            *st = sub_key.to_string();
+        }
+        if let Ok(mut guard) = self.cached_overlay_data.write() {
+            if let Some(ref mut data) = *guard {
+                data.analytics_subtab = sub_key.to_string();
+                if let Ok(db_guard) = self.cached_db.read() {
+                    if let Some(ref db) = *db_guard {
+                        if let Ok(ctx_guard) = self.last_live_context.read() {
+                            if let Some(ref ctx) = *ctx_guard {
+                                data.analytics_rows = Self::generate_analytics_rows(
+                                    db,
+                                    &ctx.hero_id,
+                                    sub_key,
+                                    ctx.is_aram,
+                                );
+                            }
+                        }
+                    }
+                }
+                if ITEM_MANUAL_OPEN.load(Ordering::SeqCst) {
+                    GLOBAL_HUD.show_items(data.clone(), Duration::from_secs(3600));
+                }
+            }
+        }
+    }
+
+    pub fn generate_analytics_rows(
+        db: &Database,
+        hero_id: &str,
+        subtab: &str,
+        _is_aram: bool,
+    ) -> Vec<AnalyticsItemRow> {
+        let mut rows = Vec::new();
+        let detail_opt = db.get_hero_detail(hero_id);
+        const BOOTS_IDS: &[&str] = &["1001", "3006", "3009", "3020", "3047", "3111", "3117", "3158", "3010"];
+
+        if let Some(detail) = detail_opt {
+            match subtab {
+                "featured" => {
+                    if let Some(items_arr) = detail.items.as_array() {
+                        let mut candidates: Vec<&Value> = items_arr.iter()
+                            .filter(|it| {
+                                let iid = it.get("itemId")
+                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                    .unwrap_or_default();
+                                !iid.is_empty() && !BOOTS_IDS.contains(&iid.as_str())
+                            })
+                            .collect();
+                        candidates.sort_by(|a, b| {
+                            let sa = a.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let sb = b.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for it in candidates.into_iter().take(5) {
+                            let iid = it.get("itemId")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                .unwrap_or_default();
+                            let iname = it.get("itemName").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| db.resolve_item_name(&iid));
+                            let wr = it.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let score = it.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(80.0);
+                            let pr = it.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.1);
+                            let games = it.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let label = it.get("hexLabel").and_then(|v| v.as_str()).unwrap_or("T1核心").to_string();
+
+                            rows.push(AnalyticsItemRow {
+                                name: iname,
+                                id: iid,
+                                win_rate: wr,
+                                delta_metric: score,
+                                pick_rate: pr,
+                                games,
+                                label,
+                                is_boot: false,
+                            });
+                        }
+                    }
+                }
+                "items" => {
+                    if let Some(items_arr) = detail.items.as_array() {
+                        let mut candidates: Vec<&Value> = items_arr.iter()
+                            .filter(|it| {
+                                let iid = it.get("itemId")
+                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                    .unwrap_or_default();
+                                !iid.is_empty() && !BOOTS_IDS.contains(&iid.as_str())
+                            })
+                            .collect();
+                        candidates.sort_by(|a, b| {
+                            let pa = a.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let pb = b.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for it in candidates.into_iter().take(5) {
+                            let iid = it.get("itemId")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                .unwrap_or_default();
+                            let iname = it.get("itemName").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| db.resolve_item_name(&iid));
+                            let wr = it.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let core_delta = it.get("coreDelta").or_else(|| it.get("deltaWinRate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let pr = it.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.1);
+                            let games = it.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let label = if core_delta >= 0.05 { "质变".to_string() } else { "常规".to_string() };
+
+                            rows.push(AnalyticsItemRow {
+                                name: iname,
+                                id: iid,
+                                win_rate: wr,
+                                delta_metric: core_delta,
+                                pick_rate: pr,
+                                games,
+                                label,
+                                is_boot: false,
+                            });
+                        }
+                    }
+                }
+                "boots" => {
+                    if let Some(items_arr) = detail.items.as_array() {
+                        let mut candidates: Vec<&Value> = items_arr.iter()
+                            .filter(|it| {
+                                let iid = it.get("itemId")
+                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                    .unwrap_or_default();
+                                BOOTS_IDS.contains(&iid.as_str())
+                            })
+                            .collect();
+                        candidates.sort_by(|a, b| {
+                            let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for it in candidates.into_iter().take(5) {
+                            let iid = it.get("itemId")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                                .unwrap_or_default();
+                            let iname = it.get("itemName").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| db.resolve_item_name(&iid));
+                            let wr = it.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let dwr = it.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let pr = it.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.1);
+                            let games = it.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let label = if wr >= 0.52 { "极佳".to_string() } else { "备选".to_string() };
+
+                            rows.push(AnalyticsItemRow {
+                                name: iname,
+                                id: iid,
+                                win_rate: wr,
+                                delta_metric: dwr,
+                                pick_rate: pr,
+                                games,
+                                label,
+                                is_boot: true,
+                            });
+                        }
+                    }
+                }
+                "trios" => {
+                    let mut trios_list = detail.terminal_item_trios.clone();
+                    trios_list.sort_by(|a, b| {
+                        let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    for (idx, trio) in trios_list.into_iter().take(5).enumerate() {
+                        let names: Vec<String> = trio.get("itemNames")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|x| x.to_string())).collect())
+                            .unwrap_or_default();
+                        let display_name = if !names.is_empty() {
+                            names.join(" + ")
+                        } else {
+                            format!("3神装组合 #{}", idx + 1)
+                        };
+                        let tkey = trio.get("trioKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let wr = trio.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.55);
+                        let dwr = trio.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let pr = trio.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.1);
+                        let games = trio.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+
+                        rows.push(AnalyticsItemRow {
+                            name: display_name,
+                            id: tkey,
+                            win_rate: wr,
+                            delta_metric: dwr,
+                            pick_rate: pr,
+                            games,
+                            label: format!("神装#{}", idx + 1),
+                            is_boot: false,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        rows
     }
 
     /// 局内后台静默推演与金币平滑刷新 (对齐 HexBrain 架构)：
@@ -173,7 +482,34 @@ impl ItemOverlay {
             "当前英雄".to_string()
         };
 
-        // 1. 计算复合签名 (英雄 + 分路 + 拥有装备 + 敌方阵容)
+        // Cache db, opgg and context for instant recalculation upon UI interaction
+        if let Ok(mut g) = self.cached_db.write() {
+            *g = Some(Arc::new(db.clone()));
+        }
+        if let Ok(mut g) = self.cached_opgg.write() {
+            *g = Some(Arc::new(opgg.clone()));
+        }
+        if let Ok(mut g) = self.last_live_context.write() {
+            *g = Some(LastLiveContext {
+                is_aram,
+                hero_id: resolved_id.clone(),
+                hero_name: resolved_name.clone(),
+                assigned_position: assigned_position.to_string(),
+                current_gold,
+                owned_item_ids: owned_item_ids.to_vec(),
+                active_augments: active_augments.to_vec(),
+                enemies: enemies.to_vec(),
+                game_time,
+            });
+        }
+
+        let cur_algo = if let Ok(guard) = ACTIVE_ALGORITHM.read() {
+            guard.clone()
+        } else {
+            "SMART".to_string()
+        };
+
+        // 1. 计算复合签名 (算法 + 英雄 + 分路 + 拥有装备 + 敌方阵容)
         let mut sorted_items = owned_item_ids.to_vec();
         sorted_items.sort();
         let mut sorted_augments = active_augments.to_vec();
@@ -190,8 +526,8 @@ impl ItemOverlay {
 
         let pos_key = if is_aram { "ARAM" } else { assigned_position };
         let current_sig = format!(
-            "{}@{}:{:?}@{:?}@{:?}",
-            resolved_id, pos_key, sorted_items, sorted_augments, enemy_keys
+            "{}:{}@{}:{:?}@{:?}@{:?}",
+            cur_algo, resolved_id, pos_key, sorted_items, sorted_augments, enemy_keys
         );
 
         let sig_changed = {
@@ -201,6 +537,11 @@ impl ItemOverlay {
 
         // 2. 若装备签名未变，仅金币发生变动：仅平滑更新差额与进度条，绝不打乱或重排装备！
         if !sig_changed {
+            if let Ok(mut g) = self.last_live_context.write() {
+                if let Some(ref mut ctx) = *g {
+                    ctx.current_gold = current_gold;
+                }
+            }
             if let Ok(mut guard) = self.cached_overlay_data.write() {
                 if let Some(ref mut data) = *guard {
                     if (data.current_gold - current_gold).abs() < 1.0 {
@@ -243,17 +584,11 @@ impl ItemOverlay {
         let mode_title: String;
         let archetype_title: String;
 
-        let cur_algo = if let Ok(guard) = ACTIVE_ALGORITHM.read() {
-            guard.clone()
-        } else {
-            "SMART".to_string()
-        };
-
         if is_aram {
             // === 狂暴大乱斗 (Kiwi/ARAM) 模式：HexBrain 1157万大数据海克斯联动推演 ===
             mode_title = "极地大乱斗·海克斯联动".to_string();
 
-            let default_cfg = crate::config::RecommendationConfig::default();
+            let cfg = crate::config::RecommendationConfig::for_algorithm(&cur_algo);
             let rec = DecisionEngine::get_item_recommendation(
                 db,
                 &resolved_id,
@@ -262,7 +597,7 @@ impl ItemOverlay {
                 1,
                 active_augments,
                 enemies,
-                &default_cfg,
+                &cfg,
             );
 
             // 流派解析
@@ -613,6 +948,18 @@ impl ItemOverlay {
         }
 
         // 4. 构建并保存最新缓存
+        let main_tab = if let Ok(guard) = self.current_main_tab.read() {
+            guard.clone()
+        } else {
+            "recommend".to_string()
+        };
+        let sub_tab = if let Ok(guard) = self.current_analytics_subtab.read() {
+            guard.clone()
+        } else {
+            "featured".to_string()
+        };
+        let analytics_rows = Self::generate_analytics_rows(db, &resolved_id, &sub_tab, is_aram);
+
         let overlay_data = ItemOverlayData {
             hero_name: resolved_name,
             mode_title,
@@ -624,6 +971,9 @@ impl ItemOverlay {
             trio_win_rate,
             boots_name,
             active_algorithm: cur_algo,
+            active_main_tab: main_tab,
+            analytics_subtab: sub_tab,
+            analytics_rows,
         };
 
         {

@@ -52,6 +52,18 @@ pub struct NextItemView {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct AnalyticsItemRow {
+    pub name: String,
+    pub id: String,
+    pub win_rate: f64,
+    pub delta_metric: f64, // coreDelta or deltaWinRate
+    pub pick_rate: f64,
+    pub games: i64,
+    pub label: String,
+    pub is_boot: bool,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ItemOverlayData {
     pub hero_name: String,
     pub mode_title: String,
@@ -63,6 +75,9 @@ pub struct ItemOverlayData {
     pub trio_win_rate: f64,
     pub boots_name: String,
     pub active_algorithm: String,
+    pub active_main_tab: String,    // "recommend" vs "analytics"
+    pub analytics_subtab: String,   // "featured", "items", "boots", "trios"
+    pub analytics_rows: Vec<AnalyticsItemRow>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +204,62 @@ pub struct HudHotzones {
     pub inspect_nav_btns: Vec<((i32, i32, i32, i32), i32)>,
     pub item_close_btn: Option<(i32, i32, i32, i32)>,
     pub item_algo_btns: Vec<((i32, i32, i32, i32), String)>,
+    pub item_main_tabs: Vec<((i32, i32, i32, i32), String)>,
+    pub item_subtabs: Vec<((i32, i32, i32, i32), String)>,
+}
+
+impl HudHotzones {
+    pub fn is_point_interactive(&self, px: i32, py: i32) -> bool {
+        if let Some((x1, y1, x2, y2)) = self.item_close_btn {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.item_algo_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.item_main_tabs {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.item_subtabs {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.left_wing_toggle {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.right_wing_toggle {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.rune_btn {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.inspect_sort_btn {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.inspect_close_btn {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.tab_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.sample_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.nav_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _, _) in &self.pos_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _, _) in &self.inspect_slot_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.inspect_tab_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        for ((x1, y1, x2, y2), _) in &self.inspect_nav_btns {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +306,38 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_LCU: std::sync::RwLock<Option<Arc<crate::lcu::LcuClient>>> = std::sync::RwLock::new(None);
     pub static ref GLOBAL_HISTORY: std::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>> = std::sync::RwLock::new(None);
     pub static ref ACTIVE_ALGORITHM: std::sync::RwLock<String> = std::sync::RwLock::new("SMART".to_string());
+    pub static ref GLOBAL_ITEM_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::ItemOverlay>>> = std::sync::RwLock::new(None);
+    static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+#[cfg(windows)]
+unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::Gdi::HFONT {
+    use windows::Win32::Graphics::Gdi::{
+        CreateFontW, HFONT, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE,
+    };
+    if let Ok(mut cache) = FONT_CACHE.lock() {
+        if let Some(&handle) = cache.get(&(size, weight)) {
+            return HFONT(handle as *mut core::ffi::c_void);
+        }
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let hfont = CreateFontW(
+            size,
+            0, 0, 0,
+            weight,
+            0, 0, 0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
+            windows::core::PCWSTR(font_name.as_ptr()),
+        );
+        cache.insert((size, weight), hfont.0 as isize);
+        hfont
+    } else {
+        HFONT::default()
+    }
 }
 
 pub fn apply_current_runes_now() {
@@ -316,6 +419,37 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
             if let Ok(mut algo) = ACTIVE_ALGORITHM.write() {
                 *algo = algo_key.clone();
+            }
+            if let Ok(guard) = GLOBAL_ITEM_OVERLAY.read() {
+                if let Some(ref item_mgr) = *guard {
+                    item_mgr.trigger_recalculate();
+                }
+            }
+            GLOBAL_HUD.request_repaint();
+            return;
+        }
+    }
+
+    // 0.2 Item Overlay main tabs ("recommend" vs "analytics")
+    for ((x1, y1, x2, y2), tab_key) in &hotzones.item_main_tabs {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if let Ok(guard) = GLOBAL_ITEM_OVERLAY.read() {
+                if let Some(ref item_mgr) = *guard {
+                    item_mgr.switch_main_tab(tab_key);
+                }
+            }
+            GLOBAL_HUD.request_repaint();
+            return;
+        }
+    }
+
+    // 0.3 Item Overlay analytics subtabs ("featured", "items", "boots", "trios")
+    for ((x1, y1, x2, y2), sub_key) in &hotzones.item_subtabs {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if let Ok(guard) = GLOBAL_ITEM_OVERLAY.read() {
+                if let Some(ref item_mgr) = *guard {
+                    item_mgr.switch_analytics_subtab(sub_key);
+                }
             }
             GLOBAL_HUD.request_repaint();
             return;
@@ -791,6 +925,26 @@ unsafe extern "system" fn overlay_wndproc(
     };
 
     match msg {
+        windows::Win32::UI::WindowsAndMessaging::WM_NCHITTEST => {
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::Graphics::Gdi::ScreenToClient;
+            let screen_x = (lparam.0 & 0xffff) as i16 as i32;
+            let screen_y = ((lparam.0 >> 16) & 0xffff) as i16 as i32;
+            let mut pt = POINT { x: screen_x, y: screen_y };
+            let _ = ScreenToClient(hwnd, &mut pt);
+
+            let is_interactive = if let Ok(hz) = GLOBAL_HOTZONES.read() {
+                hz.is_point_interactive(pt.x, pt.y)
+            } else {
+                false
+            };
+
+            if is_interactive {
+                LRESULT(1) // HTCLIENT: dispatch mouse click to HUD button
+            } else {
+                LRESULT(-1) // HTTRANSPARENT: 100% pass-through directly to League of Legends.exe!
+            }
+        }
         WM_LBUTTONDOWN => {
             let px = (lparam.0 & 0xffff) as i16 as i32;
             let py = ((lparam.0 >> 16) & 0xffff) as i16 as i32;
@@ -798,9 +952,7 @@ unsafe extern "system" fn overlay_wndproc(
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
-            let px = (lparam.0 & 0xffff) as i16 as i32;
-            let py = ((lparam.0 >> 16) & 0xffff) as i16 as i32;
-            handle_rbutton_down(hwnd, px, py);
+            // Right-clicks are never consumed by HUD: zero interference with character movement/spells
             LRESULT(0)
         }
         WM_TIMER => {
@@ -1335,8 +1487,13 @@ unsafe fn render_item_hud(
     let sy = height as f64 / 1080.0;
     let min_s = sx.min(sy);
 
+    let is_analytics = data.active_main_tab == "analytics";
     let box_w = ((440.0 * sx) as i32).clamp(380, width - 40);
-    let box_h = ((252.0 * sy) as i32).clamp(240, height - 60);
+    let box_h = if is_analytics {
+        ((356.0 * sy) as i32).clamp(320, height - 60)
+    } else {
+        ((252.0 * sy) as i32).clamp(240, height - 60)
+    };
     let box_x = (18.0 * sx) as i32;
     let box_y = height - box_h - (35.0 * sy) as i32;
 
@@ -1346,23 +1503,43 @@ unsafe fn render_item_hud(
     // Hotzones tracking
     let mut new_item_close = None;
     let mut new_item_algo_btns = Vec::new();
+    let mut new_item_main_tabs = Vec::new();
+    let mut new_item_subtabs = Vec::new();
 
     // 2. Header Bar:
-    // Left: 🛡️ 装备推演 · [模式]
-    let m_str = if !data.mode_title.is_empty() {
-        format!("🛡️ 装备推演 · {}", data.mode_title)
+    // Left: 🛡️ 装备推演
+    draw_text_custom(hdc, "🛡️ 装备推演", box_x + 10, box_y + 8, (12.0 * min_s).max(10.0) as i32, 700, rgb(200, 170, 110), false);
+
+    // Two Main Tabs: [💡 推荐出装] [📊 全维表现]
+    let tab1_x = box_x + 88;
+    let tab1_w = 72;
+    let tab1_h = 20;
+    let (t1_bg, t1_border, t1_fg) = if !is_analytics {
+        (rgb(30, 41, 59), rgb(200, 170, 110), rgb(200, 170, 110))
     } else {
-        "🛡️ 装备推演".to_string()
+        (rgb(10, 16, 29), rgb(30, 41, 59), rgb(100, 116, 139))
     };
-    draw_text_custom(hdc, &m_str, box_x + 10, box_y + 8, (12.0 * min_s).max(10.0) as i32, 700, rgb(200, 170, 110), false);
+    draw_pill_badge(hdc, tab1_x, box_y + 6, tab1_w, tab1_h, t1_bg, t1_border, t1_fg, "💡 推荐出装");
+    new_item_main_tabs.push(((tab1_x, box_y + 6, tab1_x + tab1_w, box_y + 6 + tab1_h), "recommend".to_string()));
+
+    let tab2_x = tab1_x + tab1_w + 4;
+    let tab2_w = 72;
+    let tab2_h = 20;
+    let (t2_bg, t2_border, t2_fg) = if is_analytics {
+        (rgb(30, 41, 59), rgb(200, 170, 110), rgb(200, 170, 110))
+    } else {
+        (rgb(10, 16, 29), rgb(30, 41, 59), rgb(100, 116, 139))
+    };
+    draw_pill_badge(hdc, tab2_x, box_y + 6, tab2_w, tab2_h, t2_bg, t2_border, t2_fg, "📊 全维表现");
+    new_item_main_tabs.push(((tab2_x, box_y + 6, tab2_x + tab2_w, box_y + 6 + tab2_h), "analytics".to_string()));
 
     // Archetype badge
     let arch_text = if !data.archetype_title.is_empty() {
         data.archetype_title.clone()
     } else {
-        "🎯【流派待锁】".to_string()
+        "🎯【待锁定】".to_string()
     };
-    let arch_w = ((arch_text.chars().count() as i32 * 11) + 12).clamp(60, 140);
+    let arch_w = ((arch_text.chars().count() as i32 * 11) + 12).clamp(60, 120);
     draw_pill_badge(hdc, box_x + box_w - arch_w - 32, box_y + 6, arch_w, 20, rgb(17, 28, 46), rgb(2, 132, 199), rgb(56, 189, 248), &arch_text);
 
     // Close Button [✕]
@@ -1371,183 +1548,282 @@ unsafe fn render_item_hud(
     draw_text_custom(hdc, "✕", close_x + 4, close_y + 2, (12.0 * min_s).max(10.0) as i32, 700, rgb(148, 163, 184), false);
     new_item_close = Some((close_x, close_y, close_x + 20, close_y + 20));
 
-    // 3. Algorithm Selection Bar:
-    let algo_y = box_y + 30;
-    draw_text_custom(hdc, "算法:", box_x + 10, algo_y + 2, (10.0 * min_s).max(9.0) as i32, 400, rgb(148, 163, 184), false);
-
-    let cur_algo = if let Ok(guard) = ACTIVE_ALGORITHM.read() {
-        guard.clone()
-    } else {
-        "SMART".to_string()
-    };
-
-    let presets = [
-        ("SMART", "👑 智能"),
-        ("HEX_FUN", "⚡ 海克斯"),
-        ("HYBRID_FREE", "🧪 黑科技"),
-        ("IRON_COUNTER", "🛡️ 铁血"),
-    ];
-
-    let mut algo_btn_x = box_x + 46;
-    for (key, label) in &presets {
-        let is_act = (key == &cur_algo);
-        let btn_w = 68;
-        let btn_h = 18;
-        let (bg_col, border_col, fg_col) = if is_act {
-            (rgb(30, 41, 59), rgb(234, 179, 8), rgb(250, 204, 21))
-        } else {
-            (rgb(15, 23, 42), rgb(30, 41, 59), rgb(100, 116, 139))
-        };
-        draw_pill_badge(hdc, algo_btn_x, algo_y, btn_w, btn_h, bg_col, border_col, fg_col, label);
-        new_item_algo_btns.push(((algo_btn_x, algo_y, algo_btn_x + btn_w, algo_y + btn_h), key.to_string()));
-        algo_btn_x += btn_w + 4;
-    }
-
-    // 4. Core Hero Card (Next Item Card)
-    let card_x = box_x + 8;
-    let card_y = box_y + 54;
-    let card_w = box_w - 16;
-    let card_h = 84;
-    draw_card_rect(hdc, card_x, card_y, card_w, card_h, rgb(15, 23, 42), rgb(30, 41, 59));
-
-    if let Some(ref next) = data.next_item {
-        // Left Icon Pill (44x44)
-        let icon_box_x = card_x + 6;
-        let icon_box_y = card_y + 6;
-        let border_c = if next.badge.contains("克制") || next.badge.contains("针对") {
-            rgb(244, 63, 94)
-        } else if next.badge.contains("核心") || next.badge.contains("T1") {
-            rgb(200, 170, 110)
-        } else {
-            rgb(56, 189, 248)
-        };
-        draw_card_rect(hdc, icon_box_x, icon_box_y, 44, 44, rgb(22, 32, 50), border_c);
-        draw_text_centered(hdc, "🛡️", icon_box_x + 22, icon_box_y + 12, 14, 700, rgb(200, 170, 110), true);
-
-        // Line 1: Item Name + Badge
-        let detail_x = icon_box_x + 50;
-        let name_text = format!("【{}】", next.name);
-        draw_text_custom(hdc, &name_text, detail_x, card_y + 6, (12.0 * min_s).max(10.0) as i32, 700, rgb(248, 250, 252), false);
-
-        if !next.badge.is_empty() {
-            let badge_x = detail_x + (name_text.chars().count() as i32 * 12) + 6;
-            let badge_col = if next.badge.contains("克制") { rgb(244, 63, 94) } else { rgb(250, 204, 21) };
-            draw_text_custom(hdc, &next.badge, badge_x, card_y + 7, (10.0 * min_s).max(9.0) as i32, 700, badge_col, false);
+    if is_analytics {
+        // Analytics Subtabs Bar: [⭐ 精选] [⚔️ 成装] [🥾 鞋子] [🏆 三神装]
+        let sub_y = box_y + 32;
+        let subtabs = [
+            ("featured", "⭐ 精选装备"),
+            ("items", "⚔️ 成装表现"),
+            ("boots", "🥾 鞋子表现"),
+            ("trios", "🏆 终局三神装"),
+        ];
+        let mut sub_x = box_x + 10;
+        let cur_sub = if !data.analytics_subtab.is_empty() { data.analytics_subtab.as_str() } else { "featured" };
+        for (skey, slabel) in &subtabs {
+            let is_cur = cur_sub == *skey;
+            let (bg, border, fg) = if is_cur {
+                (rgb(17, 28, 46), rgb(2, 132, 199), rgb(56, 189, 248))
+            } else {
+                (rgb(10, 16, 29), rgb(30, 41, 59), rgb(100, 116, 139))
+            };
+            let sw = 94;
+            let sh = 20;
+            draw_pill_badge(hdc, sub_x, sub_y, sw, sh, bg, border, fg, slabel);
+            new_item_subtabs.push(((sub_x, sub_y, sub_x + sw, sub_y + sh), skey.to_string()));
+            sub_x += sw + 4;
         }
 
-        // Line 2: Dynamic Gold Progress Bar + Gold Text
-        let bar_x = detail_x;
-        let bar_y = card_y + 28;
-        let bar_total_w = 160;
-        let bar_h = 7;
+        // Render Analytics Rows
+        let row_start_y = box_y + 58;
+        let row_h = 44;
+        let row_w = box_w - 16;
+        let row_x = box_x + 8;
 
-        draw_card_rect(hdc, bar_x, bar_y, bar_total_w, bar_h, rgb(9, 14, 23), rgb(30, 41, 59));
-        let fill_w = ((next.progress_pct * bar_total_w as f64) as i32).clamp(0, bar_total_w - 2);
-        if fill_w > 0 {
-            let fill_col = if next.is_affordable {
-                rgb(16, 185, 129) // Emerald green
-            } else if next.badge.contains("克制") {
-                rgb(244, 63, 94) // Crimson
-            } else {
-                rgb(245, 158, 11) // Amber gold
-            };
-            draw_card_rect(hdc, bar_x + 1, bar_y + 1, fill_w, bar_h - 2, fill_col, fill_col);
-            draw_h_line(hdc, bar_x + 1, bar_y + 1, bar_x + fill_w, rgb(255, 255, 255));
-        }
-
-        let g_text = if !next.gold_status_text.is_empty() {
-            next.gold_status_text.clone()
-        } else if next.is_affordable {
-            format!("💰 {}/{}g  [🎉可直接全款]", data.current_gold as i64, next.net_cost)
+        if data.analytics_rows.is_empty() {
+            draw_card_rect(hdc, row_x, row_start_y, row_w, 220, rgb(15, 23, 42), rgb(30, 41, 59));
+            draw_text_custom(hdc, "⏳ 正在同步全维实战与收益画像...", row_x + 20, row_start_y + 90, (11.0 * min_s).max(9.0) as i32, 400, rgb(148, 163, 184), false);
         } else {
-            format!("💰 {}/{}g (差{}g)", data.current_gold as i64, next.net_cost, next.gold_diff)
-        };
-        let g_col = if next.is_affordable { rgb(16, 185, 129) } else { rgb(148, 163, 184) };
-        draw_text_custom(hdc, &g_text, bar_x + bar_total_w + 8, bar_y - 2, (10.0 * min_s).max(8.5) as i32, if next.is_affordable { 700 } else { 400 }, g_col, false);
+            for (idx, row) in data.analytics_rows.iter().take(5).enumerate() {
+                let ry = row_start_y + idx as i32 * (row_h + 5);
+                draw_card_rect(hdc, row_x, ry, row_w, row_h, rgb(15, 23, 42), rgb(30, 41, 59));
 
-        // Line 3: Tactical Reason
-        let r_text = if !next.reason.is_empty() {
-            if next.reason.chars().count() > 32 {
-                format!("{}…", next.reason.chars().take(31).collect::<String>())
-            } else {
-                next.reason.clone()
-            }
-        } else {
-            "基于实时流派与敌方态势推演最佳出装".to_string()
-        };
-        let r_col = if next.badge.contains("克制") {
-            rgb(244, 63, 94)
-        } else if next.badge.contains("核心") {
-            rgb(250, 204, 21)
-        } else {
-            rgb(56, 189, 248)
-        };
-        draw_text_custom(hdc, &r_text, detail_x, card_y + 44, (10.0 * min_s).max(8.5) as i32, 400, r_col, false);
-    } else {
-        draw_text_custom(hdc, "等待局内推演中...", card_x + 12, card_y + 32, (11.0 * min_s).max(9.0) as i32, 400, rgb(148, 163, 184), false);
-    }
+                // Left Icon Pill (28x28)
+                let icon_x = row_x + 6;
+                let icon_y = ry + 8;
+                let icon_emoji = if row.is_boot { "🥾" } else { "🛡️" };
+                let border_col = if row.delta_metric > 0.0 { rgb(200, 170, 110) } else { rgb(51, 65, 85) };
+                draw_card_rect(hdc, icon_x, icon_y, 28, 28, rgb(22, 32, 50), border_col);
+                draw_text_centered(hdc, icon_emoji, icon_x + 14, icon_y + 6, 10, 700, rgb(200, 170, 110), true);
 
-    // 5. Terminal Trio Miniature Chain (终局神装三件套)
-    let trio_y = card_y + card_h + 8;
-    draw_text_custom(hdc, "🏆 终局神装:", box_x + 10, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 700, rgb(200, 170, 110), false);
+                // Row Details
+                let text_x = icon_x + 36;
+                let name_disp = if row.name.chars().count() > 14 { format!("{}…", row.name.chars().take(13).collect::<String>()) } else { row.name.clone() };
+                draw_text_custom(hdc, &name_disp, text_x, ry + 6, (10.5 * min_s).max(9.0) as i32, 700, rgb(248, 250, 252), false);
 
-    let mut trio_x = box_x + 82;
-    if !data.trio_items.is_empty() {
-        for (idx, item) in data.trio_items.iter().take(3).enumerate() {
-            let (label, bg, border, fg) = if item.is_owned {
-                (format!("✓ {}", item.name), rgb(6, 78, 59), rgb(16, 185, 129), rgb(52, 211, 153))
-            } else {
-                (item.name.clone(), rgb(15, 23, 42), rgb(51, 65, 85), rgb(148, 163, 184))
-            };
-            let pill_w = ((label.chars().count() as i32 * 10) + 12).clamp(48, 88);
-            draw_pill_badge(hdc, trio_x, trio_y, pill_w, 20, bg, border, fg, &label);
-            trio_x += pill_w + 3;
+                if !row.label.is_empty() {
+                    let tag_x = text_x + (name_disp.chars().count() as i32 * 11) + 6;
+                    draw_text_custom(hdc, &format!("[{}]", row.label), tag_x, ry + 7, (9.0 * min_s).max(8.0) as i32, 700, rgb(200, 170, 110), false);
+                }
 
-            if idx < 2 && idx < data.trio_items.len() - 1 {
-                draw_text_custom(hdc, "+", trio_x, trio_y + 2, (9.0 * min_s).max(8.0) as i32, 700, rgb(71, 85, 105), false);
-                trio_x += 10;
+                // Line 2: Stats
+                let stats_text = if row.games > 0 {
+                    format!("场次: {} | 选取: {:.1}%", row.games, row.pick_rate * 100.0)
+                } else {
+                    format!("选取率: {:.1}%", row.pick_rate * 100.0)
+                };
+                draw_text_custom(hdc, &stats_text, text_x, ry + 24, (9.0 * min_s).max(8.0) as i32, 400, rgb(100, 116, 139), false);
+
+                // Right: Win Rate & Delta
+                let right_x = row_x + row_w - 78;
+                let wr_text = format!("{:.1}%", row.win_rate * 100.0);
+                let wr_col = if row.win_rate >= 0.50 { rgb(16, 185, 129) } else { rgb(244, 63, 94) };
+                draw_text_custom(hdc, &wr_text, right_x, ry + 6, (11.0 * min_s).max(9.5) as i32, 700, wr_col, false);
+
+                let metric_label = if cur_sub == "featured" {
+                    format!("评分 {:.1}", row.delta_metric)
+                } else if cur_sub == "items" {
+                    format!("适配 {:+.1}%", row.delta_metric * 100.0)
+                } else {
+                    format!("收益 {:+.1}%", row.delta_metric * 100.0)
+                };
+                let m_col = if row.delta_metric > 0.0 { rgb(16, 185, 129) } else { rgb(148, 163, 184) };
+                draw_text_custom(hdc, &metric_label, right_x - 12, ry + 24, (9.0 * min_s).max(8.0) as i32, 600, m_col, false);
             }
         }
 
-        if data.trio_win_rate > 0.0 {
-            let wr_str = format!("终局 {:.1}%", data.trio_win_rate * 100.0);
-            draw_text_custom(hdc, &wr_str, trio_x + 6, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 700, rgb(16, 185, 129), false);
-        }
-    } else {
-        draw_text_custom(hdc, "推演组合生成中...", trio_x, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 400, rgb(100, 116, 139), false);
-    }
-
-    // 6. Alternatives / Situational Counter Row
-    let alt_y = trio_y + 26;
-    if let Some(first_alt) = data.alternatives.first() {
-        let prefix = if first_alt.reason.contains("针对") || first_alt.reason.contains("重伤") || first_alt.reason.contains("破盾") {
-            "⚠️ 针对备选:"
+        // Footer
+        let footer_y = box_y + box_h - 22;
+        let boot_text = if !data.boots_name.is_empty() {
+            format!("👟 最优鞋: {}", data.boots_name)
         } else {
-            "⚔️ 备选神装:"
+            "👟 鞋子: 推荐中...".to_string()
         };
-        draw_text_custom(hdc, prefix, box_x + 10, alt_y + 2, (9.5 * min_s).max(8.5) as i32, 700, if prefix.contains("⚠️") { rgb(244, 63, 94) } else { rgb(200, 170, 110) }, false);
+        draw_text_custom(hdc, &boot_text, box_x + 10, footer_y, (9.5 * min_s).max(8.5) as i32, 600, rgb(56, 189, 248), false);
 
-        let alt_str = format!("{} (抵扣后 {}G) - {}", first_alt.name, first_alt.net_cost, first_alt.reason);
-        let disp_alt = if alt_str.chars().count() > 34 { format!("{}…", alt_str.chars().take(33).collect::<String>()) } else { alt_str };
-        draw_text_custom(hdc, &disp_alt, box_x + 82, alt_y + 2, (9.0 * min_s).max(8.0) as i32, 400, rgb(148, 163, 184), false);
-    }
-
-    // 7. Footer Row: Boots + Hotkey Hint
-    let footer_y = alt_y + 24;
-    let boot_text = if !data.boots_name.is_empty() {
-        format!("👟 鞋子: {}", data.boots_name)
+        let hint = "[按 ] 或 ✕ 关闭]";
+        draw_text_custom(hdc, hint, box_x + box_w - 92, footer_y, (9.0 * min_s).max(8.0) as i32, 400, rgb(100, 116, 139), false);
     } else {
-        "👟 鞋子: 推荐中...".to_string()
-    };
-    draw_text_custom(hdc, &boot_text, box_x + 10, footer_y, (10.0 * min_s).max(9.0) as i32, 600, rgb(56, 189, 248), false);
+        // Recommend Tab:
+        // 3. Algorithm Selection Bar:
+        let algo_y = box_y + 30;
+        draw_text_custom(hdc, "算法:", box_x + 10, algo_y + 2, (10.0 * min_s).max(9.0) as i32, 400, rgb(148, 163, 184), false);
 
-    let hint = "[按 ] 或 ✕ 关闭]";
-    draw_text_custom(hdc, hint, box_x + box_w - 92, footer_y, (9.0 * min_s).max(8.0) as i32, 400, rgb(100, 116, 139), false);
+        let cur_algo = if let Ok(guard) = ACTIVE_ALGORITHM.read() {
+            guard.clone()
+        } else {
+            "SMART".to_string()
+        };
+
+        let presets = [
+            ("SMART", "👑 智能"),
+            ("HEX_FUN", "⚡ 海克斯"),
+            ("HYBRID_FREE", "🧪 黑科技"),
+            ("IRON_COUNTER", "🛡️ 铁血"),
+        ];
+
+        let mut algo_btn_x = box_x + 46;
+        for (key, label) in &presets {
+            let is_act = (key == &cur_algo);
+            let btn_w = 68;
+            let btn_h = 18;
+            let (bg_col, border_col, fg_col) = if is_act {
+                (rgb(30, 41, 59), rgb(234, 179, 8), rgb(250, 204, 21))
+            } else {
+                (rgb(15, 23, 42), rgb(30, 41, 59), rgb(100, 116, 139))
+            };
+            draw_pill_badge(hdc, algo_btn_x, algo_y, btn_w, btn_h, bg_col, border_col, fg_col, label);
+            new_item_algo_btns.push(((algo_btn_x, algo_y, algo_btn_x + btn_w, algo_y + btn_h), key.to_string()));
+            algo_btn_x += btn_w + 4;
+        }
+
+        // 4. Core Hero Card (Next Item Card)
+        let card_x = box_x + 8;
+        let card_y = box_y + 54;
+        let card_w = box_w - 16;
+        let card_h = 84;
+        draw_card_rect(hdc, card_x, card_y, card_w, card_h, rgb(15, 23, 42), rgb(30, 41, 59));
+
+        if let Some(ref next) = data.next_item {
+            // Left Icon Pill (44x44)
+            let icon_box_x = card_x + 6;
+            let icon_box_y = card_y + 6;
+            let border_c = if next.badge.contains("克制") || next.badge.contains("针对") {
+                rgb(244, 63, 94)
+            } else if next.badge.contains("核心") || next.badge.contains("T1") {
+                rgb(200, 170, 110)
+            } else {
+                rgb(56, 189, 248)
+            };
+            draw_card_rect(hdc, icon_box_x, icon_box_y, 44, 44, rgb(22, 32, 50), border_c);
+            draw_text_centered(hdc, "🛡️", icon_box_x + 22, icon_box_y + 12, 14, 700, rgb(200, 170, 110), true);
+
+            // Line 1: Item Name + Badge
+            let detail_x = icon_box_x + 50;
+            let name_text = format!("【{}】", next.name);
+            draw_text_custom(hdc, &name_text, detail_x, card_y + 6, (12.0 * min_s).max(10.0) as i32, 700, rgb(248, 250, 252), false);
+
+            if !next.badge.is_empty() {
+                let badge_x = detail_x + (name_text.chars().count() as i32 * 12) + 6;
+                let badge_col = if next.badge.contains("克制") { rgb(244, 63, 94) } else { rgb(250, 204, 21) };
+                draw_text_custom(hdc, &next.badge, badge_x, card_y + 7, (10.0 * min_s).max(9.0) as i32, 700, badge_col, false);
+            }
+
+            // Line 2: Dynamic Gold Progress Bar + Gold Text
+            let bar_x = detail_x;
+            let bar_y = card_y + 28;
+            let bar_total_w = 160;
+            let bar_h = 7;
+
+            draw_card_rect(hdc, bar_x, bar_y, bar_total_w, bar_h, rgb(9, 14, 23), rgb(30, 41, 59));
+            let fill_w = ((next.progress_pct * bar_total_w as f64) as i32).clamp(0, bar_total_w - 2);
+            if fill_w > 0 {
+                let fill_col = if next.is_affordable {
+                    rgb(16, 185, 129) // Emerald green
+                } else if next.badge.contains("克制") {
+                    rgb(244, 63, 94) // Crimson
+                } else {
+                    rgb(245, 158, 11) // Amber gold
+                };
+                draw_card_rect(hdc, bar_x + 1, bar_y + 1, fill_w, bar_h - 2, fill_col, fill_col);
+                draw_h_line(hdc, bar_x + 1, bar_y + 1, bar_x + fill_w, rgb(255, 255, 255));
+            }
+
+            let g_text = if !next.gold_status_text.is_empty() {
+                next.gold_status_text.clone()
+            } else if next.is_affordable {
+                format!("💰 {}/{}g  [🎉可直接全款]", data.current_gold as i64, next.net_cost)
+            } else {
+                format!("💰 {}/{}g (差{}g)", data.current_gold as i64, next.net_cost, next.gold_diff)
+            };
+            let g_col = if next.is_affordable { rgb(16, 185, 129) } else { rgb(148, 163, 184) };
+            draw_text_custom(hdc, &g_text, bar_x + bar_total_w + 8, bar_y - 2, (10.0 * min_s).max(8.5) as i32, if next.is_affordable { 700 } else { 400 }, g_col, false);
+
+            // Line 3: Tactical Reason
+            let r_text = if !next.reason.is_empty() {
+                if next.reason.chars().count() > 32 {
+                    format!("{}…", next.reason.chars().take(31).collect::<String>())
+                } else {
+                    next.reason.clone()
+                }
+            } else {
+                "基于实时流派与敌方态势推演最佳出装".to_string()
+            };
+            let r_col = if next.badge.contains("克制") {
+                rgb(244, 63, 94)
+            } else if next.badge.contains("核心") {
+                rgb(250, 204, 21)
+            } else {
+                rgb(56, 189, 248)
+            };
+            draw_text_custom(hdc, &r_text, detail_x, card_y + 44, (10.0 * min_s).max(8.5) as i32, 400, r_col, false);
+        } else {
+            draw_text_custom(hdc, "等待局内推演中...", card_x + 12, card_y + 32, (11.0 * min_s).max(9.0) as i32, 400, rgb(148, 163, 184), false);
+        }
+
+        // 5. Terminal Trio Miniature Chain (终局神装三件套)
+        let trio_y = card_y + card_h + 8;
+        draw_text_custom(hdc, "🏆 终局神装:", box_x + 10, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 700, rgb(200, 170, 110), false);
+
+        let mut trio_x = box_x + 82;
+        if !data.trio_items.is_empty() {
+            for (idx, item) in data.trio_items.iter().take(3).enumerate() {
+                let (label, bg, border, fg) = if item.is_owned {
+                    (format!("✓ {}", item.name), rgb(6, 78, 59), rgb(16, 185, 129), rgb(52, 211, 153))
+                } else {
+                    (item.name.clone(), rgb(15, 23, 42), rgb(51, 65, 85), rgb(148, 163, 184))
+                };
+                let pill_w = ((label.chars().count() as i32 * 10) + 12).clamp(48, 88);
+                draw_pill_badge(hdc, trio_x, trio_y, pill_w, 20, bg, border, fg, &label);
+                trio_x += pill_w + 3;
+
+                if idx < 2 && idx < data.trio_items.len() - 1 {
+                    draw_text_custom(hdc, "+", trio_x, trio_y + 2, (9.0 * min_s).max(8.0) as i32, 700, rgb(71, 85, 105), false);
+                    trio_x += 10;
+                }
+            }
+
+            if data.trio_win_rate > 0.0 {
+                let wr_str = format!("终局 {:.1}%", data.trio_win_rate * 100.0);
+                draw_text_custom(hdc, &wr_str, trio_x + 6, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 700, rgb(16, 185, 129), false);
+            }
+        } else {
+            draw_text_custom(hdc, "推演组合生成中...", trio_x, trio_y + 2, (10.0 * min_s).max(9.0) as i32, 400, rgb(100, 116, 139), false);
+        }
+
+        // 6. Alternatives / Situational Counter Row
+        let alt_y = trio_y + 26;
+        if let Some(first_alt) = data.alternatives.first() {
+            let prefix = if first_alt.reason.contains("针对") || first_alt.reason.contains("重伤") || first_alt.reason.contains("破盾") {
+                "⚠️ 针对备选:"
+            } else {
+                "⚔️ 备选神装:"
+            };
+            draw_text_custom(hdc, prefix, box_x + 10, alt_y + 2, (9.5 * min_s).max(8.5) as i32, 700, if prefix.contains("⚠️") { rgb(244, 63, 94) } else { rgb(200, 170, 110) }, false);
+
+            let alt_str = format!("{} (抵扣后 {}G) - {}", first_alt.name, first_alt.net_cost, first_alt.reason);
+            let disp_alt = if alt_str.chars().count() > 34 { format!("{}…", alt_str.chars().take(33).collect::<String>()) } else { alt_str };
+            draw_text_custom(hdc, &disp_alt, box_x + 82, alt_y + 2, (9.0 * min_s).max(8.0) as i32, 400, rgb(148, 163, 184), false);
+        }
+
+        // 7. Footer Row: Boots + Hotkey Hint
+        let footer_y = alt_y + 24;
+        let boot_text = if !data.boots_name.is_empty() {
+            format!("👟 鞋子: {}", data.boots_name)
+        } else {
+            "👟 鞋子: 推荐中...".to_string()
+        };
+        draw_text_custom(hdc, &boot_text, box_x + 10, footer_y, (10.0 * min_s).max(9.0) as i32, 600, rgb(56, 189, 248), false);
+
+        let hint = "[按 ] 或 ✕ 关闭]";
+        draw_text_custom(hdc, hint, box_x + box_w - 92, footer_y, (9.0 * min_s).max(8.0) as i32, 400, rgb(100, 116, 139), false);
+    }
 
     // Save hotzones
     if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
         gz.item_close_btn = new_item_close;
         gz.item_algo_btns = new_item_algo_btns;
+        gz.item_main_tabs = new_item_main_tabs;
+        gz.item_subtabs = new_item_subtabs;
     }
 }
 
@@ -2575,25 +2851,10 @@ unsafe fn draw_text_custom(
     shadow: bool,
 ) {
     use windows::Win32::Graphics::Gdi::{
-        CreateFontW, DeleteObject, SelectObject, SetBkMode, SetTextColor, TextOutW,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH, FF_DONTCARE, TRANSPARENT,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, TRANSPARENT,
     };
 
-    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-    let hfont = CreateFontW(
-        font_size,
-        0, 0, 0,
-        weight,
-        0, 0, 0,
-        DEFAULT_CHARSET.0 as u32,
-        OUT_DEFAULT_PRECIS.0 as u32,
-        CLIP_DEFAULT_PRECIS.0 as u32,
-        CLEARTYPE_QUALITY.0 as u32,
-        DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
-        windows::core::PCWSTR(font_name.as_ptr()),
-    );
-
+    let hfont = get_cached_font(font_size, weight);
     let old_font = SelectObject(hdc, hfont);
     let _ = SetBkMode(hdc, TRANSPARENT);
     let wide: Vec<u16> = text.encode_utf16().collect();
@@ -2607,7 +2868,6 @@ unsafe fn draw_text_custom(
     let _ = TextOutW(hdc, x, y, &wide);
 
     let _ = SelectObject(hdc, old_font);
-    let _ = DeleteObject(hfont);
 }
 
 #[cfg(windows)]
@@ -2622,26 +2882,12 @@ unsafe fn draw_text_centered(
     shadow: bool,
 ) {
     use windows::Win32::Graphics::Gdi::{
-        CreateFontW, DeleteObject, SelectObject, SetBkMode, SetTextColor, TextOutW,
-        GetTextExtentPoint32W, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE, TRANSPARENT,
+        SelectObject, SetBkMode, SetTextColor, TextOutW,
+        GetTextExtentPoint32W, TRANSPARENT,
     };
     use windows::Win32::Foundation::SIZE;
 
-    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-    let hfont = CreateFontW(
-        font_size,
-        0, 0, 0,
-        weight,
-        0, 0, 0,
-        DEFAULT_CHARSET.0 as u32,
-        OUT_DEFAULT_PRECIS.0 as u32,
-        CLIP_DEFAULT_PRECIS.0 as u32,
-        CLEARTYPE_QUALITY.0 as u32,
-        DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
-        windows::core::PCWSTR(font_name.as_ptr()),
-    );
-
+    let hfont = get_cached_font(font_size, weight);
     let old_font = SelectObject(hdc, hfont);
     let _ = SetBkMode(hdc, TRANSPARENT);
     let wide: Vec<u16> = text.encode_utf16().collect();
@@ -2658,6 +2904,5 @@ unsafe fn draw_text_centered(
     let _ = TextOutW(hdc, x, y, &wide);
 
     let _ = SelectObject(hdc, old_font);
-    let _ = DeleteObject(hfont);
 }
 

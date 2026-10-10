@@ -149,6 +149,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ranked_overlay = Arc::new(RankedOverlay::new());
     let ingame_overlay = Arc::new(InGameOverlay::new());
     let item_overlay = Arc::new(ItemOverlay::new());
+    item_overlay.set_database(db.clone());
+    item_overlay.set_opgg(opgg_client.clone());
+    if let Ok(mut gio) = overlay::win32_hud::GLOBAL_ITEM_OVERLAY.write() {
+        *gio = Some(item_overlay.clone());
+    }
     let opgg_client = Arc::new(OpggClient::new());
 
     // 3. Track current game mode (ARAM vs Summoner's Rift) for hotkeys & overlays

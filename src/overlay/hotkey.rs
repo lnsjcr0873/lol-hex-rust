@@ -112,7 +112,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                 was_down_left = true;
                 let now = GetTickCount64();
                 let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 200 {
+                if now.saturating_sub(last) > 300 {
                     SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
                     tracing::info!("GetAsyncKeyState fallback detected '[' / '【' pressed");
                     crate::spawn_task(async move {
@@ -133,7 +133,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                 was_down_right = true;
                 let now = GetTickCount64();
                 let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 200 {
+                if now.saturating_sub(last) > 300 {
                     SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
                     tracing::info!("GetAsyncKeyState fallback detected ']' / '】' pressed");
                     crate::spawn_task(async move {
@@ -263,7 +263,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
                 if !IS_KEY_DOWN_LEFT.swap(true, Ordering::SeqCst) {
                     let now = GetTickCount64();
                     let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-                    if now.saturating_sub(last) > 200 {
+                    if now.saturating_sub(last) > 300 {
                         SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
                         crate::spawn_task(async move {
                             if let Ok(guard) = CALLBACK_LEFT.lock() {
@@ -278,7 +278,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
                 if !IS_KEY_DOWN_RIGHT.swap(true, Ordering::SeqCst) {
                     let now = GetTickCount64();
                     let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-                    if now.saturating_sub(last) > 200 {
+                    if now.saturating_sub(last) > 300 {
                         SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
                         crate::spawn_task(async move {
                             if let Ok(guard) = CALLBACK_RIGHT.lock() {

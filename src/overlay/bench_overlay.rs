@@ -61,10 +61,12 @@ impl BenchOverlay {
 
     pub fn show_bench_heroes(&self, champions: Vec<BenchChampView>) {
         if crate::vision::ScreenCapture::get_lol_game_rect().is_some() || !crate::vision::ScreenCapture::is_lol_client_active() {
+            self.stop();
             return;
         }
         self.is_showing.store(true, Ordering::SeqCst);
         let data = BenchOverlayData { champions };
-        GLOBAL_HUD.show_bench(data, Duration::from_secs(30));
+        // Short 2.5s auto-expiring lease continuously renewed by active ChampSelect polling loop
+        GLOBAL_HUD.show_bench(data, Duration::from_millis(2500));
     }
 }
