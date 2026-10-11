@@ -25,16 +25,19 @@
             :class="lcuConnected ? 'bg-[#0ac8b9]' : 'bg-amber-500'"
           ></span>
         </span>
-        <span class="text-[11px] text-slate-400">
-          {{ lcuConnected ? 'LCU 就绪' : '等待客户端' }}
+        <span class="text-[11px]" :class="lcuConnected ? 'text-slate-300' : 'text-amber-400/80'">
+          {{ lcuConnected ? (currentSummonerName ? `${currentSummonerName} (已连接)` : 'LCU 已连接') : 'LCU 离线 (请登录游戏)' }}
         </span>
       </div>
     </div>
 
     <!-- Center: Gameflow Phase Notification -->
     <div class="hidden sm:flex items-center space-x-2 pointer-events-none">
-      <span class="px-2 py-0.5 rounded-full bg-[#0d1829] border border-[#1e3a5f] text-[#38bdf8] text-[11px]">
-        {{ gameflowPhaseText }}
+      <span 
+        class="px-2 py-0.5 rounded-full border text-[11px]"
+        :class="lcuConnected ? 'bg-[#0d1829] border-[#1e3a5f] text-[#38bdf8]' : 'bg-slate-900 border-slate-800 text-slate-500'"
+      >
+        {{ lcuConnected ? gameflowPhaseDisplay : '等待客户端启动' }}
       </span>
     </div>
 
@@ -66,15 +69,57 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { Minus, Square, X } from 'lucide-vue-next';
-import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../api/tauri';
+import { minimizeWindow, toggleMaximizeWindow, closeWindow, getSummonerProfile, getOngoingMatch } from '../api/tauri';
 
-defineProps<{
-  gameflowPhaseText?: string;
-}>();
+const lcuConnected = ref(false);
+const currentSummonerName = ref('');
+const gameflowPhaseDisplay = ref('大厅待命中');
+let pollTimer: any = null;
 
-const lcuConnected = ref(true);
+const checkLcuStatus = async () => {
+  try {
+    const prof = await getSummonerProfile();
+    if (prof && prof.is_connected) {
+      lcuConnected.value = true;
+      currentSummonerName.value = prof.game_name || '';
+    } else {
+      lcuConnected.value = false;
+      currentSummonerName.value = '';
+    }
+
+    const ongoing = await getOngoingMatch(false);
+    if (ongoing && ongoing.lcu_connected) {
+      lcuConnected.value = true;
+      const phase = ongoing.gameflow_phase;
+      if (phase === 'ChampSelect') {
+        gameflowPhaseDisplay.value = '英雄选择进行中';
+      } else if (phase === 'GameStart') {
+        gameflowPhaseDisplay.value = '对局加载中';
+      } else if (phase === 'InProgress') {
+        gameflowPhaseDisplay.value = '正在游戏中';
+      } else if (phase === 'ReadyCheck') {
+        gameflowPhaseDisplay.value = '对局就绪 (待确认)';
+      } else if (phase === 'Matchmaking') {
+        gameflowPhaseDisplay.value = '匹配中';
+      } else {
+        gameflowPhaseDisplay.value = '大厅待命中';
+      }
+    }
+  } catch {
+    lcuConnected.value = false;
+  }
+};
+
+onMounted(() => {
+  checkLcuStatus();
+  pollTimer = setInterval(checkLcuStatus, 3000);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+});
 
 const handleMinimize = () => minimizeWindow();
 const handleMaximize = () => toggleMaximizeWindow();

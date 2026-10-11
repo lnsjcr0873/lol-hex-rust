@@ -358,7 +358,7 @@ async fn get_match_detail(
     Json(mock)
 }
 
-fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
+pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     let game_id = raw.get("gameId").and_then(|v| v.as_i64())?;
     let duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(1800);
     let duration_str = format!("{}:{:02}", duration / 60, duration % 60);
@@ -512,7 +512,7 @@ fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     }))
 }
 
-fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
+pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
     let blue_cids = [266, 64, 517, 145, 111];
     let red_cids = [24, 5, 103, 81, 412];
     let blue_names = ["狂傲天王", "野区萧炎", "中单老顽童", "暴风输出手", "金牌辅助包"];

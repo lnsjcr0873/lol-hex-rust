@@ -19,6 +19,12 @@
             <div class="flex items-center space-x-2">
               <h1 class="text-xl font-bold text-slate-100 tracking-wide">{{ profile.game_name }}</h1>
               <span class="text-xs text-slate-400">#{{ profile.tag_line }}</span>
+              <span 
+                class="px-1.5 py-0.2 rounded text-[10px] font-semibold"
+                :class="profile.is_connected ? 'bg-emerald-950/80 border border-emerald-600/50 text-emerald-300' : 'bg-amber-950/80 border border-amber-600/50 text-amber-300'"
+              >
+                {{ profile.is_connected ? '实时在线' : '离线示例' }}
+              </span>
             </div>
 
             <!-- Dual Tier Badges -->

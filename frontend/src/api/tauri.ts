@@ -73,8 +73,24 @@ export async function startDragging(): Promise<void> {
 }
 
 // LCU & Gameplay Commands
-export async function getOngoingMatch(): Promise<OngoingMatchData> {
-  return safeInvoke<OngoingMatchData>('get_ongoing_match', undefined, mockOngoingMatch);
+export async function getOngoingMatch(forceMock?: boolean): Promise<OngoingMatchData> {
+  return safeInvoke<OngoingMatchData>(
+    'get_ongoing_match',
+    { forceMock: forceMock ?? null },
+    forceMock ? mockOngoingMatch : {
+      gameflow_phase: 'None',
+      queue_id: 0,
+      queue_name: '英雄联盟未连接',
+      blue_team: [],
+      red_team: [],
+      is_my_team_blue: true,
+      my_puuid: '',
+      lcu_connected: false,
+      is_active: false,
+      is_mock: false,
+      message: '英雄联盟客户端未连接（请先启动游戏并登录）'
+    }
+  );
 }
 
 export async function getSummonerProfile(puuid?: string): Promise<SummonerProfile> {

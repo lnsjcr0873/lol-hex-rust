@@ -66,9 +66,14 @@ export interface OngoingMatchData {
   is_my_team_blue: boolean;
   my_puuid: string;
   chat_room_id?: string;
+  lcu_connected?: boolean;
+  is_active?: boolean;
+  is_mock?: boolean;
+  message?: string;
 }
 
 export interface SummonerProfile {
+  is_connected?: boolean;
   puuid: string;
   game_name: string;
   tag_line: string;

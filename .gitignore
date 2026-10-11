@@ -16,3 +16,5 @@ dist-build/
 prompt_*.md
 *.exe
 node_modules/
+src-tauri/gen/
+
