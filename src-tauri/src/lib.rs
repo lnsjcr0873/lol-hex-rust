@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 mod cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

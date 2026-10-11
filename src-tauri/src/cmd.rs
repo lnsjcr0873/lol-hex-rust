@@ -17,7 +17,7 @@ pub struct GenericResult {
 pub async fn get_ongoing_match() -> Result<Value, String> {
     // Attempt to query real LCU through lol_hex_rust client if connected
     // For standalone preview and offline mode, return structured ongoing match payload
-    Ok(json!({
+    const RAW: &str = r#"{
         "gameflow_phase": "ChampSelect",
         "queue_id": 420,
         "queue_name": "排位赛 单双排 (5v5 召唤师峡谷)",
@@ -391,7 +391,8 @@ pub async fn get_ongoing_match() -> Result<Value, String> {
                 "radar": { "output": 42, "kda": 58, "join_rate": 76, "survival": 62, "gold": 52, "vision": 85 }
             }
         ]
-    }))
+    }"#;
+    serde_json::from_str(RAW).map_err(|e: serde_json::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -545,8 +546,8 @@ pub async fn get_match_history(puuid: Option<String>, queue_id: Option<i64>) -> 
 #[tauri::command]
 pub async fn get_match_detail(game_id: i64) -> Result<Value, String> {
     tracing::info!("get_match_detail for game: {}", game_id);
-    Ok(json!({
-        "game_id": game_id,
+    const RAW: &str = r#"{
+        "game_id": 7012345671,
         "game_creation": 1728560000000i64,
         "game_duration": 1720,
         "queue_id": 420,
@@ -863,7 +864,10 @@ pub async fn get_match_detail(game_id: i64) -> Result<Value, String> {
                 "item_trinket": 3364
             }
         ]
-    }))
+    }"#;
+    let mut val: Value = serde_json::from_str(RAW).map_err(|e: serde_json::Error| e.to_string())?;
+    val["game_id"] = json!(game_id);
+    Ok(val)
 }
 
 #[tauri::command]
