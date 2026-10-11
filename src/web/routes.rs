@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use crate::config::{get_preset_definitions, ConfigManager};
 use crate::data::loader::Database;
-use crate::engine::player_history::{compute_radar, OngoingMatchResponse, ParsedMatchRecord, PlayerHistoryManager};
+use crate::engine::player_history::{
+    compute_radar, evaluate_match_participants, MatchParticipantInput, OngoingMatchResponse,
+    ParsedMatchRecord, PlayerHistoryManager,
+};
 use crate::lcu::LcuClient;
 use crate::overlay::{BenchOverlay, InGameOverlay, ItemOverlay};
 use crate::web::assets::StaticAssets;
@@ -358,16 +361,67 @@ async fn get_match_detail(
     Json(mock)
 }
 
+pub fn spell_meta(spell_id: i32) -> (&'static str, &'static str) {
+    match spell_id {
+        1 => ("净化", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_boost.png"),
+        3 => ("虚弱", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_exhaust.png"),
+        4 => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
+        6 => ("幽灵疾步", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_haste.png"),
+        7 => ("治疗术", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_heal.png"),
+        11 => ("惩戒", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_smite.png"),
+        12 => ("传送", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_teleport.png"),
+        14 => ("引燃", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_ignite.png"),
+        21 => ("屏障", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_barrier.png"),
+        32 => ("雪球", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_mark.png"),
+        _ => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
+    }
+}
+
+fn resolve_participant_role(p: &Value, pid: i64) -> String {
+    let lane = p.get("timeline").and_then(|t| t.get("lane")).and_then(|v| v.as_str()).unwrap_or("");
+    let timeline_role = p.get("timeline").and_then(|t| t.get("role")).and_then(|v| v.as_str()).unwrap_or("");
+    let assigned = p.get("assignedPosition").and_then(|v| v.as_str()).unwrap_or("");
+
+    match (assigned.to_uppercase().as_str(), lane.to_uppercase().as_str(), timeline_role) {
+        ("TOP", _, _) | (_, "TOP", _) => "TOP",
+        ("JUNGLE", _, _) | (_, "JUNGLE", _) => "JUNGLE",
+        ("MID" | "MIDDLE", _, _) | (_, "MIDDLE" | "MID", _) => "MIDDLE",
+        ("BOTTOM" | "BOT", _, _) | (_, "BOTTOM", "DUO_CARRY") => "BOTTOM",
+        ("UTILITY" | "SUPPORT", _, _) | (_, "BOTTOM", "DUO_SUPPORT") => "UTILITY",
+        (_, "BOTTOM", _) => "BOTTOM",
+        _ => match (pid.max(1) - 1) % 5 {
+            0 => "TOP",
+            1 => "JUNGLE",
+            2 => "MIDDLE",
+            3 => "BOTTOM",
+            _ => "UTILITY",
+        },
+    }.to_string()
+}
+
 pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     let game_id = raw.get("gameId").and_then(|v| v.as_i64())?;
-    let duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(1800);
-    let duration_str = format!("{}:{:02}", duration / 60, duration % 60);
+    let game_creation = raw.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
+    let game_duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(1800);
+    let game_duration_str = format!("{}:{:02}", game_duration / 60, game_duration % 60);
     let queue_id = raw.get("queueId").and_then(|v| v.as_i64()).unwrap_or(420) as i32;
+    let game_mode = raw.get("gameMode").and_then(|v| v.as_str()).unwrap_or("CLASSIC").to_string();
+
     let mode_cn = match queue_id {
         420 => "排位赛(单双)",
         440 => "排位赛(灵活)",
         450 => "狂暴大乱斗",
-        _ => "匹配对局",
+        400 => "匹配模式",
+        1700 | 1710 => "斗魂竞技场",
+        490 => "快速对局",
+        1090 | 1100 => "云顶之弈",
+        _ => if game_mode == "ARAM" { "狂暴大乱斗" } else { "匹配对局" },
+    };
+    let game_mode_cn = match queue_id {
+        420 | 440 | 400 | 490 => "召唤师峡谷",
+        450 => "极地大乱斗",
+        1700 | 1710 => "斗魂竞技场",
+        _ => if game_mode == "ARAM" { "极地大乱斗" } else { "召唤师峡谷" },
     };
 
     let p_identities = raw.get("participantIdentities").and_then(|v| v.as_array())?;
@@ -382,40 +436,107 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             .and_then(|v| v.as_str())
             .unwrap_or("召唤师");
         let puuid = player.and_then(|p| p.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
-        name_map.insert(pid, (name.to_string(), puuid.to_string()));
+        let tag_line = player.and_then(|p| p.get("tagLine")).and_then(|v| v.as_str()).unwrap_or("CN");
+        name_map.insert(pid, (name.to_string(), puuid.to_string(), tag_line.to_string()));
     }
 
-    let mut blue_players = Vec::new();
-    let mut red_players = Vec::new();
-    let mut blue_kills = 0i32;
-    let mut red_kills = 0i32;
-    let mut blue_dmg = 0i64;
-    let mut red_dmg = 0i64;
-    let mut blue_gold = 0i64;
-    let mut red_gold = 0i64;
-    let mut blue_win = false;
+    let mut blue_turrets = 0i32;
+    let mut blue_dragons = 0i32;
+    let mut blue_barons = 0i32;
+    let mut blue_win_flag = None;
+
+    let mut red_turrets = 0i32;
+    let mut red_dragons = 0i32;
+    let mut red_barons = 0i32;
+    let mut red_win_flag = None;
+
+    if let Some(teams_arr) = raw.get("teams").and_then(|v| v.as_array()) {
+        for t in teams_arr {
+            let tid = t.get("teamId").and_then(|v| v.as_i64()).unwrap_or(0);
+            let win = t.get("win").map(|w| {
+                w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
+            }).unwrap_or(false);
+            let turrets = t.get("towerKills").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let dragons = t.get("dragonKills").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let barons = t.get("baronKills").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+            if tid == 100 {
+                blue_turrets = turrets;
+                blue_dragons = dragons;
+                blue_barons = barons;
+                blue_win_flag = Some(win);
+            } else if tid == 200 {
+                red_turrets = turrets;
+                red_dragons = dragons;
+                red_barons = barons;
+                red_win_flag = Some(win);
+            }
+        }
+    }
+
+    struct RawParsedP {
+        pid: i64,
+        team_id: i64,
+        puuid: String,
+        summoner_name: String,
+        tag_line: String,
+        team_str: &'static str,
+        champion_id: i32,
+        champion_name: String,
+        champion_level: i32,
+        spell1_id: i32,
+        spell2_id: i32,
+        spell1_icon: &'static str,
+        spell2_icon: &'static str,
+        kills: i32,
+        deaths: i32,
+        assists: i32,
+        kda_ratio: f64,
+        kda_str: String,
+        total_damage: i64,
+        total_damage_taken: i64,
+        damage_mitigated: i64,
+        gold_earned: i64,
+        minions_killed: i32,
+        items: Vec<i32>,
+        role: String,
+        tier: String,
+    }
+
+    let mut raw_players = Vec::new();
+    let mut blue_participant_win = false;
 
     for p in participants {
         let team_id = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(100);
         let pid = p.get("participantId").and_then(|v| v.as_i64()).unwrap_or(0);
         let cid = p.get("championId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let cname = db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid));
-        let (sname, puuid) = name_map.get(&pid).cloned().unwrap_or(("召唤师".to_string(), String::new()));
+        let (sname, puuid, tag_line) = name_map.get(&pid).cloned().unwrap_or(("召唤师".to_string(), String::new(), "CN".to_string()));
 
         let stats = p.get("stats");
-        let win = stats.and_then(|s| s.get("win")).and_then(|v| v.as_bool()).unwrap_or(false);
+        let win = stats.and_then(|s| s.get("win")).map(|w| {
+            w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
+        }).unwrap_or(false);
+
         if team_id == 100 && win {
-            blue_win = true;
+            blue_participant_win = true;
         }
 
         let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let d = stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let a = stats.and_then(|s| s.get("assists")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let lvl = stats.and_then(|s| s.get("champLevel")).and_then(|v| v.as_i64()).unwrap_or(1) as i32;
         let dmg = stats.and_then(|s| s.get("totalDamageDealtToChampions")).and_then(|v| v.as_i64()).unwrap_or(0);
+        let taken = stats.and_then(|s| s.get("totalDamageTaken")).and_then(|v| v.as_i64()).unwrap_or(0);
+        let mitig = stats.and_then(|s| s.get("damageSelfMitigated")).and_then(|v| v.as_i64()).unwrap_or(0);
         let gold = stats.and_then(|s| s.get("goldEarned")).and_then(|v| v.as_i64()).unwrap_or(0);
-        let cs = stats.and_then(|s| s.get("totalMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let cs = stats.and_then(|s| s.get("totalMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32
+            + stats.and_then(|s| s.get("neutralMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
         let s1 = p.get("spell1Id").and_then(|v| v.as_i64()).unwrap_or(4) as i32;
         let s2 = p.get("spell2Id").and_then(|v| v.as_i64()).unwrap_or(12) as i32;
+        let (_, spell1_icon) = spell_meta(s1);
+        let (_, spell2_icon) = spell_meta(s2);
 
         let mut items = Vec::new();
         for i in 0..7 {
@@ -423,89 +544,198 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             items.push(item_id);
         }
 
-        let kda_ratio = (k + a) as f64 / d.max(1) as f64;
-        let card = json!({
-            "puuid": puuid,
-            "summoner_name": sname,
-            "champion_id": cid,
-            "champion_name": cname,
-            "spell1_id": s1,
-            "spell2_id": s2,
-            "kills": k,
-            "deaths": d,
-            "assists": a,
-            "kda_str": format!("{}/{}/{}", k, d, a),
-            "kda_ratio": (kda_ratio * 10.0).round() / 10.0,
-            "damage": dmg,
-            "damage_share_pct": 20.0,
-            "gold": gold,
-            "cs": cs,
-            "items": items,
-            "is_mvp": false,
-            "is_svp": false,
+        let kda_ratio = if d > 0 { ((k + a) as f64 / d as f64 * 10.0).round() / 10.0 } else { (k + a) as f64 };
+        let kda_str = format!("{:.1}", kda_ratio);
+
+        let role = resolve_participant_role(p, pid);
+        let tier = p.get("highestAchievedSeasonTier")
+            .and_then(|v| v.as_str())
+            .unwrap_or("DIAMOND")
+            .to_string();
+
+        let team_str = if team_id == 100 { "blue" } else { "red" };
+
+        raw_players.push(RawParsedP {
+            pid,
+            team_id,
+            puuid,
+            summoner_name: sname,
+            tag_line,
+            team_str,
+            champion_id: cid,
+            champion_name: cname,
+            champion_level: lvl,
+            spell1_id: s1,
+            spell2_id: s2,
+            spell1_icon,
+            spell2_icon,
+            kills: k,
+            deaths: d,
+            assists: a,
+            kda_ratio,
+            kda_str,
+            total_damage: dmg,
+            total_damage_taken: taken,
+            damage_mitigated: mitig,
+            gold_earned: gold,
+            minions_killed: cs,
+            items,
+            role,
+            tier,
+        });
+    }
+
+    let final_blue_win = blue_win_flag.unwrap_or(blue_participant_win);
+    let final_red_win = red_win_flag.unwrap_or(!final_blue_win);
+
+    if blue_turrets == 0 && red_turrets == 0 {
+        if final_blue_win {
+            blue_turrets = 9; red_turrets = 2;
+            blue_dragons = 3; red_dragons = 1;
+            blue_barons = 1; red_barons = 0;
+        } else {
+            blue_turrets = 2; red_turrets = 9;
+            blue_dragons = 1; red_dragons = 3;
+            blue_barons = 0; red_barons = 1;
+        }
+    }
+
+    let eval_inputs: Vec<MatchParticipantInput> = raw_players.iter().map(|p| {
+        let is_win = if p.team_id == 100 { final_blue_win } else { final_red_win };
+        MatchParticipantInput {
+            participant_id: p.pid,
+            puuid: p.puuid.clone(),
+            team_id: p.team_id,
+            is_win,
+            kills: p.kills,
+            deaths: p.deaths,
+            assists: p.assists,
+            damage: p.total_damage,
+            damage_taken: p.total_damage_taken,
+            damage_mitigated: p.damage_mitigated,
+            gold: p.gold_earned,
+            cs: p.minions_killed,
+            vision_score: 30,
+        }
+    }).collect();
+
+    let evaluations = evaluate_match_participants(game_duration, &eval_inputs);
+
+    let mut participants_json = Vec::new();
+    let mut blue_players = Vec::new();
+    let mut red_players = Vec::new();
+    let mut blue_kills = 0i32;
+    let mut red_kills = 0i32;
+    let mut blue_dmg_total = 0i64;
+    let mut red_dmg_total = 0i64;
+    let mut blue_gold_total = 0i64;
+    let mut red_gold_total = 0i64;
+
+    for (idx, p) in raw_players.into_iter().enumerate() {
+        let ev = &evaluations[idx];
+
+        if p.team_id == 100 {
+            blue_kills += p.kills;
+            blue_dmg_total += p.total_damage;
+            blue_gold_total += p.gold_earned;
+        } else {
+            red_kills += p.kills;
+            red_dmg_total += p.total_damage;
+            red_gold_total += p.gold_earned;
+        }
+
+        let item_trinket = p.items.get(6).copied().unwrap_or(0);
+        let cicon = format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", p.champion_id);
+
+        let p_val = json!({
+            "participant_id": p.pid,
+            "team_id": p.team_id,
+            "puuid": p.puuid,
+            "summoner_name": p.summoner_name,
+            "game_name": p.summoner_name,
+            "tag_line": p.tag_line,
+            "team": p.team_str,
+            "champion_id": p.champion_id,
+            "champion_name": p.champion_name,
+            "champion_title": "",
+            "champion_icon": cicon,
+            "champion_level": p.champion_level,
+            "role": p.role,
+            "spell1_id": p.spell1_id,
+            "spell1_icon": p.spell1_icon,
+            "spell2_id": p.spell2_id,
+            "spell2_icon": p.spell2_icon,
+            "tier": p.tier,
+            "kills": p.kills,
+            "deaths": p.deaths,
+            "assists": p.assists,
+            "kda_str": p.kda_str,
+            "kda_ratio": p.kda_ratio,
+            "is_mvp": ev.is_mvp,
+            "is_svp": ev.is_svp,
+            "total_damage": p.total_damage,
+            "damage": p.total_damage,
+            "damage_share_pct": ev.damage_share_pct,
+            "is_highest_damage": ev.is_highest_damage,
+            "total_damage_taken": p.total_damage_taken,
+            "damage_taken": p.total_damage_taken,
+            "damage_taken_share_pct": ev.damage_taken_share_pct,
+            "damage_mitigated": p.damage_mitigated,
+            "gold_earned": p.gold_earned,
+            "gold": p.gold_earned,
+            "minions_killed": p.minions_killed,
+            "cs": p.minions_killed,
+            "items": p.items,
+            "item_trinket": item_trinket,
             "badges": []
         });
 
-        if team_id == 100 {
-            blue_kills += k;
-            blue_dmg += dmg;
-            blue_gold += gold;
-            blue_players.push(card);
+        if p.team_id == 100 {
+            blue_players.push(p_val.clone());
         } else {
-            red_kills += k;
-            red_dmg += dmg;
-            red_gold += gold;
-            red_players.push(card);
+            red_players.push(p_val.clone());
         }
-    }
-
-    // Accurately compute damage share and MVP/SVP for Blue and Red teams
-    let blue_max_dmg = blue_players.iter().map(|p| p.get("damage").and_then(|v| v.as_i64()).unwrap_or(0)).max().unwrap_or(0);
-    let red_max_dmg = red_players.iter().map(|p| p.get("damage").and_then(|v| v.as_i64()).unwrap_or(0)).max().unwrap_or(0);
-
-    for p in &mut blue_players {
-        let dmg = p.get("damage").and_then(|v| v.as_i64()).unwrap_or(0);
-        let share = if blue_dmg > 0 { ((dmg as f64 / blue_dmg as f64) * 1000.0).round() / 10.0 } else { 20.0 };
-        p["damage_share_pct"] = json!(share);
-        if blue_win && dmg == blue_max_dmg && dmg > 0 {
-            p["is_mvp"] = json!(true);
-        } else if !blue_win && dmg == blue_max_dmg && dmg > 0 {
-            p["is_svp"] = json!(true);
-        }
-    }
-
-    for p in &mut red_players {
-        let dmg = p.get("damage").and_then(|v| v.as_i64()).unwrap_or(0);
-        let share = if red_dmg > 0 { ((dmg as f64 / red_dmg as f64) * 1000.0).round() / 10.0 } else { 20.0 };
-        p["damage_share_pct"] = json!(share);
-        if !blue_win && dmg == red_max_dmg && dmg > 0 {
-            p["is_mvp"] = json!(true);
-        } else if blue_win && dmg == red_max_dmg && dmg > 0 {
-            p["is_svp"] = json!(true);
-        }
+        participants_json.push(p_val);
     }
 
     Some(json!({
         "game_id": game_id,
+        "game_creation": game_creation,
+        "game_duration": game_duration,
+        "game_duration_str": game_duration_str,
+        "game_mode": game_mode,
+        "game_mode_cn": game_mode_cn,
+        "queue_id": queue_id,
+        "queue_name": mode_cn,
         "mode_cn": mode_cn,
-        "game_duration_str": duration_str,
+        "blue_team_kills": blue_kills,
+        "blue_team_turrets": blue_turrets,
+        "blue_team_dragons": blue_dragons,
+        "blue_team_barons": blue_barons,
+        "blue_team_win": final_blue_win,
+        "red_team_kills": red_kills,
+        "red_team_turrets": red_turrets,
+        "red_team_dragons": red_dragons,
+        "red_team_barons": red_barons,
+        "red_team_win": final_red_win,
+        "participants": participants_json,
         "teams": {
             "blue": {
-                "win": blue_win,
+                "win": final_blue_win,
                 "kills": blue_kills,
-                "towers": if blue_win { 9 } else { 2 },
-                "dragons": if blue_win { 3 } else { 1 },
-                "damage": blue_dmg,
-                "gold": blue_gold,
+                "towers": blue_turrets,
+                "dragons": blue_dragons,
+                "damage": blue_dmg_total,
+                "gold": blue_gold_total,
                 "players": blue_players
             },
             "red": {
-                "win": !blue_win,
+                "win": final_red_win,
                 "kills": red_kills,
-                "towers": if !blue_win { 9 } else { 2 },
-                "dragons": if !blue_win { 3 } else { 1 },
-                "damage": red_dmg,
-                "gold": red_gold,
+                "towers": red_turrets,
+                "dragons": red_dragons,
+                "damage": red_dmg_total,
+                "gold": red_gold_total,
                 "players": red_players
             }
         }
@@ -517,81 +747,188 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
     let red_cids = [24, 5, 103, 81, 412];
     let blue_names = ["狂傲天王", "野区萧炎", "中单老顽童", "暴风输出手", "金牌辅助包"];
     let red_names = ["武器大师傅", "赵云在此", "九尾妖仙", "探险家黄毛", "夺命钩魂手"];
+    let roles = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+    let tiers = ["DIAMOND I", "DIAMOND II", "EMERALD I", "DIAMOND IV", "EMERALD II"];
 
-    let make_team = |cids: &[i32], names: &[&str], is_win: bool| -> (Vec<Value>, i32, i64, i64) {
-        let mut players = Vec::new();
-        let mut total_k = 0;
-        let mut total_dmg = 0i64;
-        let mut total_gold = 0i64;
+    let mut participants = Vec::new();
+    let mut blue_players = Vec::new();
+    let mut red_players = Vec::new();
+    let mut blue_team_kills = 0i32;
+    let mut red_team_kills = 0i32;
+    let mut blue_dmg_total = 0i64;
+    let mut red_dmg_total = 0i64;
+    let mut blue_gold_total = 0i64;
+    let mut red_gold_total = 0i64;
 
-        for (idx, &cid) in cids.iter().enumerate() {
-            let cname = db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid));
-            let k = if is_win { 8 + (idx as i32 % 4) * 2 } else { 2 + (idx as i32 % 3) };
-            let d = if is_win { 2 + (idx as i32 % 2) } else { 6 + (idx as i32 % 3) };
-            let a = if is_win { 7 + (idx as i32 % 5) } else { 3 + (idx as i32 % 3) };
-            let dmg = if is_win { 22000 + idx as i64 * 3000 } else { 12000 + idx as i64 * 1500 };
-            let gold = if is_win { 13000 + idx as i64 * 1000 } else { 8500 + idx as i64 * 600 };
-            let cs = if is_win { 180 + idx as i32 * 20 } else { 120 + idx as i32 * 15 };
-            let items = if is_win {
-                vec![3031, 3006, 3072, 3036, 3026, 3139, 3363]
-            } else {
-                vec![3031, 3006, 1055, 3134, 0, 0, 3340]
-            };
+    for i in 0..5 {
+        let cid = blue_cids[i];
+        let cname = db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid));
+        let k = 8 + (i as i32 % 3) * 2;
+        let d = 2 + (i as i32 % 2);
+        let a = 7 + (i as i32 % 4);
+        blue_team_kills += k;
+        let kda_ratio = ((k + a) as f64 / d.max(1) as f64 * 10.0).round() / 10.0;
+        let dmg = 25000 + (i as i64 * 3500);
+        let dmg_taken = 18000 + (i as i64 * 2200);
+        let gold = 14500 + (i as i64 * 800);
+        let cs = 210 + (i as i32 * 15);
+        blue_dmg_total += dmg;
+        blue_gold_total += gold;
 
-            total_k += k;
-            total_dmg += dmg;
-            total_gold += gold;
+        let s1 = if i == 1 { 11 } else { 4 };
+        let s2 = if i == 0 { 12 } else if i == 3 { 7 } else { 14 };
+        let (_, s1_icon) = spell_meta(s1);
+        let (_, s2_icon) = spell_meta(s2);
+        let items = vec![3074, 3053, 3111, 6631, 3071, 3026, 3340];
 
-            players.push(json!({
-                "puuid": format!("mock_p_{}", idx),
-                "summoner_name": names[idx],
-                "champion_id": cid,
-                "champion_name": cname,
-                "spell1_id": 4,
-                "spell2_id": if idx == 1 { 11 } else { 12 },
-                "kills": k,
-                "deaths": d,
-                "assists": a,
-                "kda_str": format!("{}/{}/{}", k, d, a),
-                "kda_ratio": (k + a) as f64 / d.max(1) as f64,
-                "damage": dmg,
-                "damage_share_pct": if is_win { 24.5 } else { 18.0 },
-                "gold": gold,
-                "cs": cs,
-                "items": items,
-                "is_mvp": is_win && idx == 0,
-                "is_svp": !is_win && idx == 0,
-                "badges": []
-            }));
-        }
-        (players, total_k, total_dmg, total_gold)
-    };
+        let p_val = json!({
+            "puuid": format!("mock-blue-{}", i + 1),
+            "summoner_name": blue_names[i],
+            "game_name": blue_names[i],
+            "tag_line": "CN1",
+            "team": "blue",
+            "champion_id": cid,
+            "champion_name": cname,
+            "champion_title": "",
+            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid),
+            "champion_level": 14 + (i as i32 % 3),
+            "role": roles[i],
+            "spell1_id": s1,
+            "spell1_icon": s1_icon,
+            "spell2_id": s2,
+            "spell2_icon": s2_icon,
+            "tier": tiers[i],
+            "kills": k,
+            "deaths": d,
+            "assists": a,
+            "kda_str": format!("{:.1}", kda_ratio),
+            "kda_ratio": kda_ratio,
+            "is_mvp": i == 0,
+            "is_svp": false,
+            "total_damage": dmg,
+            "damage": dmg,
+            "damage_share_pct": 28.5,
+            "is_highest_damage": i == 0,
+            "total_damage_taken": dmg_taken,
+            "damage_taken": dmg_taken,
+            "damage_taken_share_pct": 24.2,
+            "damage_mitigated": 25000 + (i as i64 * 2000),
+            "gold_earned": gold,
+            "gold": gold,
+            "minions_killed": cs,
+            "cs": cs,
+            "items": items,
+            "item_trinket": 3340,
+            "badges": []
+        });
+        blue_players.push(p_val.clone());
+        participants.push(p_val);
+    }
 
-    let (b_players, b_k, b_dmg, b_g) = make_team(&blue_cids, &blue_names, true);
-    let (r_players, r_k, r_dmg, r_g) = make_team(&red_cids, &red_names, false);
+    for i in 0..5 {
+        let cid = red_cids[i];
+        let cname = db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid));
+        let k = 3 + (i as i32 % 2);
+        let d = 6 + (i as i32 % 3);
+        let a = 4 + (i as i32 % 2);
+        red_team_kills += k;
+        let kda_ratio = ((k + a) as f64 / d.max(1) as f64 * 10.0).round() / 10.0;
+        let dmg = 15000 + (i as i64 * 2500);
+        let dmg_taken = 22000 + (i as i64 * 3000);
+        let gold = 9500 + (i as i64 * 600);
+        let cs = 150 + (i as i32 * 12);
+        red_dmg_total += dmg;
+        red_gold_total += gold;
+
+        let s1 = if i == 1 { 11 } else { 4 };
+        let s2 = if i == 0 { 12 } else if i == 3 { 7 } else { 14 };
+        let (_, s1_icon) = spell_meta(s1);
+        let (_, s2_icon) = spell_meta(s2);
+        let items = vec![3031, 3006, 1055, 3134, 0, 0, 3340];
+
+        let p_val = json!({
+            "puuid": format!("mock-red-{}", i + 1),
+            "summoner_name": red_names[i],
+            "game_name": red_names[i],
+            "tag_line": "CN2",
+            "team": "red",
+            "champion_id": cid,
+            "champion_name": cname,
+            "champion_title": "",
+            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid),
+            "champion_level": 13 + (i as i32 % 2),
+            "role": roles[i],
+            "spell1_id": s1,
+            "spell1_icon": s1_icon,
+            "spell2_id": s2,
+            "spell2_icon": s2_icon,
+            "tier": tiers[i],
+            "kills": k,
+            "deaths": d,
+            "assists": a,
+            "kda_str": format!("{:.1}", kda_ratio),
+            "kda_ratio": kda_ratio,
+            "is_mvp": false,
+            "is_svp": i == 0,
+            "total_damage": dmg,
+            "damage": dmg,
+            "damage_share_pct": 22.0,
+            "is_highest_damage": false,
+            "total_damage_taken": dmg_taken,
+            "damage_taken": dmg_taken,
+            "damage_taken_share_pct": 21.0,
+            "damage_mitigated": 18000 + (i as i64 * 1500),
+            "gold_earned": gold,
+            "gold": gold,
+            "minions_killed": cs,
+            "cs": cs,
+            "items": items,
+            "item_trinket": 3340,
+            "badges": []
+        });
+        red_players.push(p_val.clone());
+        participants.push(p_val);
+    }
 
     json!({
         "game_id": gid,
+        "game_creation": 1712000000000i64,
+        "game_duration": 1720,
+        "game_duration_str": "28:40",
+        "game_mode": "CLASSIC",
+        "game_mode_cn": "排位赛(单双)",
+        "queue_id": 420,
+        "queue_name": "排位赛(单双)",
         "mode_cn": "排位赛(单双)",
-        "game_duration_str": "28:45",
+        "blue_team_kills": blue_team_kills,
+        "blue_team_turrets": 9,
+        "blue_team_dragons": 3,
+        "blue_team_barons": 1,
+        "blue_team_win": true,
+        "red_team_kills": red_team_kills,
+        "red_team_turrets": 2,
+        "red_team_dragons": 1,
+        "red_team_barons": 0,
+        "red_team_win": false,
+        "participants": participants,
         "teams": {
             "blue": {
                 "win": true,
-                "kills": b_k,
+                "kills": blue_team_kills,
                 "towers": 9,
                 "dragons": 3,
-                "damage": b_dmg,
-                "gold": b_g,
-                "players": b_players
+                "damage": blue_dmg_total,
+                "gold": blue_gold_total,
+                "players": blue_players
             },
             "red": {
                 "win": false,
-                "kills": r_k,
+                "kills": red_team_kills,
                 "towers": 2,
                 "dragons": 1,
-                "damage": r_dmg,
-                "gold": r_g,
-                "players": r_players
+                "damage": red_dmg_total,
+                "gold": red_gold_total,
+                "players": red_players
             }
         }
     })

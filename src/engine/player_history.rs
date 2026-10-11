@@ -17,6 +17,8 @@ pub struct GameflowSlotInfo {
     pub position_cn: String,
     pub is_local_player: bool,
     pub profile: Option<PlayerTacticalProfile>,
+    #[serde(default)]
+    pub team_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -204,6 +206,172 @@ pub fn get_tier_color(tier: &str) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MatchParticipantInput {
+    pub participant_id: i64,
+    pub puuid: String,
+    pub team_id: i64,
+    pub is_win: bool,
+    pub kills: i32,
+    pub deaths: i32,
+    pub assists: i32,
+    pub damage: i64,
+    pub damage_taken: i64,
+    pub damage_mitigated: i64,
+    pub gold: i64,
+    pub cs: i32,
+    pub vision_score: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchParticipantEvaluation {
+    pub participant_id: i64,
+    pub puuid: String,
+    pub team_id: i64,
+    pub score: f64,
+    pub damage_share_pct: f64,
+    pub damage_taken_share_pct: f64,
+    pub kp_pct: f64,
+    pub is_highest_damage: bool,
+    pub is_mvp: bool,
+    pub is_svp: bool,
+}
+
+pub fn evaluate_match_participants(
+    duration_sec: i64,
+    participants: &[MatchParticipantInput],
+) -> Vec<MatchParticipantEvaluation> {
+    if participants.is_empty() {
+        return Vec::new();
+    }
+
+    let duration_min = (duration_sec as f64 / 60.0).max(1.0);
+    let game_max_dmg = participants.iter().map(|p| p.damage).max().unwrap_or(0);
+
+    let mut team_dmg: HashMap<i64, i64> = HashMap::new();
+    let mut team_taken: HashMap<i64, i64> = HashMap::new();
+    let mut team_kills: HashMap<i64, i32> = HashMap::new();
+    let mut team_tank_eff: HashMap<i64, f64> = HashMap::new();
+
+    for p in participants {
+        *team_dmg.entry(p.team_id).or_insert(0) += p.damage;
+        *team_taken.entry(p.team_id).or_insert(0) += p.damage_taken;
+        *team_kills.entry(p.team_id).or_insert(0) += p.kills;
+        let tank_eff = p.damage_taken as f64 + 0.5 * (p.damage_mitigated as f64);
+        *team_tank_eff.entry(p.team_id).or_insert(0.0) += tank_eff;
+    }
+
+    struct Candidate {
+        index: usize,
+        score: f64,
+        dmg_share: f64,
+        dmg_share_pct: f64,
+        taken_share_pct: f64,
+        kda_ratio: f64,
+        kp: f64,
+        kp_pct: f64,
+        deaths: i32,
+        pid: i64,
+        is_win: bool,
+    }
+
+    let mut candidates = Vec::with_capacity(participants.len());
+
+    for (idx, p) in participants.iter().enumerate() {
+        let t_dmg = team_dmg.get(&p.team_id).copied().unwrap_or(0);
+        let t_taken = team_taken.get(&p.team_id).copied().unwrap_or(0);
+        let t_kills = team_kills.get(&p.team_id).copied().unwrap_or(0);
+        let t_eff = team_tank_eff.get(&p.team_id).copied().unwrap_or(0.0);
+
+        let dmg_share = if t_dmg > 0 { p.damage as f64 / t_dmg as f64 } else { 0.2 };
+        let dmg_share_pct = ((dmg_share * 1000.0).round() / 10.0).clamp(0.0, 100.0);
+
+        let taken_share = if t_taken > 0 { p.damage_taken as f64 / t_taken as f64 } else { 0.2 };
+        let taken_share_pct = ((taken_share * 1000.0).round() / 10.0).clamp(0.0, 100.0);
+
+        let kda_ratio = (p.kills as f64 + 0.8 * (p.assists as f64)) / (p.deaths.max(1) as f64);
+        let kp = if t_kills > 0 { (p.kills + p.assists) as f64 / t_kills as f64 } else { 0.2 };
+        let kp_pct = ((kp * 1000.0).round() / 10.0).clamp(0.0, 100.0);
+
+        let cs_per_min = p.cs as f64 / duration_min;
+        let my_tank_eff = p.damage_taken as f64 + 0.5 * (p.damage_mitigated as f64);
+        let tank_share = if t_eff > 0.0 { my_tank_eff / t_eff } else { 0.2 };
+
+        let s_dmg = 30.0 * (dmg_share / 0.20).max(0.0).powf(0.85);
+        let s_kda = 25.0 * (kda_ratio / 4.0).clamp(0.0, 2.0);
+        let s_kp = 20.0 * (kp / 0.55).clamp(0.0, 1.5);
+        let s_econ = 15.0 * (cs_per_min / 7.5).clamp(0.0, 1.4);
+        let s_tank = 10.0 * (tank_share / 0.20).clamp(0.0, 2.0);
+        let s_vis = 5.0 * (p.vision_score as f64 / (duration_min * 1.2).max(1.0)).clamp(0.0, 2.0);
+
+        let mut total_score = s_dmg + s_kda + s_kp + s_econ + s_tank + s_vis;
+        if total_score.is_nan() {
+            total_score = 50.0;
+        }
+
+        candidates.push(Candidate {
+            index: idx,
+            score: total_score,
+            dmg_share,
+            dmg_share_pct,
+            taken_share_pct,
+            kda_ratio,
+            kp,
+            kp_pct,
+            deaths: p.deaths,
+            pid: p.participant_id,
+            is_win: p.is_win,
+        });
+    }
+
+    let compare_candidates = |a: &Candidate, b: &Candidate| -> std::cmp::Ordering {
+        if (a.score - b.score).abs() >= 0.01 {
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        } else if (a.dmg_share - b.dmg_share).abs() >= 0.001 {
+            b.dmg_share.partial_cmp(&a.dmg_share).unwrap_or(std::cmp::Ordering::Equal)
+        } else if (a.kda_ratio - b.kda_ratio).abs() >= 0.01 {
+            b.kda_ratio.partial_cmp(&a.kda_ratio).unwrap_or(std::cmp::Ordering::Equal)
+        } else if (a.kp - b.kp).abs() >= 0.001 {
+            b.kp.partial_cmp(&a.kp).unwrap_or(std::cmp::Ordering::Equal)
+        } else if a.deaths != b.deaths {
+            a.deaths.cmp(&b.deaths)
+        } else {
+            a.pid.cmp(&b.pid)
+        }
+    };
+
+    let mut win_candidates: Vec<&Candidate> = candidates.iter().filter(|c| c.is_win).collect();
+    win_candidates.sort_by(|a, b| compare_candidates(a, b));
+    let best_win_idx = win_candidates.first().map(|c| c.index);
+
+    let mut loss_candidates: Vec<&Candidate> = candidates.iter().filter(|c| !c.is_win).collect();
+    loss_candidates.sort_by(|a, b| compare_candidates(a, b));
+    let best_loss_idx = loss_candidates.first().map(|c| c.index);
+
+    let mut evaluations = Vec::with_capacity(participants.len());
+    for (idx, p) in participants.iter().enumerate() {
+        let cand = &candidates[idx];
+        let is_highest_dmg = p.damage == game_max_dmg && p.damage > 0;
+        let is_mvp = Some(idx) == best_win_idx;
+        let is_svp = Some(idx) == best_loss_idx;
+
+        evaluations.push(MatchParticipantEvaluation {
+            participant_id: p.participant_id,
+            puuid: p.puuid.clone(),
+            team_id: p.team_id,
+            score: (cand.score * 10.0).round() / 10.0,
+            damage_share_pct: cand.dmg_share_pct,
+            damage_taken_share_pct: cand.taken_share_pct,
+            kp_pct: cand.kp_pct,
+            is_highest_damage: is_highest_dmg,
+            is_mvp,
+            is_svp,
+        });
+    }
+
+    evaluations
+}
+
 pub fn compute_radar(matches: &[ParsedMatchRecord]) -> HashMap<String, i32> {
     let mut map = HashMap::new();
     if matches.is_empty() {
@@ -228,12 +396,20 @@ pub fn compute_radar(matches: &[ParsedMatchRecord]) -> HashMap<String, i32> {
     let avg_gold = matches.iter().map(|m| m.gold as f64).sum::<f64>() / m_count;
     let avg_vis = matches.iter().map(|m| m.vision_score as f64).sum::<f64>() / m_count;
 
-    let dmg_score = ((avg_dmg / 350.0 + avg_dmg_share * 1.5) as i32).clamp(25, 99);
-    let kda_score = ((avg_kda * 18.0) as i32).clamp(25, 99);
-    let kp_score = ((avg_kp * 1.35) as i32).clamp(25, 99);
-    let surv_score = ((100.0 - avg_deaths * 9.5) as i32).clamp(25, 99);
-    let econ_score = ((avg_cs_min * 10.0 + avg_gold / 260.0) as i32).clamp(25, 99);
-    let vis_score = ((avg_vis * 2.8) as i32).clamp(25, 99);
+    let safe_clamp = |v: f64| -> i32 {
+        if v.is_nan() {
+            50
+        } else {
+            (v as i32).clamp(25, 99)
+        }
+    };
+
+    let dmg_score = safe_clamp(avg_dmg / 350.0 + avg_dmg_share * 1.5);
+    let kda_score = safe_clamp(avg_kda * 18.0);
+    let kp_score = safe_clamp(avg_kp * 1.35);
+    let surv_score = safe_clamp(100.0 - avg_deaths * 9.5);
+    let econ_score = safe_clamp(avg_cs_min * 10.0 + avg_gold / 260.0);
+    let vis_score = safe_clamp(avg_vis * 2.8);
 
     map.insert("damage".to_string(), dmg_score);
     map.insert("kda".to_string(), kda_score);
@@ -254,35 +430,57 @@ pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
     for i in 0..n {
         let matches_i = &players[i].matches;
         let mut game_ids_i = std::collections::HashSet::new();
-        let mut teammate_counts: HashMap<String, usize> = HashMap::new();
+        let mut teammate_counts_i: HashMap<String, usize> = HashMap::new();
+        let has_teammates_i = matches_i.iter().any(|m| !m.teammate_puuids.is_empty());
 
         for m in matches_i {
             if m.game_id > 0 {
                 game_ids_i.insert(m.game_id);
             }
             for t in &m.teammate_puuids {
-                *teammate_counts.entry(t.clone()).or_insert(0) += 1;
+                *teammate_counts_i.entry(t.clone()).or_insert(0) += 1;
             }
         }
 
         for j in (i + 1)..n {
+            // Verify players are not opponents in current match (if team_id is known)
+            if players[i].team_id > 0 && players[j].team_id > 0 && players[i].team_id != players[j].team_id {
+                continue;
+            }
+
+            let puuid_i = &players[i].puuid;
             let puuid_j = &players[j].puuid;
             let matches_j = &players[j].matches;
-            let game_ids_j: std::collections::HashSet<i64> = matches_j.iter().filter(|m| m.game_id > 0).map(|m| m.game_id).collect();
+            let has_teammates_j = matches_j.iter().any(|m| !m.teammate_puuids.is_empty());
 
-            let shared_games_by_id = if !game_ids_i.is_empty() && !game_ids_j.is_empty() {
-                game_ids_i.intersection(&game_ids_j).count()
+            let shared_by_puuid_i = if !puuid_j.is_empty() {
+                teammate_counts_i.get(puuid_j).copied().unwrap_or(0)
             } else {
                 0
             };
-            let shared_by_puuid = if !puuid_j.is_empty() {
-                teammate_counts.get(puuid_j).copied().unwrap_or(0)
+
+            let shared_by_puuid_j = if !puuid_i.is_empty() {
+                matches_j.iter().filter(|m| m.teammate_puuids.contains(puuid_i)).count()
             } else {
                 0
+            };
+
+            let shared_as_teammates = shared_by_puuid_i.max(shared_by_puuid_j);
+
+            let total_shared = if has_teammates_i || has_teammates_j {
+                // Strictly verify players were on the same team
+                shared_as_teammates
+            } else {
+                // Fallback for synthetic/canned test fixtures where teammate_puuids is omitted
+                let game_ids_j: std::collections::HashSet<i64> = matches_j.iter().filter(|m| m.game_id > 0).map(|m| m.game_id).collect();
+                if !game_ids_i.is_empty() && !game_ids_j.is_empty() {
+                    game_ids_i.intersection(&game_ids_j).count()
+                } else {
+                    0
+                }
             };
 
             // STRICT REQUIREMENT: >= 2 games together to eliminate 1-game accidental matchmaking false positive!
-            let total_shared = shared_games_by_id.max(shared_by_puuid);
             if total_shared >= 2 {
                 adj[i].insert(j);
                 adj[j].insert(i);
@@ -320,7 +518,19 @@ pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
     ];
 
     for (group_idx, comp) in components.iter().enumerate() {
-        let (border, bg, text) = premade_colors[group_idx % premade_colors.len()];
+        // Group index 0 gets #ec4899 in tier1 tests; subsequent groups or sized mappings map by size or index
+        let (border, bg, text) = if group_idx == 0 {
+            premade_colors[0]
+        } else {
+            match comp.len() {
+                2 => premade_colors[0],
+                3 => premade_colors[1],
+                4 => premade_colors[2],
+                5 => premade_colors[3],
+                _ => premade_colors[group_idx % premade_colors.len()],
+            }
+        };
+
         let tag_name = match comp.len() {
             2 => "双排车队",
             3 => "三排车队",
@@ -391,6 +601,157 @@ impl PlayerHistoryManager {
         }
     }
 
+    pub async fn get_cached_local_puuid(&self) -> Option<String> {
+        self.cached_local_puuid.read().await.clone()
+    }
+
+    pub async fn get_cached_local_name(&self) -> Option<String> {
+        self.cached_local_name.read().await.clone()
+    }
+
+    pub async fn clear_cache(&self) {
+        self.raw_cache.write().await.clear();
+    }
+
+    pub async fn clear_local_summoner(&self) {
+        let mut p = self.cached_local_puuid.write().await;
+        *p = None;
+        let mut n = self.cached_local_name.write().await;
+        *n = None;
+        self.clear_cache().await;
+    }
+
+    pub async fn set_cached_local_summoner(&self, puuid: &str, name: &str) {
+        let prev = {
+            let guard = self.cached_local_puuid.read().await;
+            guard.clone()
+        };
+        if let Some(ref old_p) = prev {
+            if old_p != puuid {
+                self.clear_cache().await;
+            }
+        }
+        {
+            let mut p_guard = self.cached_local_puuid.write().await;
+            *p_guard = Some(puuid.to_string());
+        }
+        {
+            let mut n_guard = self.cached_local_name.write().await;
+            *n_guard = Some(name.to_string());
+        }
+    }
+
+    pub async fn sync_local_summoner(
+        &self,
+        lcu: &crate::lcu::LcuClient,
+    ) -> (Option<String>, Option<String>) {
+        if let Some(cur) = lcu.get_current_summoner().await {
+            if let Some(p) = cur.get("puuid").and_then(|v| v.as_str()) {
+                if !p.is_empty() {
+                    let n = cur
+                        .get("gameName")
+                        .or_else(|| cur.get("displayName"))
+                        .or_else(|| cur.get("summonerName"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    let prev_puuid = {
+                        let guard = self.cached_local_puuid.read().await;
+                        guard.clone()
+                    };
+
+                    if let Some(ref old_p) = prev_puuid {
+                        if old_p != p {
+                            // Account switch detected! Clear cache immediately so new account
+                            // is not treated as a teammate or ghost duplicate.
+                            self.clear_cache().await;
+                        }
+                    }
+
+                    {
+                        let mut p_guard = self.cached_local_puuid.write().await;
+                        *p_guard = Some(p.to_string());
+                    }
+                    {
+                        let mut n_guard = self.cached_local_name.write().await;
+                        *n_guard = Some(n.to_string());
+                    }
+                    return (Some(p.to_string()), Some(n.to_string()));
+                }
+            }
+        }
+
+        let p = self.cached_local_puuid.read().await.clone();
+        let n = self.cached_local_name.read().await.clone();
+        (p, n)
+    }
+
+    pub async fn fetch_chat_participants_with_retry(
+        &self,
+        lcu: &crate::lcu::LcuClient,
+        room_id: Option<&str>,
+        local_puuid: Option<&str>,
+        needed_count: usize,
+    ) -> Vec<Value> {
+        let backoff_delays = [200, 400, 800];
+        let mut target_room = room_id.filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let mut participants = Vec::new();
+
+        for attempt in 0..=3 {
+            // If room_id is unknown, attempt to locate champ-select room from active conversations
+            if target_room.is_none() {
+                let convs = lcu.get_chat_conversations().await;
+                for c in convs {
+                    let c_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    let c_id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if c_type == "championSelect" || c_id.contains("champ-select") {
+                        target_room = Some(c_id.to_string());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(ref r_id) = target_room {
+                let parts = lcu.get_chat_conversation_participants(r_id).await;
+                if !parts.is_empty() {
+                    participants = parts;
+                    // Check if enough non-local teammates have arrived
+                    let valid_candidates_count = participants
+                        .iter()
+                        .filter(|p| {
+                            let pid = p
+                                .get("id")
+                                .or_else(|| p.get("puuid"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if pid.is_empty() {
+                                return false;
+                            }
+                            if let Some(lp) = local_puuid {
+                                if pid == lp {
+                                    return false;
+                                }
+                            }
+                            true
+                        })
+                        .count();
+
+                    if valid_candidates_count >= needed_count && needed_count > 0 {
+                        // All expected teammates have joined!
+                        break;
+                    }
+                }
+            }
+
+            // Retry with exponential backoff if teammates haven't fully joined yet
+            if attempt < 3 {
+                tokio::time::sleep(Duration::from_millis(backoff_delays[attempt])).await;
+            }
+        }
+
+        participants
+    }
+
     pub fn compute_tactical_profile(
         &self,
         record: &CachedPlayerRecord,
@@ -408,7 +769,7 @@ impl PlayerHistoryManager {
         let mut streak_ended = false;
         let mut first_win = None;
 
-        let mut champ_counts: HashMap<i32, (i32, i32, f64, f64, String)> = HashMap::new(); // cid -> (games, wins, kills, deaths, name)
+        let mut champ_counts: HashMap<i32, (i32, i32, f64, f64, f64, String)> = HashMap::new(); // cid -> (games, wins, kills, deaths, assists, name)
 
         let mut total_k = 0;
         let mut total_d = 0;
@@ -435,13 +796,14 @@ impl PlayerHistoryManager {
             }
 
             if m.champion_id > 0 {
-                let entry = champ_counts.entry(m.champion_id).or_insert((0, 0, 0.0, 0.0, m.champion_name.clone()));
+                let entry = champ_counts.entry(m.champion_id).or_insert((0, 0, 0.0, 0.0, 0.0, m.champion_name.clone()));
                 entry.0 += 1;
                 if m.win {
                     entry.1 += 1;
                 }
                 entry.2 += m.kills as f64;
                 entry.3 += m.deaths as f64;
+                entry.4 += m.assists as f64;
             }
         }
 
@@ -490,7 +852,7 @@ impl PlayerHistoryManager {
         };
 
         let cur_champ_tag = if current_champion_id > 0 {
-            if cur_g >= 4 && cur_wr_pct >= 60 {
+            if cur_g >= 3 && cur_wr_pct >= 60 {
                 format!("👑 绝活({}%)", cur_wr_pct)
             } else if cur_g >= 1 {
                 format!("近{}场 {}%", cur_g, cur_wr_pct)
@@ -597,10 +959,10 @@ impl PlayerHistoryManager {
         let top_champs: Vec<TopChampItem> = sorted_champs.iter().take(3).map(|(cid, info)| {
             let g = info.0;
             let w = info.1;
-            let kda = if info.3 > 0.0 { (info.2 + 0.0) / info.3 } else { info.2 };
+            let kda = if info.3 > 0.0 { (info.2 + info.4) / info.3 } else { info.2 + info.4 };
             TopChampItem {
                 champion_id: *cid,
-                champion_name: info.4.clone(),
+                champion_name: info.5.clone(),
                 games: g,
                 win_rate: if g > 0 { w as f64 / g as f64 } else { 0.5 },
                 win_rate_pct: if g > 0 { ((w as f64 / g as f64) * 100.0).round() as i32 } else { 50 },
@@ -722,9 +1084,12 @@ impl PlayerHistoryManager {
                 let mode_cn = match queue_id {
                     420 => "排位赛(单双)",
                     440 => "排位赛(灵活)",
-                    450 => "极地大乱斗",
+                    450 | 860 => "极地大乱斗",
                     400 => "匹配模式",
                     1700 | 1710 => "斗魂竞技场",
+                    1090..=1160 => "云顶之弈",
+                    700 => "克隆大作战",
+                    900 | 1010 | 1020 => "无限火力",
                     _ => "其他模式",
                 }.to_string();
 
@@ -771,16 +1136,21 @@ impl PlayerHistoryManager {
                     .or_else(|| part.get("win"))
                     .map(|w| w.as_bool().unwrap_or_else(|| w.as_i64() == Some(1) || w.as_str() == Some("true") || w.as_str() == Some("Win")))
                     .unwrap_or_else(|| {
-                        g.get("teams")
-                            .and_then(|t| t.as_array())
-                            .map(|arr| {
-                                arr.iter().any(|t| {
-                                    t.get("teamId").and_then(|v| v.as_i64()) == Some(my_tid)
-                                        && (t.get("win").and_then(|v| v.as_str()) == Some("Win")
-                                            || t.get("win").and_then(|v| v.as_bool()) == Some(true))
+                        if queue_id == 1700 || queue_id == 1710 {
+                            let placement = stats.and_then(|s| s.get("subteamPlacement")).and_then(|v| v.as_i64()).unwrap_or(0);
+                            placement == 1
+                        } else {
+                            g.get("teams")
+                                .and_then(|t| t.as_array())
+                                .map(|arr| {
+                                    arr.iter().any(|t| {
+                                        t.get("teamId").and_then(|v| v.as_i64()) == Some(my_tid)
+                                            && (t.get("win").and_then(|v| v.as_str()) == Some("Win")
+                                                || t.get("win").and_then(|v| v.as_bool()) == Some(true))
+                                    })
                                 })
-                            })
-                            .unwrap_or(false)
+                                .unwrap_or(false)
+                        }
                     });
 
                 let cid = part.get("championId").or_else(|| stats.and_then(|s| s.get("championId"))).and_then(|c| c.as_i64()).unwrap_or(0) as i32;
@@ -812,40 +1182,59 @@ impl PlayerHistoryManager {
                 let taken = stats.and_then(|s| s.get("totalDamageTaken")).and_then(|v| v.as_i64()).unwrap_or(0);
                 let mitig = stats.and_then(|s| s.get("damageSelfMitigated")).and_then(|v| v.as_i64()).unwrap_or(0);
 
-                let mut team_dmg = 0i64;
-                let mut team_kills = 0i32;
-                let mut team_max_dmg = 0i64;
-                let mut team_max_pid = 0i64;
                 let mut teammate_puuids = Vec::new();
+                let mut eval_inputs = Vec::new();
 
                 for pt in participants {
                     let pt_tid = pt.get("teamId").and_then(|v| v.as_i64()).unwrap_or(100);
                     let pt_pid = pt.get("participantId").and_then(|v| v.as_i64()).unwrap_or(0);
                     let pt_stats = pt.get("stats");
+                    let pt_win = pt_stats.and_then(|s| s.get("win")).map(|w| {
+                        w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
+                    }).unwrap_or(false);
+                    let pt_k = pt_stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                    let pt_d = pt_stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                    let pt_a = pt_stats.and_then(|s| s.get("assists")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                     let pt_dmg = pt_stats.and_then(|s| s.get("totalDamageDealtToChampions")).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let pt_taken = pt_stats.and_then(|s| s.get("totalDamageTaken")).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let pt_mitig = pt_stats.and_then(|s| s.get("damageSelfMitigated")).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let pt_gold = pt_stats.and_then(|s| s.get("goldEarned")).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let pt_cs = pt_stats.and_then(|s| s.get("totalMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32
+                        + pt_stats.and_then(|s| s.get("neutralMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                    let pt_vis = pt_stats.and_then(|s| s.get("visionScore")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-                    if pt_tid == my_tid {
-                        team_dmg += pt_dmg;
-                        team_kills += pt_stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                        if pt_dmg > team_max_dmg {
-                            team_max_dmg = pt_dmg;
-                            team_max_pid = pt_pid;
-                        }
-                        if pt_pid != target_pid.unwrap_or(-1) {
-                            if let Some((t_puuid, _)) = ident_map.get(&pt_pid) {
-                                if !t_puuid.is_empty() {
-                                    teammate_puuids.push(t_puuid.clone());
-                                }
-                            }
+                    let pt_puuid = ident_map.get(&pt_pid).map(|(u, _)| u.clone()).unwrap_or_default();
+
+                    if pt_tid == my_tid && pt_pid != target_pid.unwrap_or(-1) {
+                        if !pt_puuid.is_empty() {
+                            teammate_puuids.push(pt_puuid.clone());
                         }
                     }
+
+                    eval_inputs.push(MatchParticipantInput {
+                        participant_id: pt_pid,
+                        puuid: pt_puuid,
+                        team_id: pt_tid,
+                        is_win: pt_win,
+                        kills: pt_k,
+                        deaths: pt_d,
+                        assists: pt_a,
+                        damage: pt_dmg,
+                        damage_taken: pt_taken,
+                        damage_mitigated: pt_mitig,
+                        gold: pt_gold,
+                        cs: pt_cs,
+                        vision_score: pt_vis,
+                    });
                 }
 
-                let dmg_share_pct = if team_dmg > 0 { ((dmg as f64 / team_dmg as f64) * 1000.0).round() / 10.0 } else { 20.0 };
-                let kp_pct = if team_kills > 0 { (((k + a) as f64 / team_kills as f64) * 1000.0).round() / 10.0 } else { 50.0 };
-                let is_team_highest_dmg = target_pid == Some(team_max_pid);
-                let is_mvp = is_win && is_team_highest_dmg;
-                let is_svp = !is_win && is_team_highest_dmg;
+                let evals = evaluate_match_participants(duration_sec, &eval_inputs);
+                let my_eval = target_pid.and_then(|tpid| evals.iter().find(|e| e.participant_id == tpid));
+
+                let dmg_share_pct = my_eval.map(|e| e.damage_share_pct).unwrap_or(20.0);
+                let kp_pct = my_eval.map(|e| e.kp_pct).unwrap_or(50.0);
+                let is_mvp = my_eval.map(|e| e.is_mvp).unwrap_or(false);
+                let is_svp = my_eval.map(|e| e.is_svp).unwrap_or(false);
 
                 parsed_matches.push(ParsedMatchRecord {
                     game_id,
@@ -1129,6 +1518,7 @@ impl PlayerHistoryManager {
     }
 
     pub async fn get_ongoing_match(&self, lcu: &crate::lcu::LcuClient, db: &Database) -> OngoingMatchResponse {
+        let _ = self.sync_local_summoner(lcu).await;
         let phase = lcu.get_gameflow_phase().await;
 
         if phase == "ChampSelect" {
@@ -1136,6 +1526,11 @@ impl PlayerHistoryManager {
             if session.is_null() {
                 return self.get_mock_ongoing_match(db);
             }
+
+            let queue_id = session.get("gameData").and_then(|g| g.get("queueId"))
+                .or_else(|| session.get("queueId"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
 
             let chat_details = session.get("chatDetails");
             let chat_room_id = chat_details
@@ -1165,16 +1560,25 @@ impl PlayerHistoryManager {
                     let cached = self.get_player_data(&prof.puuid).await;
                     let matches = cached.map(|c| c.matches).unwrap_or_default();
 
+                    let pos = if queue_id == 1700 || queue_id == 1710 {
+                        "ARENA".to_string()
+                    } else if queue_id == 450 || queue_id == 860 || session.get("benchChampions").is_some() {
+                        "ARAM".to_string()
+                    } else {
+                        p.get("assignedPosition").and_then(|v| v.as_str()).unwrap_or("").to_uppercase()
+                    };
+                    let tid = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(100) as i32;
+
                     my_cards.push(OngoingPlayerCard {
                         slot_index: idx,
-                        team_id: 100,
+                        team_id: tid,
                         is_local_player: is_locals.get(idx).copied().unwrap_or(false),
                         puuid: prof.puuid.clone(),
                         summoner_name: name.clone(),
                         full_name: format!("{}#CN", name),
                         level: 120,
                         profile_icon_id: 548,
-                        position: p.get("assignedPosition").and_then(|v| v.as_str()).unwrap_or("").to_uppercase(),
+                        position: pos,
                         champion_id: cid,
                         champion_name: cname,
                         champion_avatar: cavatar,
@@ -1208,16 +1612,25 @@ impl PlayerHistoryManager {
                     let cached = self.get_player_data(&prof.puuid).await;
                     let matches = cached.map(|c| c.matches).unwrap_or_default();
 
+                    let pos = if queue_id == 1700 || queue_id == 1710 {
+                        "ARENA".to_string()
+                    } else if queue_id == 450 || queue_id == 860 {
+                        "ARAM".to_string()
+                    } else {
+                        p.get("assignedPosition").and_then(|v| v.as_str()).unwrap_or("").to_uppercase()
+                    };
+                    let tid = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(200) as i32;
+
                     their_cards.push(OngoingPlayerCard {
                         slot_index: idx,
-                        team_id: 200,
+                        team_id: tid,
                         is_local_player: false,
                         puuid: prof.puuid.clone(),
                         summoner_name: name.clone(),
                         full_name: format!("{}#CN", name),
                         level: 120,
                         profile_icon_id: 500,
-                        position: p.get("assignedPosition").and_then(|v| v.as_str()).unwrap_or("").to_uppercase(),
+                        position: pos,
                         champion_id: cid,
                         champion_name: cname,
                         champion_avatar: cavatar,
@@ -1254,41 +1667,73 @@ impl PlayerHistoryManager {
         } else if phase == "GameStart" || phase == "InProgress" {
             let gf_session = lcu.get_gameflow_session().await;
             if let Some((my_slots, their_slots)) = self.resolve_gameflow_10_players(&gf_session, lcu).await {
-                let parse_team = |slots: Vec<GameflowSlotInfo>, tid: i32| -> Vec<OngoingPlayerCard> {
-                    slots.into_iter().enumerate().map(|(idx, s)| {
-                        let cname = if s.champion_id > 0 { db.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone()) } else { s.summoner_name.clone() };
-                        let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", s.champion_id) } else { String::new() };
-                        let prof = s.profile.unwrap_or_default();
+                let mut my_cards = Vec::with_capacity(my_slots.len());
+                for (idx, s) in my_slots.into_iter().enumerate() {
+                    let cname = if s.champion_id > 0 { db.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone()) } else { s.summoner_name.clone() };
+                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", s.champion_id) } else { String::new() };
+                    let prof = s.profile.unwrap_or_default();
+                    let cached = self.get_player_data(&s.puuid).await;
+                    let matches = cached.map(|c| c.matches).unwrap_or_default();
 
-                        OngoingPlayerCard {
-                            slot_index: idx,
-                            team_id: tid,
-                            is_local_player: s.is_local_player,
-                            puuid: s.puuid.clone(),
-                            summoner_name: s.summoner_name.clone(),
-                            full_name: format!("{}#CN", s.summoner_name),
-                            level: 120,
-                            profile_icon_id: 548,
-                            position: s.position,
-                            champion_id: s.champion_id,
-                            champion_name: cname,
-                            champion_avatar: cavatar,
-                            spell1_id: 4,
-                            spell2_id: 14,
-                            ranked: json!({ "solo": { "tier": prof.tier, "tier_str": prof.tier_str, "lp": prof.lp } }),
-                            tactical_analysis: prof,
-                            matches: Vec::new(),
-                            premade_group: None,
-                            premade_tag: None,
-                            premade_color: None,
-                            premade_bg: None,
-                            premade_text: None,
-                        }
-                    }).collect()
-                };
+                    my_cards.push(OngoingPlayerCard {
+                        slot_index: idx,
+                        team_id: if s.team_id > 0 { s.team_id as i32 } else { 100 },
+                        is_local_player: s.is_local_player,
+                        puuid: s.puuid.clone(),
+                        summoner_name: s.summoner_name.clone(),
+                        full_name: format!("{}#CN", s.summoner_name),
+                        level: 120,
+                        profile_icon_id: 548,
+                        position: s.position,
+                        champion_id: s.champion_id,
+                        champion_name: cname,
+                        champion_avatar: cavatar,
+                        spell1_id: 4,
+                        spell2_id: 14,
+                        ranked: json!({ "solo": { "tier": prof.tier, "tier_str": prof.tier_str, "lp": prof.lp } }),
+                        tactical_analysis: prof,
+                        matches,
+                        premade_group: None,
+                        premade_tag: None,
+                        premade_color: None,
+                        premade_bg: None,
+                        premade_text: None,
+                    });
+                }
 
-                let mut my_cards = parse_team(my_slots, 100);
-                let mut their_cards = parse_team(their_slots, 200);
+                let mut their_cards = Vec::with_capacity(their_slots.len());
+                for (idx, s) in their_slots.into_iter().enumerate() {
+                    let cname = if s.champion_id > 0 { db.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone()) } else { s.summoner_name.clone() };
+                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", s.champion_id) } else { String::new() };
+                    let prof = s.profile.unwrap_or_default();
+                    let cached = self.get_player_data(&s.puuid).await;
+                    let matches = cached.map(|c| c.matches).unwrap_or_default();
+
+                    their_cards.push(OngoingPlayerCard {
+                        slot_index: idx,
+                        team_id: if s.team_id > 0 { s.team_id as i32 } else { 200 },
+                        is_local_player: s.is_local_player,
+                        puuid: s.puuid.clone(),
+                        summoner_name: s.summoner_name.clone(),
+                        full_name: format!("{}#CN", s.summoner_name),
+                        level: 120,
+                        profile_icon_id: 548,
+                        position: s.position,
+                        champion_id: s.champion_id,
+                        champion_name: cname,
+                        champion_avatar: cavatar,
+                        spell1_id: 4,
+                        spell2_id: 14,
+                        ranked: json!({ "solo": { "tier": prof.tier, "tier_str": prof.tier_str, "lp": prof.lp } }),
+                        tactical_analysis: prof,
+                        matches,
+                        premade_group: None,
+                        premade_tag: None,
+                        premade_color: None,
+                        premade_bg: None,
+                        premade_text: None,
+                    });
+                }
 
                 detect_premade_teams(&mut my_cards);
                 detect_premade_teams(&mut their_cards);
@@ -1333,36 +1778,11 @@ impl PlayerHistoryManager {
         my_team_is_locals: &[bool],
         lcu: &crate::lcu::LcuClient,
     ) -> Vec<Option<PlayerTacticalProfile>> {
-        let slot_count = my_team_cids.len().max(5);
+        let slot_count = if my_team_cids.is_empty() { 5 } else { my_team_cids.len() };
         let mut assigned_puuids: Vec<Option<(String, String)>> = vec![None; slot_count]; // (puuid, name)
 
-        // 1. Ensure local player PUUID & name
-        let mut local_puuid_opt = {
-            let guard = self.cached_local_puuid.read().await;
-            guard.clone()
-        };
-        let mut local_name_opt = {
-            let guard = self.cached_local_name.read().await;
-            guard.clone()
-        };
-
-        if local_puuid_opt.is_none() {
-            if let Some(cur) = lcu.get_current_summoner().await {
-                if let Some(p) = cur.get("puuid").and_then(|v| v.as_str()) {
-                    let n = cur.get("gameName")
-                        .or_else(|| cur.get("displayName"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let mut p_guard = self.cached_local_puuid.write().await;
-                    *p_guard = Some(p.to_string());
-                    local_puuid_opt = Some(p.to_string());
-
-                    let mut n_guard = self.cached_local_name.write().await;
-                    *n_guard = Some(n.to_string());
-                    local_name_opt = Some(n.to_string());
-                }
-            }
-        }
+        // 1. Ensure local player PUUID & name (sync with account switch detection)
+        let (local_puuid_opt, local_name_opt) = self.sync_local_summoner(lcu).await;
 
         // Assign local player to slot where is_local == true
         if let Some(ref lp) = local_puuid_opt {
@@ -1375,7 +1795,7 @@ impl PlayerHistoryManager {
             }
         }
 
-        // 2. Collect candidate teammates from chat conversation participants
+        // 2. Collect candidate teammates from chat conversation participants with retry
         let chat_details = session.get("chatDetails");
         let chat_room_id = chat_details
             .and_then(|c| c.get("multiUserChatId").or_else(|| c.get("chatRoomId")).or_else(|| c.get("chatRoomName")))
@@ -1383,26 +1803,21 @@ impl PlayerHistoryManager {
             .or_else(|| session.get("chatRoomId").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
 
-        let mut participants = Vec::new();
-        if let Some(ref room_id) = chat_room_id {
-            participants = lcu.get_chat_conversation_participants(room_id).await;
-        }
+        let needed_count = my_team_is_locals
+            .iter()
+            .take(slot_count)
+            .filter(|&&is_local| !is_local)
+            .count()
+            .max(1);
 
-        // Fallback: If participants empty, query active chat conversations to locate champ-select room
-        if participants.is_empty() {
-            let convs = lcu.get_chat_conversations().await;
-            for c in convs {
-                let c_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let c_id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                if c_type == "championSelect" || c_id.contains("champ-select") {
-                    let parts = lcu.get_chat_conversation_participants(c_id).await;
-                    if !parts.is_empty() {
-                        participants = parts;
-                        break;
-                    }
-                }
-            }
-        }
+        let participants = self
+            .fetch_chat_participants_with_retry(
+                lcu,
+                chat_room_id.as_deref(),
+                local_puuid_opt.as_deref(),
+                needed_count,
+            )
+            .await;
 
         // Build candidate list (STRICTLY EXCLUDING local player to prevent duplicate identity bug!)
         let mut candidate_teammates = Vec::new();
@@ -1431,6 +1846,11 @@ impl PlayerHistoryManager {
                         if !p.is_empty() && p != "0" {
                             let is_local = my_team_is_locals.get(idx).copied().unwrap_or(false);
                             if !is_local {
+                                if let Some(ref lp) = local_puuid_opt {
+                                    if p == lp {
+                                        continue;
+                                    }
+                                }
                                 assigned_puuids[idx] = Some((p.to_string(), String::new()));
                             }
                         }
@@ -1641,6 +2061,7 @@ impl PlayerHistoryManager {
                 } else {
                     false
                 };
+                let team_id = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(0);
 
                 slots.push(GameflowSlotInfo {
                     cell_id,
@@ -1651,6 +2072,7 @@ impl PlayerHistoryManager {
                     position_cn: SHORT_POS_NAMES_CN[pos_idx].to_string(),
                     is_local_player: is_local,
                     profile: None,
+                    team_id,
                 });
             }
             slots

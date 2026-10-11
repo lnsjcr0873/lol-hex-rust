@@ -128,13 +128,53 @@ pub struct ConfigManager {
     pub config_file_path: String,
 }
 
+pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let tmp_path = match path.file_name() {
+        Some(fname) => path.with_file_name(format!("{}.tmp", fname.to_string_lossy())),
+        None => path.with_extension("tmp"),
+    };
+
+    {
+        use std::io::Write;
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        file.sync_all()?;
+    }
+
+    // Atomically rename tmp file to target path
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        // Fallback for Windows if destination already exists or rename fails
+        if path.exists() {
+            let _ = fs::remove_file(path);
+            if let Err(e2) = fs::rename(&tmp_path, path) {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(e2);
+            }
+        } else {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+
 impl ConfigManager {
     pub fn new(path: &str) -> Self {
         let mut initial = RecommendationConfig::default();
         if Path::new(path).exists() {
             if let Ok(content) = fs::read_to_string(path) {
-                if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(&content) {
-                    initial = cfg;
+                if !content.trim().is_empty() {
+                    if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(&content) {
+                        initial = cfg;
+                    }
                 }
             }
         }
@@ -146,6 +186,15 @@ impl ConfigManager {
 
     pub async fn get(&self) -> RecommendationConfig {
         self.config.read().await.clone()
+    }
+
+    pub async fn save_to_disk(&self) -> bool {
+        let cfg = self.config.read().await;
+        if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
+            let path = Path::new(&self.config_file_path);
+            return save_atomic(path, &json_str).is_ok();
+        }
+        false
     }
 
     pub async fn update(
@@ -202,15 +251,10 @@ impl ConfigManager {
             cfg.auto_accept_delay_seconds = aads.clamp(0, 10);
         }
 
-        // Persist to disk safely
+        // Persist to disk safely via atomic rename
         if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
             let path = Path::new(&self.config_file_path);
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    let _ = fs::create_dir_all(parent);
-                }
-            }
-            let _ = fs::write(path, json_str);
+            let _ = save_atomic(path, &json_str);
         }
 
         cfg.clone()
@@ -218,5 +262,51 @@ impl ConfigManager {
 
     pub async fn set_auto_accept(&self, enabled: bool, delay_secs: Option<u64>) -> RecommendationConfig {
         self.update(None, None, None, None, None, None, None, Some(enabled), delay_secs).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_atomic_persistence_and_no_zero_byte_corruption() {
+        let temp_dir = std::env::temp_dir().join(format!("hexbrain_atomic_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let cfg_path = temp_dir.join("config.json");
+
+        let mgr = ConfigManager::new(cfg_path.to_str().unwrap());
+        mgr.update(
+            Some(false),
+            Some(2.5),
+            Some(0.9),
+            Some(1.5),
+            Some("RAW".to_string()),
+            Some("STATIC".to_string()),
+            None,
+            Some(true),
+            Some(5),
+        ).await;
+
+        assert!(cfg_path.exists());
+        let content = fs::read_to_string(&cfg_path).unwrap();
+        assert!(!content.is_empty());
+        let parsed: RecommendationConfig = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.hex_synergy_weight, 2.5);
+        assert_eq!(parsed.auto_accept_match, true);
+        assert_eq!(parsed.auto_accept_delay_seconds, 5);
+
+        // Ensure temp file was cleaned up / renamed
+        let tmp_path = temp_dir.join("config.json.tmp");
+        assert!(!tmp_path.exists());
+
+        // Test corrupted 0-byte file recovery
+        let corrupt_path = temp_dir.join("corrupt.json");
+        fs::write(&corrupt_path, "").unwrap();
+        let corrupt_mgr = ConfigManager::new(corrupt_path.to_str().unwrap());
+        let def_cfg = corrupt_mgr.get().await;
+        assert_eq!(def_cfg.current_preset, "SMART");
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

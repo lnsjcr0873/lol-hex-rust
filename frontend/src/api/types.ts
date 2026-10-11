@@ -2,7 +2,7 @@ export interface TacticalBadge {
   id: string;
   label: string;
   icon: string;
-  color: 'gold' | 'cyan' | 'red' | 'blue' | 'purple';
+  color: 'gold' | 'cyan' | 'red' | 'blue' | 'purple' | 'green';
   description?: string;
 }
 
@@ -143,13 +143,14 @@ export interface MatchHistoryItem {
 
 export interface MatchDetailParticipant {
   puuid: string;
-  game_name: string;
-  tag_line: string;
+  summoner_name: string;
+  game_name?: string;
+  tag_line?: string;
   team: 'blue' | 'red';
   champion_id: number;
   champion_name: string;
   champion_title?: string;
-  champion_icon: string;
+  champion_icon?: string;
   champion_level: number;
   role: string;
   spell1_id: number;
@@ -160,26 +161,31 @@ export interface MatchDetailParticipant {
   kills: number;
   deaths: number;
   assists: number;
-  kda_ratio: number;
+  kda_str: string;
+  kda_ratio?: number;
+  total_damage: number;
+  total_damage_taken: number;
+  damage_taken?: number;
+  damage_share_pct: number;
+  damage_taken_share_pct: number;
+  is_highest_damage: boolean;
   is_mvp: boolean;
   is_svp: boolean;
-  total_damage: number;
-  damage_share_pct: number;
-  is_highest_damage: boolean;
-  damage_taken: number;
-  damage_mitigated: number;
   gold_earned: number;
   minions_killed: number;
   items: number[];
-  item_trinket: number;
+  item_trinket?: number;
+  damage_mitigated?: number;
 }
 
 export interface MatchDetailFull {
   game_id: number;
   game_creation: number;
   game_duration: number;
+  game_mode: string;
+  game_mode_cn: string;
   queue_id: number;
-  queue_name: string;
+  queue_name?: string;
   blue_team_kills: number;
   blue_team_turrets: number;
   blue_team_dragons: number;
