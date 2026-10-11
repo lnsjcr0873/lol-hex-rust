@@ -11,6 +11,8 @@ jobs:
   build-tauri:
     name: Build HexBrain Tauri Desktop
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -63,5 +65,5 @@ jobs:
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/hexbrain.exe
+            src-tauri/target/release/*.exe
           if-no-files-found: warn
