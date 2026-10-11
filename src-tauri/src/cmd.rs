@@ -211,6 +211,16 @@ pub async fn get_ongoing_match(
     let blue: Vec<Value> = ongoing.blue_team.iter().map(|c| convert_ongoing_card(c, "blue", &state.db)).collect();
     let red: Vec<Value> = ongoing.red_team.iter().map(|c| convert_ongoing_card(c, "red", &state.db)).collect();
 
+    // Record game ID if present in session for persistent history tracking
+    {
+        let sess = state.lcu.current_session.read().await;
+        if let Some(gid) = sess.get("gameData").and_then(|g| g.get("gameId")).and_then(|v| v.as_i64()) {
+            state.history.record_game_id(gid);
+        } else if let Some(gid) = sess.get("gameId").and_then(|v| v.as_i64()) {
+            state.history.record_game_id(gid);
+        }
+    }
+
     let cur_sum = state.lcu.get_current_summoner().await;
     let my_puuid = cur_sum.and_then(|s| s.get("puuid").and_then(|v| v.as_str()).map(|v| v.to_string())).unwrap_or_default();
 
@@ -561,9 +571,13 @@ pub async fn get_match_detail(
         }
     }
 
-    // 2. Fallback to structured detail
-    let mock = build_mock_match_detail(game_id, &state.db);
-    Ok(mock)
+    // 2. Only return demo mock if explicitly requested with negative ID (e.g. game_id == -1)
+    if game_id < 0 {
+        let mock = build_mock_match_detail(game_id, &state.db);
+        return Ok(mock);
+    }
+
+    Err(format!("无法获取对局 {} 的详情数据", game_id))
 }
 
 #[tauri::command]

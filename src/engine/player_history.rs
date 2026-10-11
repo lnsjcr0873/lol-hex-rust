@@ -1011,6 +1011,99 @@ impl PlayerHistoryManager {
         }
     }
 
+    pub fn record_game_id(&self, game_id: i64) {
+        if game_id <= 1_000_000_000 {
+            return;
+        }
+        let cache_path = std::path::Path::new("data/cache/encountered_games.json");
+        let mut list: Vec<i64> = if let Ok(c) = std::fs::read_to_string(cache_path) {
+            serde_json::from_str(&c).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if !list.contains(&game_id) {
+            list.push(game_id);
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(cache_path, serde_json::to_string(&list).unwrap_or_default());
+        }
+    }
+
+    pub async fn discover_game_ids(&self) -> Vec<i64> {
+        let mut gids = std::collections::BTreeSet::new();
+
+        // 1. Read from local cache file
+        let cache_paths = ["data/cache/encountered_games.json", "cache/encountered_games.json"];
+        for cp in cache_paths {
+            if let Ok(content) = std::fs::read_to_string(cp) {
+                if let Ok(arr) = serde_json::from_str::<Vec<i64>>(&content) {
+                    for id in arr {
+                        if id > 1_000_000_000 {
+                            gids.insert(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Scan %APPDATA%/league-akari/LeagueAkari.db
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let akari_db = std::path::Path::new(&appdata).join("league-akari").join("LeagueAkari.db");
+            if akari_db.exists() {
+                if let Ok(bytes) = std::fs::read(&akari_db) {
+                    let s = String::from_utf8_lossy(&bytes);
+                    if let Ok(re) = regex::Regex::new(r"\b(113\d{8}|96\d{8}|90\d{8})\b") {
+                        for cap in re.captures_iter(&s) {
+                            if let Some(m) = cap.get(1) {
+                                if let Ok(num) = m.as_str().parse::<i64>() {
+                                    gids.insert(num);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Scan recent LeagueClient log files
+        let potential_log_dirs = [
+            "F:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+            "D:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+            "E:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+            "C:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+        ];
+        if let Ok(game_re) = regex::Regex::new(r#""gameId":\s*"?(\d{10,12})"#) {
+            for dir in potential_log_dirs {
+                let p = std::path::Path::new(dir);
+                if p.exists() {
+                    if let Ok(entries) = std::fs::read_dir(p) {
+                        let mut log_files: Vec<_> = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().extension().map_or(false, |ext| ext == "log"))
+                            .collect();
+                        log_files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+                        for file in log_files.iter().rev().take(3) {
+                            if let Ok(content) = std::fs::read_to_string(file.path()) {
+                                for cap in game_re.captures_iter(&content) {
+                                    if let Some(m) = cap.get(1) {
+                                        if let Ok(num) = m.as_str().parse::<i64>() {
+                                            gids.insert(num);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<i64> = gids.into_iter().collect();
+        sorted.reverse();
+        sorted
+    }
+
     pub async fn fetch_and_cache_player(
         &self,
         puuid: &str,
@@ -1061,6 +1154,8 @@ impl PlayerHistoryManager {
         let mut parsed_matches = Vec::new();
         let mut real_name = candidate_name.to_string();
 
+        let mut raw_games: Vec<Value> = Vec::new();
+
         if let Some(h) = &history {
             let empty_vec = Vec::new();
             let games = h.get("games")
@@ -1076,6 +1171,34 @@ impl PlayerHistoryManager {
                 .unwrap_or(&empty_vec);
 
             for g in games {
+                raw_games.push(g.clone());
+            }
+        }
+
+        // Fallback for CN server where /products/lol/{puuid}/matches returns 500:
+        if raw_games.is_empty() {
+            let discovered_gids = self.discover_game_ids().await;
+            if !discovered_gids.is_empty() {
+                let gids_to_fetch: Vec<i64> = discovered_gids.into_iter().take(20).collect();
+                let mut handles = Vec::new();
+                for gid in gids_to_fetch {
+                    let lcu_c = lcu.clone();
+                    handles.push(tokio::spawn(async move {
+                        lcu_c.get_match_detail(&gid.to_string()).await
+                    }));
+                }
+                for h in handles {
+                    if let Ok(Some(g_val)) = h.await {
+                        if g_val.get("participants").is_some() {
+                            raw_games.push(g_val);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !raw_games.is_empty() {
+            for g in &raw_games {
                 let game_id = g.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
                 let game_creation = g.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
                 let duration_sec = g.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1271,6 +1394,8 @@ impl PlayerHistoryManager {
                 });
             }
         }
+
+        parsed_matches.sort_by(|a, b| b.game_creation.cmp(&a.game_creation));
 
         if parsed_matches.is_empty() && ranked.is_none() {
             return None;

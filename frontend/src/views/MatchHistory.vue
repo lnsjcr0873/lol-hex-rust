@@ -24,9 +24,9 @@
               <span class="text-xs text-slate-400 font-mono">#{{ profile.tag_line }}</span>
               <span 
                 class="px-2 py-0.5 rounded text-[10px] font-semibold shadow-sm"
-                :class="profile.is_connected ? 'bg-emerald-950/80 border border-emerald-600/50 text-emerald-300' : 'bg-amber-950/80 border border-amber-600/50 text-amber-300'"
+                :class="profile.is_connected ? 'bg-emerald-950/80 border border-emerald-600/50 text-emerald-300' : (isDemoMode ? 'bg-amber-950/80 border border-amber-600/50 text-amber-300' : 'bg-slate-800/80 border border-slate-700 text-slate-400')"
               >
-                {{ profile.is_connected ? '实时在线' : '离线示例' }}
+                {{ profile.is_connected ? '实时在线' : (isDemoMode ? '演练模式' : '客户端未连接') }}
               </span>
             </div>
 
@@ -133,20 +133,66 @@
       </div>
 
       <div class="flex items-center space-x-3 text-[11px] text-slate-400">
-        <span>共 {{ filteredMatches.length }} 场对局</span>
-        <span>· 点击左侧比赛查看 10 人深度复盘</span>
+        <button
+          @click="toggleDemoMode"
+          class="px-2.5 py-1 rounded-md border text-xs font-semibold flex items-center space-x-1 transition active:scale-95 shadow-sm"
+          :class="isDemoMode ? 'bg-amber-950/80 hover:bg-amber-900 border-amber-600 text-amber-200' : 'bg-[#0f172a] hover:bg-[#162238] border-[#1e293b] text-slate-300'"
+        >
+          <Gamepad2 class="w-3.5 h-3.5" />
+          <span>{{ isDemoMode ? '退出演练' : '模拟演练模式' }}</span>
+        </button>
+
+        <button
+          @click="refreshData"
+          class="p-1.5 rounded-md bg-[#0f172a] hover:bg-[#162238] border border-[#1e293b] text-slate-300 hover:text-white text-xs transition"
+          title="重新扫描并同步对局数据"
+        >
+          <RotateCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isLoadingMatches }" />
+        </button>
+
+        <span class="text-slate-400">共 {{ filteredMatches.length }} 场对局</span>
       </div>
+    </div>
+
+    <!-- Demo Mode Notice Banner -->
+    <div v-if="isDemoMode" class="bg-gradient-to-r from-amber-950/90 via-amber-900/80 to-amber-950/90 border-b border-amber-600/40 px-6 py-1.5 flex items-center justify-between text-xs text-amber-200 z-10 shrink-0">
+      <div class="flex items-center space-x-2">
+        <span class="px-1.5 py-0.2 bg-amber-500 text-slate-950 font-black rounded text-[10px]">演练中</span>
+        <span>当前展示为离线模拟演练数据（包含全景 10 人输出承伤柱状图、MVP/SVP 判定及出装复盘体验），非真实玩家对局</span>
+      </div>
+      <button @click="toggleDemoMode" class="text-amber-300 hover:text-amber-100 underline text-xs">
+        切回真实数据
+      </button>
     </div>
 
     <!-- Dual-Pane View: Left Matches List, Right 10-Player Scoreboard -->
     <div class="flex-1 overflow-hidden flex">
       <!-- Left: Matches Scroll Flow -->
       <div class="w-96 border-r border-[#162238] overflow-y-auto p-3 space-y-2.5 shrink-0">
+        <!-- Loading Matches State -->
         <div
-          v-if="filteredMatches.length === 0"
-          class="p-8 text-center text-xs text-slate-500 rounded-xl bg-[#0a0f1d] border border-[#162238]"
+          v-if="isLoadingMatches"
+          class="p-6 text-center text-xs text-slate-400 rounded-xl bg-[#0a0f1d] border border-[#162238] flex flex-col items-center space-y-2"
         >
-          暂无匹配筛选条件的对局记录
+          <RotateCw class="w-5 h-5 animate-spin text-[#0ac8b9]" />
+          <span>正在感知并同步历史战绩...</span>
+        </div>
+
+        <!-- Empty Matches State -->
+        <div
+          v-else-if="filteredMatches.length === 0"
+          class="p-8 text-center text-xs text-slate-400 rounded-xl bg-[#0a0f1d] border border-[#162238] flex flex-col items-center space-y-2"
+        >
+          <Inbox class="w-8 h-8 text-slate-600" />
+          <span class="font-semibold text-slate-300">暂无匹配对局记录</span>
+          <span class="text-[11px] text-slate-500 max-w-[200px]">国服客户端限制全量战绩拉取，完成新对局后将自动收录</span>
+          <button
+            v-if="!isDemoMode"
+            @click="toggleDemoMode"
+            class="mt-2 px-3 py-1 text-xs rounded bg-[#102438] hover:bg-[#16304d] text-cyan-400 border border-cyan-800/40 font-medium transition"
+          >
+            开启模拟演练
+          </button>
         </div>
 
         <div
@@ -600,6 +646,31 @@
             </div>
           </div>
         </div>
+
+        <!-- Loading State for Detail -->
+        <div v-else-if="isLoadingDetail" class="flex-1 flex flex-col items-center justify-center p-12 text-center text-slate-400">
+          <RotateCw class="w-8 h-8 animate-spin text-[#0ac8b9] mb-3" />
+          <p class="text-sm font-semibold text-slate-200">正在加载对局 10 人深度复盘数据...</p>
+        </div>
+
+        <!-- Empty State if no match selected -->
+        <div v-else class="flex-1 flex flex-col items-center justify-center p-12 text-center text-slate-400">
+          <div class="w-16 h-16 rounded-2xl bg-[#0e172a] border border-[#1e2e4a] flex items-center justify-center mb-4 text-[#0ac8b9] shadow-inner">
+            <Radio class="w-8 h-8 animate-pulse text-[#0ac8b9]" />
+          </div>
+          <h3 class="text-sm font-bold text-slate-200">请选择左侧对局查看详情</h3>
+          <p class="text-xs text-slate-500 mt-1.5 max-w-sm">
+            未选中任何对局。如需体验 10 人输出承伤柱状图与复盘计分板，可点击右上角【模拟演练模式】。
+          </p>
+          <button 
+            v-if="!isDemoMode && matches.length === 0"
+            @click="toggleDemoMode"
+            class="mt-4 px-3.5 py-1.5 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-600/60 text-amber-300 text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 shadow-md"
+          >
+            <Gamepad2 class="w-3.5 h-3.5" />
+            <span>开启模拟演练模式</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -608,14 +679,54 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { SummonerProfile, MatchHistoryItem, MatchDetailFull, MatchDetailParticipant } from '../api/types';
-import { getSummonerProfile, getMatchHistory, getMatchDetail } from '../api/tauri';
-import { mockSummonerProfile, mockMatchHistory, mockMatchDetail } from '../api/mockData';
+import { 
+  getSummonerProfile, 
+  getMatchHistory, 
+  getMatchDetail, 
+  getMockSummonerProfile, 
+  getMockMatchHistory, 
+  getMockMatchDetail 
+} from '../api/tauri';
 import RadarChart from '../components/RadarChart.vue';
+import { Gamepad2, RotateCw, Radio, Inbox } from 'lucide-vue-next';
 
-const profile = ref<SummonerProfile>(mockSummonerProfile);
-const matches = ref<MatchHistoryItem[]>(mockMatchHistory);
-const matchDetail = ref<MatchDetailFull | null>(mockMatchDetail);
-const selectedGameId = ref<number>(mockMatchHistory[0].game_id);
+const defaultEmptyProfile: SummonerProfile = {
+  is_connected: false,
+  puuid: '',
+  game_name: '召唤师',
+  tag_line: 'CN',
+  profile_icon_id: 1,
+  summoner_level: 1,
+  tier_solo: 'UNRANKED',
+  division_solo: '',
+  lp_solo: 0,
+  wins_solo: 0,
+  losses_solo: 0,
+  win_rate_solo: 0,
+  tier_flex: 'UNRANKED',
+  division_flex: '',
+  lp_flex: 0,
+  wins_flex: 0,
+  losses_flex: 0,
+  win_rate_flex: 0,
+  recent_radar: { damage: 60, kda: 60, join_rate: 60, survival: 60, gold: 60, vision: 60 },
+  recent_summary: {
+    total_games: 0,
+    win_rate: 0,
+    avg_kda: '0.0/0.0/0.0',
+    avg_kda_ratio: 0,
+    top_champions: []
+  }
+};
+
+const profile = ref<SummonerProfile>(defaultEmptyProfile);
+const matches = ref<MatchHistoryItem[]>([]);
+const matchDetail = ref<MatchDetailFull | null>(null);
+const selectedGameId = ref<number | null>(null);
+
+const isDemoMode = ref(false);
+const isLoadingMatches = ref(false);
+const isLoadingDetail = ref(false);
 
 const activeQueueFilter = ref('all');
 const activeLaneFilter = ref('all');
@@ -730,23 +841,68 @@ function getChampIconFallback(champId: number): string {
 
 async function selectMatch(gameId: number) {
   selectedGameId.value = gameId;
+  isLoadingDetail.value = true;
   try {
-    matchDetail.value = await getMatchDetail(gameId);
+    if (isDemoMode.value) {
+      matchDetail.value = getMockMatchDetail();
+    } else {
+      const d = await getMatchDetail(gameId);
+      matchDetail.value = d;
+    }
   } catch (err) {
-    console.error('getMatchDetail error:', err);
+    console.error('selectMatch error:', err);
+    matchDetail.value = null;
+  } finally {
+    isLoadingDetail.value = false;
   }
 }
 
-onMounted(async () => {
+async function loadRealData() {
+  isLoadingMatches.value = true;
   try {
-    profile.value = await getSummonerProfile();
-    matches.value = await getMatchHistory();
-    if (matches.value.length > 0) {
-      selectedGameId.value = matches.value[0].game_id;
-      matchDetail.value = await getMatchDetail(matches.value[0].game_id);
+    const p = await getSummonerProfile();
+    if (p) profile.value = p;
+    const list = await getMatchHistory();
+    matches.value = list;
+    if (list.length > 0) {
+      await selectMatch(list[0].game_id);
+    } else {
+      selectedGameId.value = null;
+      matchDetail.value = null;
     }
   } catch (err) {
-    console.error('MatchHistory init error:', err);
+    console.error('loadRealData error:', err);
+  } finally {
+    isLoadingMatches.value = false;
   }
+}
+
+async function toggleDemoMode() {
+  isDemoMode.value = !isDemoMode.value;
+  if (isDemoMode.value) {
+    profile.value = getMockSummonerProfile();
+    matches.value = getMockMatchHistory();
+    if (matches.value.length > 0) {
+      selectedGameId.value = matches.value[0].game_id;
+      matchDetail.value = getMockMatchDetail();
+    }
+  } else {
+    matchDetail.value = null;
+    selectedGameId.value = null;
+    await loadRealData();
+  }
+}
+
+async function refreshData() {
+  if (isDemoMode.value) {
+    matches.value = getMockMatchHistory();
+    matchDetail.value = getMockMatchDetail();
+    return;
+  }
+  await loadRealData();
+}
+
+onMounted(() => {
+  loadRealData();
 });
 </script>

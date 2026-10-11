@@ -98,11 +98,23 @@ export async function getSummonerProfile(puuid?: string): Promise<SummonerProfil
 }
 
 export async function getMatchHistory(puuid?: string, queueId?: number): Promise<MatchHistoryItem[]> {
-  return safeInvoke<MatchHistoryItem[]>('get_match_history', { puuid, queueId }, mockMatchHistory);
+  return safeInvoke<MatchHistoryItem[]>('get_match_history', { puuid, queueId }, []);
 }
 
-export async function getMatchDetail(gameId: number): Promise<MatchDetailFull> {
-  return safeInvoke<MatchDetailFull>('get_match_detail', { gameId }, mockMatchDetail);
+export async function getMatchDetail(gameId: number): Promise<MatchDetailFull | null> {
+  return safeInvoke<MatchDetailFull | null>('get_match_detail', { gameId }, null);
+}
+
+export function getMockSummonerProfile(): SummonerProfile {
+  return mockSummonerProfile;
+}
+
+export function getMockMatchHistory(): MatchHistoryItem[] {
+  return mockMatchHistory;
+}
+
+export function getMockMatchDetail(): MatchDetailFull {
+  return mockMatchDetail;
 }
 
 export async function sendChatRecords(roomId: string, format: 'concise' | 'detailed'): Promise<{ success: boolean; message: string }> {
