@@ -5,6 +5,7 @@ mod engine;
 mod lcu;
 mod overlay;
 mod vision;
+mod web;
 
 use config::ConfigManager;
 use crawler::{HexdataCrawler, OpggClient};
@@ -141,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // 2. Initialize Subsystems
-    let _config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
+    let config_manager = Arc::new(ConfigManager::new("recommendation_config.json"));
     let lcu_client = Arc::new(LcuClient::new());
     let live_client = Arc::new(LiveClientDataReader::new());
     let ranked_draft = Arc::new(RwLock::new(RankedDraftManager::new()));
@@ -216,12 +217,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 6. Background LCU & Game Polling Task
     let player_history = Arc::new(crate::engine::PlayerHistoryManager::new());
+    player_history.set_database(db.clone()).await;
     if let Ok(mut gh) = crate::overlay::win32_hud::GLOBAL_HISTORY.write() {
         *gh = Some(player_history.clone());
     }
     if let Ok(mut gl) = crate::overlay::win32_hud::GLOBAL_LCU.write() {
         *gl = Some(lcu_client.clone());
     }
+
+    // 6.1 Initialize and Launch Embedded Web UI (League-Akari Style Realtime Match + History + Settings)
+    let ws_broadcaster = Arc::new(crate::web::WsBroadcaster::new());
+    let web_state = crate::web::AppState {
+        db: db.clone(),
+        lcu: lcu_client.clone(),
+        history: player_history.clone(),
+        config: config_manager.clone(),
+        item_overlay: item_overlay.clone(),
+        ingame_overlay: ingame_overlay.clone(),
+        bench_overlay: bench_overlay.clone(),
+        broadcaster: ws_broadcaster.clone(),
+    };
+    tokio::spawn(async move {
+        if let Err(e) = crate::web::start_web_server(web_state, 8765).await {
+            tracing::error!("Embedded Web Server failed: {}", e);
+        }
+    });
 
     let lcu_bg = lcu_client.clone();
     let live_bg = live_client.clone();
@@ -235,6 +255,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingame_bg = ingame_overlay.clone();
     let hex_bg = hexdata_client.clone();
     let is_aram_bg = is_aram_active.clone();
+    let config_bg = config_manager.clone();
+    let ws_bg = ws_broadcaster.clone();
 
     // Warm up OP.GG tier list in background
     let opgg_warmup = opgg_client.clone();
@@ -250,6 +272,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
+
+            // 0. Auto-Accept Matchmaking Ready Check
+            if phase == "ReadyCheck" {
+                let cfg = config_bg.get().await;
+                if cfg.auto_accept_match {
+                    if let Some(rc) = lcu_bg.get_ready_check().await {
+                        let player_resp = rc.get("playerResponse").and_then(|v| v.as_str()).unwrap_or("");
+                        let state = rc.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                        if player_resp != "Accepted" && player_resp != "Declined" && state == "InProgress" {
+                            let delay = cfg.auto_accept_delay_seconds;
+                            if delay > 0 {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                            }
+                            let cur_phase = lcu_bg.get_gameflow_phase().await;
+                            if cur_phase == "ReadyCheck" {
+                                let success = lcu_bg.accept_ready_check().await;
+                                if success {
+                                    tracing::info!("⚡ [HexBrain LCU] 对局已就绪！已自动为您确认接受对局 (延迟 {} 秒)", delay);
+                                    ws_bg.send_event("auto_accept", serde_json::json!({
+                                        "status": "accepted",
+                                        "delaySeconds": delay
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if phase != "ChampSelect" {
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
@@ -846,7 +897,7 @@ mod tests {
         let cfg_path = temp_dir.join("config.json");
         let mgr = crate::config::ConfigManager::new(cfg_path.to_str().unwrap());
         // Pass f64::NAN
-        let updated = mgr.update(None, Some(f64::NAN), Some(f64::NAN), Some(f64::INFINITY), None, None, None).await;
+        let updated = mgr.update(None, Some(f64::NAN), Some(f64::NAN), Some(f64::INFINITY), None, None, None, None, None).await;
         assert!(!updated.hex_synergy_weight.is_nan());
         assert!(!updated.archetype_strictness.is_nan());
         assert!(!updated.counter_intensity.is_infinite());
@@ -1201,6 +1252,135 @@ mod tests {
             let after_len = db.heroes_detail.read().unwrap().len();
             assert!(after_len > initial_len);
         }
+    }
+
+    #[tokio::test]
+    async fn test_akari_match_history_and_radar() {
+        let db = Database::new();
+        let history = crate::engine::PlayerHistoryManager::new();
+
+        let mock_match = history.get_mock_ongoing_match(&db);
+        assert_eq!(mock_match.blue_team.len(), 5);
+        assert_eq!(mock_match.red_team.len(), 5);
+        assert!(mock_match.is_active);
+
+        // Check duo premade on blue team
+        assert_eq!(mock_match.blue_team[1].premade_tag.as_deref(), Some("双排车队"));
+        assert_eq!(mock_match.blue_team[3].premade_tag.as_deref(), Some("双排车队"));
+
+        // Check radar computation
+        let player = &mock_match.blue_team[0];
+        let radar = &player.tactical_analysis.radar;
+        assert!(radar.contains_key("damage"));
+        assert!(radar.contains_key("kda"));
+        assert!(radar.contains_key("kp"));
+        assert!(radar.contains_key("survival"));
+        assert!(radar.contains_key("economy"));
+        assert!(radar.contains_key("vision"));
+
+        for (k, v) in radar {
+            assert!(*v >= 25 && *v <= 99, "Radar {} value {} should be within [25, 99]", k, v);
+        }
+    }
+
+    #[test]
+    fn test_premade_team_deduction() {
+        let mut players = vec![
+            crate::engine::player_history::OngoingPlayerCard {
+                slot_index: 0,
+                puuid: "p1".to_string(),
+                matches: vec![
+                    crate::engine::player_history::ParsedMatchRecord {
+                        teammate_puuids: vec!["p2".to_string()],
+                        ..Default::default()
+                    },
+                    crate::engine::player_history::ParsedMatchRecord {
+                        teammate_puuids: vec!["p2".to_string()],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            crate::engine::player_history::OngoingPlayerCard {
+                slot_index: 1,
+                puuid: "p2".to_string(),
+                matches: vec![
+                    crate::engine::player_history::ParsedMatchRecord {
+                        teammate_puuids: vec!["p1".to_string()],
+                        ..Default::default()
+                    },
+                    crate::engine::player_history::ParsedMatchRecord {
+                        teammate_puuids: vec!["p1".to_string()],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            crate::engine::player_history::OngoingPlayerCard {
+                slot_index: 2,
+                puuid: "p3".to_string(),
+                matches: vec![],
+                ..Default::default()
+            },
+        ];
+
+        crate::engine::player_history::detect_premade_teams(&mut players);
+        assert_eq!(players[0].premade_tag.as_deref(), Some("双排车队"));
+        assert_eq!(players[1].premade_tag.as_deref(), Some("双排车队"));
+        assert_eq!(players[2].premade_tag, None);
+    }
+
+    #[test]
+    fn test_static_asset_path_normalization() {
+        let uri_path = "/static/css/style.css";
+        let mut path = uri_path.trim_start_matches('/');
+        if let Some(stripped) = path.strip_prefix("static/") {
+            path = stripped;
+        }
+        assert_eq!(path, "css/style.css");
+        assert!(std::path::Path::new(path).extension().is_some());
+
+        // Test SPA route without extension
+        let spa_path = "/ongoingMatch";
+        let mut spath = spa_path.trim_start_matches('/');
+        if let Some(stripped) = spath.strip_prefix("static/") {
+            spath = stripped;
+        }
+        assert_eq!(spath, "ongoingMatch");
+        assert!(std::path::Path::new(spath).extension().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_player_history_chinese_hero_name_resolution() {
+        let db = Arc::new(crate::data::loader::Database::load_from_dir("data"));
+        let mgr = crate::engine::player_history::PlayerHistoryManager::new();
+        mgr.set_database(db.clone()).await;
+
+        let res_db = mgr.get_database().await;
+        assert!(res_db.is_some());
+        let hero_name = res_db.unwrap().resolve_hero_name("266");
+        assert_eq!(hero_name.as_deref(), Some("暗裔剑魔"));
+    }
+
+    #[test]
+    fn test_compare_augments_engine_fallback() {
+        let db = crate::data::loader::Database::load_from_dir("data");
+        let cands = vec!["1113".to_string(), "1053".to_string(), "2095".to_string()];
+        let res = crate::engine::decision::DecisionEngine::compare_augments(&db, "266", &cands, Some(1), &[]);
+        assert!(res.get("candidates").is_some());
+        assert!(res.get("recommendationRationale").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_auto_accept_config_toggle() {
+        let temp_dir = std::env::temp_dir().join("hexbrain_test_auto_accept_cfg");
+        let cfg_path = temp_dir.join("config.json");
+        let mgr = crate::config::ConfigManager::new(cfg_path.to_str().unwrap());
+        assert!(!mgr.get().await.auto_accept_match);
+        let updated = mgr.set_auto_accept(true, Some(3)).await;
+        assert!(updated.auto_accept_match);
+        assert_eq!(updated.auto_accept_delay_seconds, 3);
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
 

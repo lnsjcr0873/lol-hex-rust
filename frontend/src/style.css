@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #090d1a;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Custom Scrollbar for League-Akari look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090d1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e2c47;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #0ac8b9;
+}
+
+/* Hextech Glow and Badges */
+.glow-cyan {
+  box-shadow: 0 0 15px rgba(10, 200, 185, 0.25);
+}
+
+.glow-gold {
+  box-shadow: 0 0 15px rgba(200, 170, 110, 0.25);
+}
+
+.glow-blue {
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+}
+
+.glow-red {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+}
+
+/* Premade Team Highlight Border */
+.party-border-pink {
+  border-color: #f43f5e !important;
+  box-shadow: 0 0 8px rgba(244, 63, 94, 0.3);
+}
+.party-border-yellow {
+  border-color: #eab308 !important;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.3);
+}
+.party-border-cyan {
+  border-color: #06b6d4 !important;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.3);
+}

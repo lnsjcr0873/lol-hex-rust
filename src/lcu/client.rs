@@ -452,5 +452,178 @@ impl LcuClient {
         }
         Vec::new()
     }
+
+    pub async fn get_match_detail(&self, game_id: &str) -> Option<Value> {
+        if !self.ensure_credentials().await || game_id.is_empty() {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-match-history/v1/games/{}",
+            port, game_id
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn send_chat_message(&self, chat_room_id: &str, message: &str) -> bool {
+        if !self.ensure_credentials().await || chat_room_id.is_empty() || message.is_empty() {
+            return false;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return false,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return false,
+        };
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/messages",
+            port, chat_room_id
+        );
+        let payload = json!({
+            "body": message,
+            "type": "chat"
+        });
+        match self.client.post(&url).headers(headers).json(&payload).send().await {
+            Ok(res) => res.status().is_success(),
+            Err(_) => false,
+        }
+    }
+
+    pub async fn get_conversations(&self) -> Vec<Value> {
+        if !self.ensure_credentials().await {
+            return Vec::new();
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
+
+        let url = format!("https://127.0.0.1:{}/lol-chat/v1/conversations", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                if let Ok(convs) = res.json::<Vec<Value>>().await {
+                    return convs;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    pub async fn get_summoner_by_name(&self, name: &str) -> Option<Value> {
+        if !self.ensure_credentials().await || name.is_empty() {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let query_name = if let Some(pure_name) = name.split('#').next() {
+            pure_name.trim()
+        } else {
+            name.trim()
+        };
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-summoner/v1/summoners?name={}",
+            port, query_name
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn get_summoner_by_puuid(&self, puuid: &str) -> Option<Value> {
+        if !self.ensure_credentials().await || puuid.is_empty() {
+            return None;
+        }
+        if puuid == "me" || puuid == "current" {
+            return self.get_current_summoner().await;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-summoner/v2/summoners/puuid/{}",
+            port, puuid
+        );
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn get_ready_check(&self) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check", port);
+        if let Ok(res) = self.client.get(&url).headers(headers).send().await {
+            if res.status().is_success() {
+                return res.json::<Value>().await.ok();
+            }
+        }
+        None
+    }
+
+    pub async fn accept_ready_check(&self) -> bool {
+        if !self.ensure_credentials().await {
+            return false;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return false,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return false,
+        };
+
+        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/accept", port);
+        match self.client.post(&url).headers(headers).send().await {
+            Ok(res) => res.status().is_success(),
+            Err(_) => false,
+        }
+    }
+
+    pub async fn decline_ready_check(&self) -> bool {
+        if !self.ensure_credentials().await {
+            return false;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return false,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return false,
+        };
+
+        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/decline", port);
+        match self.client.post(&url).headers(headers).send().await {
+            Ok(res) => res.status().is_success(),
+            Err(_) => false,
+        }
+    }
 }
 

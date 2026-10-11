@@ -20,6 +20,12 @@ lazy_static = "1.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Embedded Web Server & UI
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "set-header"] }
+rust-embed = { version = "8.5", features = ["compression"] }
+mime_guess = "2.0"
+
 # Windows Platform Integration
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58"

@@ -15,6 +15,14 @@ pub struct RecommendationConfig {
     pub gold_calc_mode: String,
     pub trio_mode: String,
     pub current_preset: String,
+    #[serde(default)]
+    pub auto_accept_match: bool,
+    #[serde(default = "default_auto_accept_delay")]
+    pub auto_accept_delay_seconds: u64,
+}
+
+fn default_auto_accept_delay() -> u64 {
+    2
 }
 
 impl Default for RecommendationConfig {
@@ -27,6 +35,8 @@ impl Default for RecommendationConfig {
             gold_calc_mode: "NET_DEDUCT".to_string(),
             trio_mode: "DYNAMIC_COUNTER".to_string(),
             current_preset: "SMART".to_string(),
+            auto_accept_match: false,
+            auto_accept_delay_seconds: 2,
         }
     }
 }
@@ -147,6 +157,8 @@ impl ConfigManager {
         gold_calc_mode: Option<String>,
         trio_mode: Option<String>,
         preset: Option<String>,
+        auto_accept_match: Option<bool>,
+        auto_accept_delay_seconds: Option<u64>,
     ) -> RecommendationConfig {
         let mut cfg = self.config.write().await;
         if let Some(p) = preset {
@@ -183,16 +195,28 @@ impl ConfigManager {
         if let Some(tm) = trio_mode {
             cfg.trio_mode = tm;
         }
+        if let Some(aam) = auto_accept_match {
+            cfg.auto_accept_match = aam;
+        }
+        if let Some(aads) = auto_accept_delay_seconds {
+            cfg.auto_accept_delay_seconds = aads.clamp(0, 10);
+        }
 
         // Persist to disk safely
         if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
             let path = Path::new(&self.config_file_path);
             if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
+                if !parent.as_os_str().is_empty() {
+                    let _ = fs::create_dir_all(parent);
+                }
             }
             let _ = fs::write(path, json_str);
         }
 
         cfg.clone()
+    }
+
+    pub async fn set_auto_accept(&self, enabled: bool, delay_secs: Option<u64>) -> RecommendationConfig {
+        self.update(None, None, None, None, None, None, None, Some(enabled), delay_secs).await
     }
 }
