@@ -488,8 +488,45 @@ impl LcuClient {
             "https://127.0.0.1:{}/lol-match-history/v1/games/{}",
             port, game_id
         );
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = match self.handle_response(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let http_url = format!(
+                    "http://127.0.0.1:{}/lol-match-history/v1/games/{}",
+                    port, game_id
+                );
+                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
+            }
+        }?;
         res.json::<Value>().await.ok()
+    }
+
+    pub async fn get_game_timeline(&self, game_id: u64) -> Option<Value> {
+        if !self.ensure_credentials().await || game_id == 0 {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!(
+            "https://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
+            port, game_id
+        );
+        let res = match self.handle_response(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let http_url = format!(
+                    "http://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
+                    port, game_id
+                );
+                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
+            }
+        }?;
+        res.json::<Value>().await.ok()
+    }
+
+    pub async fn get_match_timeline(&self, game_id: u64) -> Option<Value> {
+        self.get_game_timeline(game_id).await
     }
 
     pub async fn send_chat_message(&self, chat_room_id: &str, message: &str) -> bool {

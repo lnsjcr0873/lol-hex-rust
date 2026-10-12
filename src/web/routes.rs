@@ -107,6 +107,7 @@ pub fn create_router(state: AppState) -> axum::Router {
         .route("/api/match/mock-ongoing", axum::routing::get(get_mock_ongoing))
         .route("/api/match/history/:puuid", axum::routing::get(get_match_history))
         .route("/api/match/detail/:game_id", axum::routing::get(get_match_detail))
+        .route("/api/match/timeline/:game_id", axum::routing::get(get_match_timeline))
         .route("/api/chat/send-records", axum::routing::post(send_chat_records))
         // Settings & Preference APIs
         .route("/api/config", axum::routing::get(get_config).post(update_config))
@@ -358,6 +359,21 @@ async fn get_match_detail(
     // 2. Generate structured 10-player mock details for review
     let gid = game_id.parse::<i64>().unwrap_or(99991234);
     let mock = build_mock_match_detail(gid, &state.db);
+    Json(mock)
+}
+
+async fn get_match_timeline(
+    AxPath(game_id): AxPath<String>,
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let gid = game_id.parse::<u64>().unwrap_or(0);
+    if gid > 0 {
+        if let Some(timeline) = state.lcu.get_game_timeline(gid).await {
+            return Json(timeline);
+        }
+    }
+
+    let mock = build_mock_match_timeline(gid);
     Json(mock)
 }
 
@@ -738,7 +754,9 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
                 "gold": red_gold_total,
                 "players": red_players
             }
-        }
+        },
+        "raw_game": raw.clone(),
+        "raw": raw.clone()
     }))
 }
 
@@ -890,6 +908,149 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
         participants.push(p_val);
     }
 
+    let mut raw_participants = Vec::new();
+    let mut raw_identities = Vec::new();
+
+    for (idx, p) in participants.iter().enumerate() {
+        let pid = (idx + 1) as i64;
+        let is_blue = idx < 5;
+        let puuid = p.get("puuid").and_then(|v| v.as_str()).unwrap_or("");
+        let sname = p.get("summoner_name").and_then(|v| v.as_str()).unwrap_or("");
+        let cid = p.get("champion_id").and_then(|v| v.as_i64()).unwrap_or(0);
+        let s1 = p.get("spell1_id").and_then(|v| v.as_i64()).unwrap_or(4);
+        let s2 = p.get("spell2_id").and_then(|v| v.as_i64()).unwrap_or(14);
+        let k = p.get("kills").and_then(|v| v.as_i64()).unwrap_or(0);
+        let d = p.get("deaths").and_then(|v| v.as_i64()).unwrap_or(0);
+        let a = p.get("assists").and_then(|v| v.as_i64()).unwrap_or(0);
+        let dmg = p.get("total_damage").and_then(|v| v.as_i64()).unwrap_or(0);
+        let taken = p.get("total_damage_taken").and_then(|v| v.as_i64()).unwrap_or(0);
+        let mitig = p.get("damage_mitigated").and_then(|v| v.as_i64()).unwrap_or(0);
+        let gold = p.get("gold_earned").and_then(|v| v.as_i64()).unwrap_or(0);
+        let cs = p.get("minions_killed").and_then(|v| v.as_i64()).unwrap_or(0);
+        let lvl = p.get("champion_level").and_then(|v| v.as_i64()).unwrap_or(1);
+        let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("MIDDLE");
+
+        raw_identities.push(json!({
+            "participantId": pid,
+            "player": {
+                "puuid": puuid,
+                "summonerName": sname,
+                "gameName": sname,
+                "tagLine": "CN",
+                "profileIcon": 548
+            }
+        }));
+
+        let mut p_stats = serde_json::Map::new();
+        p_stats.insert("win".to_string(), json!(is_blue));
+        p_stats.insert("kills".to_string(), json!(k));
+        p_stats.insert("deaths".to_string(), json!(d));
+        p_stats.insert("assists".to_string(), json!(a));
+        p_stats.insert("champLevel".to_string(), json!(lvl));
+        p_stats.insert("totalDamageDealtToChampions".to_string(), json!(dmg));
+        p_stats.insert("physicalDamageDealtToChampions".to_string(), json!((dmg as f64 * 0.7) as i64));
+        p_stats.insert("magicDamageDealtToChampions".to_string(), json!((dmg as f64 * 0.25) as i64));
+        p_stats.insert("trueDamageDealtToChampions".to_string(), json!((dmg as f64 * 0.05) as i64));
+        p_stats.insert("totalDamageTaken".to_string(), json!(taken));
+        p_stats.insert("physicalDamageTaken".to_string(), json!((taken as f64 * 0.6) as i64));
+        p_stats.insert("magicDamageTaken".to_string(), json!((taken as f64 * 0.35) as i64));
+        p_stats.insert("trueDamageTaken".to_string(), json!((taken as f64 * 0.05) as i64));
+        p_stats.insert("damageSelfMitigated".to_string(), json!(mitig));
+        p_stats.insert("goldEarned".to_string(), json!(gold));
+        p_stats.insert("totalMinionsKilled".to_string(), json!(cs));
+        p_stats.insert("neutralMinionsKilled".to_string(), json!(if role == "JUNGLE" { 80 } else { 0 }));
+        p_stats.insert("visionScore".to_string(), json!(32));
+        p_stats.insert("wardsPlaced".to_string(), json!(11));
+        p_stats.insert("wardsKilled".to_string(), json!(3));
+        p_stats.insert("item0".to_string(), json!(3031));
+        p_stats.insert("item1".to_string(), json!(3046));
+        p_stats.insert("item2".to_string(), json!(3006));
+        p_stats.insert("item3".to_string(), json!(0));
+        p_stats.insert("item4".to_string(), json!(0));
+        p_stats.insert("item5".to_string(), json!(0));
+        p_stats.insert("item6".to_string(), json!(3340));
+        p_stats.insert("perkPrimaryStyle".to_string(), json!(8000));
+        p_stats.insert("perkSubStyle".to_string(), json!(8400));
+        p_stats.insert("perk0".to_string(), json!(8010));
+        p_stats.insert("perk0Var1".to_string(), json!(1250));
+        p_stats.insert("perk0Var2".to_string(), json!(0));
+        p_stats.insert("perk0Var3".to_string(), json!(0));
+        p_stats.insert("perk1".to_string(), json!(9111));
+        p_stats.insert("perk1Var1".to_string(), json!(450));
+        p_stats.insert("perk1Var2".to_string(), json!(0));
+        p_stats.insert("perk1Var3".to_string(), json!(0));
+        p_stats.insert("perk2".to_string(), json!(9104));
+        p_stats.insert("perk2Var1".to_string(), json!(18));
+        p_stats.insert("perk2Var2".to_string(), json!(0));
+        p_stats.insert("perk2Var3".to_string(), json!(0));
+        p_stats.insert("perk3".to_string(), json!(8299));
+        p_stats.insert("perk3Var1".to_string(), json!(680));
+        p_stats.insert("perk3Var2".to_string(), json!(0));
+        p_stats.insert("perk3Var3".to_string(), json!(0));
+        p_stats.insert("perk4".to_string(), json!(8446));
+        p_stats.insert("perk4Var1".to_string(), json!(850));
+        p_stats.insert("perk4Var2".to_string(), json!(0));
+        p_stats.insert("perk4Var3".to_string(), json!(0));
+        p_stats.insert("perk5".to_string(), json!(8453));
+        p_stats.insert("perk5Var1".to_string(), json!(520));
+        p_stats.insert("perk5Var2".to_string(), json!(0));
+        p_stats.insert("perk5Var3".to_string(), json!(0));
+        p_stats.insert("statPerk0".to_string(), json!(5008));
+        p_stats.insert("statPerk1".to_string(), json!(5008));
+        p_stats.insert("statPerk2".to_string(), json!(5002));
+
+        let p_timeline = json!({
+            "lane": match role {
+                "TOP" => "TOP",
+                "JUNGLE" => "JUNGLE",
+                "MIDDLE" => "MIDDLE",
+                _ => "BOTTOM",
+            },
+            "role": match role {
+                "UTILITY" => "DUO_SUPPORT",
+                "BOTTOM" => "DUO_CARRY",
+                "JUNGLE" => "NONE",
+                _ => "SOLO",
+            }
+        });
+
+        raw_participants.push(json!({
+            "participantId": pid,
+            "teamId": if is_blue { 100 } else { 200 },
+            "championId": cid,
+            "spell1Id": s1,
+            "spell2Id": s2,
+            "stats": p_stats,
+            "timeline": p_timeline
+        }));
+    }
+
+    let raw_game = json!({
+        "gameId": gid,
+        "gameCreation": 1712000000000i64,
+        "gameDuration": 1720,
+        "queueId": 420,
+        "gameMode": "CLASSIC",
+        "participantIdentities": raw_identities,
+        "participants": raw_participants,
+        "teams": [
+            {
+                "teamId": 100,
+                "win": "Win",
+                "towerKills": 9,
+                "dragonKills": 3,
+                "baronKills": 1
+            },
+            {
+                "teamId": 200,
+                "win": "Fail",
+                "towerKills": 2,
+                "dragonKills": 1,
+                "baronKills": 0
+            }
+        ]
+    });
+
     json!({
         "game_id": gid,
         "game_creation": 1712000000000i64,
@@ -930,7 +1091,144 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
                 "gold": red_gold_total,
                 "players": red_players
             }
+        },
+        "raw_game": raw_game.clone(),
+        "raw": raw_game
+    })
+}
+
+pub fn build_mock_match_timeline(game_id: u64) -> Value {
+    let mut frames = Vec::new();
+    for minute in 0..=15 {
+        let timestamp = (minute as i64) * 60_000;
+        let mut p_frames = serde_json::Map::new();
+
+        for pid in 1..=10 {
+            let is_blue = pid <= 5;
+            let role_idx = (pid - 1) % 5;
+            let (pos_x, pos_y) = match (is_blue, role_idx) {
+                _ if minute == 0 => {
+                    if is_blue {
+                        (600, 600)
+                    } else {
+                        (14200, 14200)
+                    }
+                }
+                (true, 0) => (1800 + minute * 150, 11000 + minute * 100),
+                (false, 0) => (2200 + minute * 120, 11500 + minute * 80),
+                (true, 1) => (4500 + (minute % 4) * 800, 7500 + (minute % 3) * 600),
+                (false, 1) => (9500 - (minute % 4) * 800, 6500 - (minute % 3) * 600),
+                (true, 2) => (7000 + minute * 50, 7000 + minute * 50),
+                (false, 2) => (7600 - minute * 40, 7600 - minute * 40),
+                (true, 3) => (12000 + minute * 80, 2200 + minute * 60),
+                (false, 3) => (12500 - minute * 60, 2600 - minute * 40),
+                (true, 4) => (11800 + minute * 80, 2400 + minute * 60),
+                (false, 4) => (12300 - minute * 60, 2800 - minute * 40),
+                _ => (7000, 7000),
+            };
+
+            let level = 1 + (minute * 14 / 15).min(17) as i32;
+            let cs = if role_idx == 4 {
+                minute * 1
+            } else if role_idx == 1 {
+                minute * 5
+            } else {
+                minute * 8
+            } as i32;
+            let gold = 500 + (minute * 450) as i64 + (if is_blue { minute * 50 } else { 0 }) as i64;
+            let xp = (minute * 600) as i64;
+
+            p_frames.insert(
+                pid.to_string(),
+                json!({
+                    "participantId": pid,
+                    "currentGold": gold % 1000,
+                    "totalGold": gold,
+                    "level": level,
+                    "xp": xp,
+                    "minionsKilled": cs,
+                    "jungleMinionsKilled": if role_idx == 1 { (minute * 4) as i32 } else { 0 },
+                    "dominionScore": 0,
+                    "teamScore": 0,
+                    "position": {
+                        "x": pos_x,
+                        "y": pos_y
+                    }
+                }),
+            );
         }
+
+        let mut events = Vec::new();
+        if minute == 1 {
+            for pid in 1..=10 {
+                events.push(json!({
+                    "type": "ITEM_PURCHASED",
+                    "timestamp": 15000 + (pid as i64 * 1000),
+                    "participantId": pid,
+                    "itemId": if (pid - 1) % 5 == 1 { 1101 } else { 1055 }
+                }));
+            }
+        } else if minute == 3 {
+            events.push(json!({
+                "type": "CHAMPION_KILL",
+                "timestamp": 195000,
+                "killerId": 1,
+                "victimId": 6,
+                "assistingParticipantIds": [2],
+                "position": { "x": 1950, "y": 11200 }
+            }));
+        } else if minute == 6 {
+            events.push(json!({
+                "type": "CHAMPION_KILL",
+                "timestamp": 372000,
+                "killerId": 4,
+                "victimId": 9,
+                "assistingParticipantIds": [2, 5],
+                "position": { "x": 10200, "y": 4800 }
+            }));
+            events.push(json!({
+                "type": "ELITE_MONSTER_KILL",
+                "timestamp": 385000,
+                "killerId": 2,
+                "killerTeamId": 100,
+                "monsterType": "DRAGON",
+                "monsterSubType": "CHEMTECH_DRAGON",
+                "position": { "x": 9866, "y": 4414 }
+            }));
+        } else if minute == 9 {
+            events.push(json!({
+                "type": "ELITE_MONSTER_KILL",
+                "timestamp": 550000,
+                "killerId": 7,
+                "killerTeamId": 200,
+                "monsterType": "RIFTHERALD",
+                "monsterSubType": "",
+                "position": { "x": 4900, "y": 10400 }
+            }));
+        } else if minute == 12 {
+            events.push(json!({
+                "type": "BUILDING_KILL",
+                "timestamp": 730000,
+                "killerId": 1,
+                "assistingParticipantIds": [2],
+                "teamId": 200,
+                "buildingType": "TOWER_BUILDING",
+                "towerType": "OUTER_TURRET",
+                "laneType": "TOP_LANE",
+                "position": { "x": 4318, "y": 13875 }
+            }));
+        }
+
+        frames.push(json!({
+            "timestamp": timestamp,
+            "participantFrames": p_frames,
+            "events": events
+        }));
+    }
+
+    json!({
+        "gameId": game_id,
+        "frames": frames
     })
 }
 

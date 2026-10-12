@@ -80,6 +80,7 @@ pub fn run() {
             cmd::get_summoner_profile,
             cmd::get_match_history,
             cmd::get_match_detail,
+            cmd::get_match_timeline,
             cmd::get_automation_config,
             cmd::update_automation_config,
             cmd::apply_runes_and_spells

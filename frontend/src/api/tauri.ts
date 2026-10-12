@@ -3,7 +3,8 @@ import {
   SummonerProfile, 
   MatchHistoryItem, 
   MatchDetailFull, 
-  AutomationConfig 
+  AutomationConfig,
+  MatchTimelineData
 } from './types';
 import { 
   mockOngoingMatch, 
@@ -103,6 +104,10 @@ export async function getMatchHistory(puuid?: string, queueId?: number): Promise
 
 export async function getMatchDetail(gameId: number): Promise<MatchDetailFull | null> {
   return safeInvoke<MatchDetailFull | null>('get_match_detail', { gameId }, null);
+}
+
+export async function getMatchTimeline(gameId: number): Promise<MatchTimelineData | null> {
+  return safeInvoke<MatchTimelineData | null>('get_match_timeline', { gameId }, null);
 }
 
 export function getMockSummonerProfile(): SummonerProfile {

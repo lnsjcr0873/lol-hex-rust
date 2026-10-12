@@ -379,3 +379,146 @@ pub fn canned_match_detail_arena(game_id: i64) -> Value {
         "participants": participants
     })
 }
+
+/// Canned realistic game timeline with 16 frames (minutes 0..=15) and rich events
+pub fn canned_game_timeline(game_id: u64) -> Value {
+    let mut frames = Vec::new();
+    for minute in 0..=15 {
+        let timestamp = (minute as i64) * 60_000;
+        let mut p_frames = serde_json::Map::new();
+
+        for pid in 1..=10 {
+            let is_blue = pid <= 5;
+            let role_idx = (pid - 1) % 5;
+            let (pos_x, pos_y) = match (is_blue, role_idx) {
+                _ if minute == 0 => {
+                    if is_blue {
+                        (600, 600)
+                    } else {
+                        (14200, 14200)
+                    }
+                }
+                (true, 0) => (1800 + minute * 150, 11000 + minute * 100),
+                (false, 0) => (2200 + minute * 120, 11500 + minute * 80),
+                (true, 1) => (4500 + (minute % 4) * 800, 7500 + (minute % 3) * 600),
+                (false, 1) => (9500 - (minute % 4) * 800, 6500 - (minute % 3) * 600),
+                (true, 2) => (7000 + minute * 50, 7000 + minute * 50),
+                (false, 2) => (7600 - minute * 40, 7600 - minute * 40),
+                (true, 3) => (12000 + minute * 80, 2200 + minute * 60),
+                (false, 3) => (12500 - minute * 60, 2600 - minute * 40),
+                (true, 4) => (11800 + minute * 80, 2400 + minute * 60),
+                (false, 4) => (12300 - minute * 60, 2800 - minute * 40),
+                _ => (7000, 7000),
+            };
+
+            let level = 1 + (minute * 14 / 15).min(17) as i32;
+            let cs = if role_idx == 4 {
+                minute * 1
+            } else if role_idx == 1 {
+                minute * 5
+            } else {
+                minute * 8
+            } as i32;
+            let gold = 500 + (minute * 450) as i64 + (if is_blue { minute * 50 } else { 0 }) as i64;
+            let xp = (minute * 600) as i64;
+
+            p_frames.insert(
+                pid.to_string(),
+                json!({
+                    "participantId": pid,
+                    "currentGold": gold % 1000,
+                    "totalGold": gold,
+                    "level": level,
+                    "xp": xp,
+                    "minionsKilled": cs,
+                    "jungleMinionsKilled": if role_idx == 1 { (minute * 4) as i32 } else { 0 },
+                    "dominionScore": 0,
+                    "teamScore": 0,
+                    "position": {
+                        "x": pos_x,
+                        "y": pos_y
+                    }
+                }),
+            );
+        }
+
+        let mut events = Vec::new();
+        if minute == 1 {
+            for pid in 1..=10 {
+                events.push(json!({
+                    "type": "ITEM_PURCHASED",
+                    "timestamp": 15000 + (pid as i64 * 1000),
+                    "participantId": pid,
+                    "itemId": if (pid - 1) % 5 == 1 { 1101 } else { 1055 }
+                }));
+                events.push(json!({
+                    "type": "SKILL_LEVEL_UP",
+                    "timestamp": 65000 + (pid as i64 * 500),
+                    "participantId": pid,
+                    "skillSlot": 1,
+                    "levelUpType": "NORMAL"
+                }));
+            }
+        } else if minute == 3 {
+            events.push(json!({
+                "type": "CHAMPION_KILL",
+                "timestamp": 195000,
+                "killerId": 1,
+                "victimId": 6,
+                "assistingParticipantIds": [2],
+                "position": { "x": 1950, "y": 11200 }
+            }));
+        } else if minute == 6 {
+            events.push(json!({
+                "type": "CHAMPION_KILL",
+                "timestamp": 372000,
+                "killerId": 4,
+                "victimId": 9,
+                "assistingParticipantIds": [2, 5],
+                "position": { "x": 10200, "y": 4800 }
+            }));
+            events.push(json!({
+                "type": "ELITE_MONSTER_KILL",
+                "timestamp": 385000,
+                "killerId": 2,
+                "killerTeamId": 100,
+                "monsterType": "DRAGON",
+                "monsterSubType": "CHEMTECH_DRAGON",
+                "position": { "x": 9866, "y": 4414 }
+            }));
+        } else if minute == 9 {
+            events.push(json!({
+                "type": "ELITE_MONSTER_KILL",
+                "timestamp": 550000,
+                "killerId": 7,
+                "killerTeamId": 200,
+                "monsterType": "RIFTHERALD",
+                "monsterSubType": "",
+                "position": { "x": 4900, "y": 10400 }
+            }));
+        } else if minute == 12 {
+            events.push(json!({
+                "type": "BUILDING_KILL",
+                "timestamp": 730000,
+                "killerId": 1,
+                "assistingParticipantIds": [2],
+                "teamId": 200,
+                "buildingType": "TOWER_BUILDING",
+                "towerType": "OUTER_TURRET",
+                "laneType": "TOP_LANE",
+                "position": { "x": 4318, "y": 13875 }
+            }));
+        }
+
+        frames.push(json!({
+            "timestamp": timestamp,
+            "participantFrames": p_frames,
+            "events": events
+        }));
+    }
+
+    json!({
+        "gameId": game_id,
+        "frames": frames
+    })
+}

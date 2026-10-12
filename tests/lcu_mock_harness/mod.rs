@@ -26,6 +26,7 @@ pub struct MockLcuState {
     pub ranked_stats: RwLock<HashMap<String, Value>>,
     pub match_history: RwLock<HashMap<String, Value>>,
     pub match_details: RwLock<HashMap<String, Value>>,
+    pub match_timelines: RwLock<HashMap<String, Value>>,
     pub ready_check: RwLock<Value>,
     pub ready_check_accepted: RwLock<bool>,
     pub ready_check_declined: RwLock<bool>,
@@ -47,6 +48,7 @@ impl MockLcuState {
             ranked_stats: RwLock::new(HashMap::new()),
             match_history: RwLock::new(HashMap::new()),
             match_details: RwLock::new(HashMap::new()),
+            match_timelines: RwLock::new(HashMap::new()),
             ready_check: RwLock::new(json!({
                 "state": "InProgress",
                 "playerResponse": "None",
@@ -88,6 +90,11 @@ impl MockLcuState {
     pub async fn set_match_detail(&self, game_id: i64, detail: Value) {
         let mut g = self.match_details.write().await;
         g.insert(game_id.to_string(), detail);
+    }
+
+    pub async fn set_match_timeline(&self, game_id: u64, timeline: Value) {
+        let mut g = self.match_timelines.write().await;
+        g.insert(game_id.to_string(), timeline);
     }
 
     pub async fn set_ranked_stats(&self, puuid: &str, stats: Value) {
@@ -145,6 +152,10 @@ impl MockLcuServer {
             .route(
                 "/lol-match-history/v1/games/:game_id",
                 get(handle_game_detail),
+            )
+            .route(
+                "/lol-match-history/v1/game-timelines/:game_id",
+                get(handle_game_timeline),
             )
             .route("/lol-summoner/v1/current-summoner", get(handle_current_summoner))
             .route("/lol-ranked/v1/ranked-stats/:puuid", get(handle_ranked_stats))
@@ -323,6 +334,22 @@ async fn handle_game_detail(
         Json(val.clone()).into_response()
     } else {
         (StatusCode::NOT_FOUND, "Game not found").into_response()
+    }
+}
+
+async fn handle_game_timeline(
+    State(state): State<Arc<MockLcuState>>,
+    Path(game_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = check_override_and_auth(&state, &headers).await {
+        return resp;
+    }
+    let map = state.match_timelines.read().await;
+    if let Some(val) = map.get(&game_id) {
+        Json(val.clone()).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "Game timeline not found").into_response()
     }
 }
 
@@ -559,6 +586,24 @@ impl MockLcuClient {
             .client
             .get(format!(
                 "{}/lol-match-history/v1/games/{}",
+                self.base_url, game_id
+            ))
+            .header("Authorization", &self.auth_header)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if res.status().is_success() {
+            res.json::<Value>().await.map_err(|e| e.to_string())
+        } else {
+            Err(format!("Status {}", res.status()))
+        }
+    }
+
+    pub async fn get_game_timeline(&self, game_id: u64) -> Result<Value, String> {
+        let res = self
+            .client
+            .get(format!(
+                "{}/lol-match-history/v1/game-timelines/{}",
                 self.base_url, game_id
             ))
             .header("Authorization", &self.auth_header)

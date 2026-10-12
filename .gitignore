@@ -18,4 +18,4 @@ prompt_*.md
 node_modules/
 src-tauri/gen/
 .agents/
-
+dist-new/

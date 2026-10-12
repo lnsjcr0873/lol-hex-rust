@@ -13,7 +13,8 @@ export interface PremadeParty {
 }
 
 export interface RadarStat {
-  output: number;      // 0-100
+  output?: number;      // 0-100
+  damage?: number;      // 0-100 (alias for output)
   kda: number;         // 0-100
   join_rate: number;   // 0-100
   survival: number;    // 0-100
@@ -197,7 +198,10 @@ export interface MatchDetailFull {
   red_team_barons: number;
   red_team_win: boolean;
   participants: MatchDetailParticipant[];
+  raw_game?: any;
 }
+
+export type MatchTimelineData = Record<string, any>;
 
 export interface AutomationConfig {
   auto_accept_match: boolean;

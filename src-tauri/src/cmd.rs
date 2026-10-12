@@ -1,6 +1,6 @@
 use lol_hex_rust::data::loader::Database;
 use lol_hex_rust::engine::player_history::OngoingPlayerCard;
-use lol_hex_rust::web::routes::{build_mock_match_detail, parse_riot_match_detail};
+use lol_hex_rust::web::routes::{build_mock_match_detail, build_mock_match_timeline, parse_riot_match_detail};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
@@ -578,6 +578,24 @@ pub async fn get_match_detail(
     }
 
     Err(format!("无法获取对局 {} 的详情数据", game_id))
+}
+
+#[tauri::command]
+pub async fn get_match_timeline(
+    state: State<'_, TauriAppState>,
+    game_id: u64,
+) -> Result<Value, String> {
+    // 1. Try real LCU endpoint
+    if let Some(timeline) = state.lcu.get_game_timeline(game_id).await {
+        return Ok(timeline);
+    }
+
+    // 2. Demo / mock fallback when LCU is not connected or in mock mode
+    if !state.lcu.is_connected().await {
+        return Ok(build_mock_match_timeline(game_id));
+    }
+
+    Err(format!("无法获取对局 {} 的时间线数据", game_id))
 }
 
 #[tauri::command]
