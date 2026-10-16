@@ -27,11 +27,24 @@
         </div>
       </template>
 
-      <!-- Hover Popover Content -->
+      <!-- Hover Popover Content: if analysis exists show analysis, else fallback to mastery -->
       <ChampionAnalysisContent
+        v-if="c.analysis"
         :analysis="c.analysis"
         :mastery="c.mastery"
       />
+      <template v-else>
+        <div class="mb-2 flex items-center gap-2 text-xs">
+          <ChampionIcon ring :ring-width="1" round class="w-6 h-6" :champion-id="c.id" />
+          <div class="text-xs font-bold text-slate-200">
+            {{ player.champion_name && c.id === player.champion_id ? player.champion_name : `英雄 #${c.id}` }}
+          </div>
+        </div>
+        <ChampionMasteryContent v-if="c.mastery" :mastery="c.mastery" />
+        <div v-else class="text-xs text-slate-400 py-1">
+          暂无该英雄近期对局分析数据
+        </div>
+      </template>
     </NPopover>
 
     <div v-if="championList.length === 0" class="text-[10px] text-slate-500">
@@ -46,6 +59,7 @@ import { NPopover } from 'naive-ui'
 import type { EnhancedPlayerCard } from '../../types'
 import ChampionIcon from '../../../widgets/ChampionIcon.vue'
 import ChampionAnalysisContent from '../../../champion-analysis/ChampionAnalysisContent.vue'
+import ChampionMasteryContent from '../../../champion-analysis/ChampionMasteryContent.vue'
 import { adaptPlayerCardToAggregatedAnalysis } from '../../utils/player-adapter'
 import type { ChampionAnalysisMastery } from '../../../champion-analysis/types'
 import type { AggregatedChampionAnalysis } from '../../../../shared/data-adapter/analysis/player'
@@ -61,117 +75,90 @@ interface ChampionItem {
   winRate: number
   games: number
   isStar: boolean
-  mastery: ChampionAnalysisMastery
-  analysis: AggregatedChampionAnalysis
+  mastery?: ChampionAnalysisMastery | null
+  analysis: AggregatedChampionAnalysis | null
 }
 
 const championList = computed<ChampionItem[]>(() => {
   const currentChampId = props.player.champion_id
-  const currentWinRate = props.player.champ_recent_win_rate ?? 60
-  const currentGames = props.player.champ_recent_games ?? 8
+  const currentWinRate = props.player.champ_recent_win_rate ?? 0
+  const currentGames = props.player.champ_recent_games ?? 0
 
-  // Build a list starting with current champ and fallback favorites
-  const fallbackList: Array<{ id: number; winRate: number; games: number }> = [
-    { id: currentChampId, winRate: currentWinRate, games: currentGames }
-  ]
+  const champStatsMap = new Map<number, { games: number; wins: number; kda?: number }>()
 
-  // Add 2-3 additional plausible favorite champions based on role
-  const roleExtraChamps: Record<string, number[]> = {
-    TOP: [24, 82, 58], // Jax, Mordekaiser, Renekton
-    JUNGLE: [64, 120, 104], // Lee Sin, Hecarim, Graves
-    MIDDLE: [103, 238, 157], // Ahri, Zed, Yasuo
-    BOTTOM: [222, 145, 81], // Jinx, Kai'Sa, Ezreal
-    UTILITY: [412, 267, 89] // Thresh, Nami, Leona
-  }
-
-  const extraIds = roleExtraChamps[props.player.assigned_position?.toUpperCase()] || [103, 64, 222]
-  for (const id of extraIds) {
-    if (id !== currentChampId && fallbackList.length < 4) {
-      fallbackList.push({
-        id,
-        winRate: Math.max(45, Math.min(75, currentWinRate - (fallbackList.length * 4))),
-        games: Math.max(3, currentGames - (fallbackList.length * 2))
-      })
-    }
-  }
-
-  return fallbackList.map((item, index) => {
-    const champAnalysis = analysis.value.champions[item.id] || {
-      championId: item.id,
-      summary: {
-        avgKda: 3.5,
-        winRate: item.winRate / 100,
-        avgChampionDamagePercentageOfTeam: 0.25,
-        avgDamageTakenPercentageOfTeam: 0.22,
-        avgCsPerMinute: 7.5,
-        avgGoldPercentageOfTeam: 0.24,
-        avgKillParticipation: 0.65,
-        avgChampionDamagePerMinute: 650,
-        avgDamageTakenPerMinute: 550,
-        avgCs: 160,
-        avgGoldEarnedPerMinute: 400,
-        kills: 7, deaths: 3, assists: 6,
-        avgKills: 7.2, avgDeaths: 3.5, avgAssists: 6.8
-      } as any,
-      winLoss: {
-        all: {
-          count: item.games,
-          wins: Math.round(item.games * (item.winRate / 100)),
-          losses: item.games - Math.round(item.games * (item.winRate / 100)),
-          winRate: item.winRate / 100,
-          winningStreak: 1,
-          losingStreak: 0,
-          activeSessionWins: 1,
-          activeSessionLosses: 0
-        },
-        normal: {
-          count: item.games,
-          wins: Math.round(item.games * (item.winRate / 100)),
-          losses: item.games - Math.round(item.games * (item.winRate / 100)),
-          winRate: item.winRate / 100,
-          winningStreak: 1,
-          losingStreak: 0,
-          activeSessionWins: 1,
-          activeSessionLosses: 0
-        },
-        cherry: {
-          count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
-          activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, top1Rate: 0, topHalfFinishes: 0,
-          topHalfRate: 0, avgSubteamPlacement: 0
-        }
-      },
-      positions: null,
-      jungle: null,
-      akariScore: {
-        total: 8.2,
-        maxScore: 17.0,
-        kdaScore: 0.9,
-        winRateScore: 0.8,
-        dmgScore: 2.2,
-        dmgTakenScore: 1.5,
-        healingScore: 0.9,
-        csScore: 1.5,
-        goldScore: 1.6,
-        participationScore: 1.4,
-        visionScore: 1.2,
-        outstanding: null,
-        extraordinary: null
+  // 1. If real matches exist, extract the player's actual played champions
+  if (props.player.matches && props.player.matches.length > 0) {
+    for (const m of props.player.matches) {
+      const cid = m.champion_id
+      if (cid > 0) {
+        const item = champStatsMap.get(cid) || { games: 0, wins: 0, kda: 0 }
+        item.games++
+        if (m.win) item.wins++
+        item.kda = (item.kda || 0) + (m.kda_ratio || 0)
+        champStatsMap.set(cid, item)
       }
     }
+  }
+
+  // 2. From top_champs from Rust backend if present
+  if (props.player.top_champs && props.player.top_champs.length > 0) {
+    for (const tc of props.player.top_champs) {
+      if (tc.champion_id > 0 && !champStatsMap.has(tc.champion_id)) {
+        champStatsMap.set(tc.champion_id, {
+          games: tc.games,
+          wins: Math.round((tc.win_rate || (tc.win_rate_pct / 100)) * tc.games),
+          kda: tc.kda * tc.games
+        })
+      }
+    }
+  }
+
+  // 3. Include current locked/selected champion if known and has games
+  if (currentChampId > 0 && currentGames > 0 && !champStatsMap.has(currentChampId)) {
+    champStatsMap.set(currentChampId, {
+      games: currentGames,
+      wins: Math.round((currentWinRate / 100) * currentGames)
+    })
+  }
+
+  // Sort: current picked champion first, then by games descending
+  const sortedChamps = Array.from(champStatsMap.entries())
+    .sort((a, b) => {
+      if (a[0] === currentChampId) return -1
+      if (b[0] === currentChampId) return 1
+      return b[1].games - a[1].games
+    })
+    .slice(0, 4)
+
+  if (sortedChamps.length === 0) {
+    if (currentChampId > 0) {
+      const champAnalysis = analysis.value.champions[currentChampId] || null
+      const realMastery = props.player.masteries?.find((m) => m.championId === currentChampId) || null
+      return [
+        {
+          id: currentChampId,
+          winRate: currentWinRate,
+          games: currentGames,
+          isStar: true,
+          mastery: realMastery,
+          analysis: champAnalysis
+        }
+      ]
+    }
+    return []
+  }
+
+  return sortedChamps.map(([id, stats]) => {
+    const wr = stats.games > 0 ? Math.round((stats.wins / stats.games) * 100) : 0
+    const champAnalysis = analysis.value.champions[id] || null
+    const realMastery = props.player.masteries?.find((m) => m.championId === id) || null
 
     return {
-      id: item.id,
-      winRate: item.winRate,
-      games: item.games,
-      isStar: index === 0 || item.games >= 8,
-      mastery: {
-        championId: item.id,
-        championLevel: index === 0 ? 7 : 5,
-        championPoints: index === 0 ? 112000 : 45000,
-        championSeasonMilestone: 2,
-        highestGrade: 'S',
-        lastPlayTime: Date.now() - 10000000
-      },
+      id,
+      winRate: wr,
+      games: stats.games,
+      isStar: id === currentChampId,
+      mastery: realMastery,
       analysis: champAnalysis
     }
   })

@@ -1,11 +1,17 @@
 <template>
-  <div class="h-full flex flex-col space-y-3">
+  <div v-if="!hasParticipantFrames" class="flex h-full min-h-[360px] w-full items-center justify-center bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-500 select-none">
+    <div class="text-center space-y-2">
+      <div class="text-sm font-semibold text-slate-400">暂无逐帧属性与站位回放数据</div>
+      <div class="text-slate-500">当前对局未记录选手逐分钟坐标与属性快照 (仅支持记录了时间线帧的对局)</div>
+    </div>
+  </div>
+  <div v-else class="h-full flex flex-col space-y-3">
     <!-- Minute Slider Header -->
     <div class="flex items-center justify-between p-3 bg-slate-900/90 rounded-xl border border-slate-800">
       <div class="flex items-center space-x-3">
         <span class="text-xs font-bold text-slate-200">逐帧时间线回放:</span>
         <span class="px-2 py-0.5 rounded bg-[#0f233a] text-[#0ac8b9] text-xs font-mono font-bold">
-          第 {{ selectedMinute }} 分钟
+          第 {{ Math.min(selectedMinute, maxMinute) }} 分钟
         </span>
       </div>
       <div class="flex items-center space-x-3 w-72">
@@ -75,16 +81,21 @@ import MapPosition from '../../widgets/MapPosition.vue'
 
 const { participants, frames, basicInfo } = useMatchCard()
 
+const hasParticipantFrames = computed(() => {
+  return (frames.value || []).length > 0 && !!frames.value[0]?.participantFrames
+})
+
 const selectedMinute = ref(5)
 
 const maxMinute = computed(() => {
-  if (frames.value.length > 0) return frames.value.length - 1
-  return Math.max(Math.floor(basicInfo.value.gameDuration / 60), 15)
+  if ((frames.value || []).length > 0) return frames.value.length - 1
+  return Math.max(Math.floor((basicInfo.value?.gameDuration || 0) / 60), 15)
 })
 
 const currentFrame = computed(() => {
-  if (frames.value.length > 0) {
-    return frames.value[selectedMinute.value] || frames.value[0]
+  if ((frames.value || []).length > 0) {
+    const idx = Math.min(Math.max(selectedMinute.value, 0), maxMinute.value)
+    return frames.value[idx] || frames.value[0]
   }
   return null
 })
@@ -94,16 +105,10 @@ function getInstantStat(pid: number, type: 'level' | 'gold' | 'cs'): number {
     const pf = currentFrame.value.participantFrames[pid] || currentFrame.value.participantFrames[String(pid)]
     if (pf) {
       if (type === 'level') return pf.level || 1
-      if (type === 'gold') return pf.totalGold || 500
+      if (type === 'gold') return pf.totalGold || pf.currentGold || 0
       if (type === 'cs') return (pf.minionsKilled || 0) + (pf.jungleMinionsKilled || 0)
     }
   }
-
-  // Graceful simulation
-  const m = selectedMinute.value
-  if (type === 'level') return Math.min(1 + Math.floor(m * 1.1), 18)
-  if (type === 'gold') return 500 + m * 450
-  if (type === 'cs') return m * 8
   return 0
 }
 
@@ -112,17 +117,18 @@ const currentPositions = computed(() => {
     const pts: Array<{ x: number; y: number }> = []
     for (const pid in currentFrame.value.participantFrames) {
       const pos = currentFrame.value.participantFrames[pid]?.position
-      if (pos && typeof pos.x === 'number') {
+      if (
+        pos &&
+        typeof pos.x === 'number' &&
+        Number.isFinite(pos.x) &&
+        typeof pos.y === 'number' &&
+        Number.isFinite(pos.y)
+      ) {
         pts.push({ x: pos.x, y: pos.y })
       }
     }
-    if (pts.length > 0) return pts
+    return pts
   }
-
-  // Fallback demo positions
-  return participants.value.map((_, i) => ({
-    x: 2000 + i * 1100,
-    y: 2000 + (i % 3) * 4000
-  }))
+  return []
 })
 </script>

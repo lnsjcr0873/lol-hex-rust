@@ -3,19 +3,26 @@ export function calculateCoefficientOfVariation(numbers: number[]): number {
     return -1
   }
 
-  const mean = numbers.reduce((sum, num) => sum + num, 0) / numbers.length
+  const valid = numbers.filter((n) => Number.isFinite(n))
+  if (valid.length === 0) {
+    return -1
+  }
+
+  const mean = valid.reduce((sum, num) => sum + num, 0) / valid.length
   if (mean === 0) {
     return -1
   }
 
-  const variance = numbers.reduce((sum, num) => sum + Math.pow(num - mean, 2), 0) / numbers.length
+  const variance = valid.reduce((sum, num) => sum + Math.pow(num - mean, 2), 0) / valid.length
   const standardDeviation = Math.sqrt(variance)
 
-  return standardDeviation / mean
+  const cv = standardDeviation / mean
+  return Number.isFinite(cv) ? cv : -1
 }
 
 export function noZero(value: number) {
-  return value || 1
+  if (!Number.isFinite(value) || value === 0) return 1
+  return value
 }
 
 export function standardize(numbers: number[]): number[] {
@@ -25,12 +32,15 @@ export function standardize(numbers: number[]): number[] {
   const max = Math.max(...numbers)
   const range = max - min
 
-  if (range === 0) {
+  if (range === 0 || !Number.isFinite(range)) {
     return new Array(numbers.length).fill(0)
   }
 
   // 标准化计算
-  return numbers.map((num) => (num - min) / range)
+  return numbers.map((num) => {
+    const val = (num - min) / range
+    return Number.isFinite(val) ? val : 0
+  })
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -38,33 +48,47 @@ function percentile(sorted: number[], p: number): number {
     return 0
   }
 
-  const index = p * (sorted.length - 1)
+  const safeP = Number.isFinite(p) ? Math.max(0, Math.min(1, p)) : 0
+  const index = safeP * (sorted.length - 1)
   const lower = Math.floor(index)
   const fraction = index - lower
 
-  if (lower === sorted.length - 1) {
-    return sorted[lower]
+  if (lower >= sorted.length - 1) {
+    return sorted[sorted.length - 1] ?? 0
   }
 
-  return sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower])
+  const lowVal = sorted[lower] ?? 0
+  const highVal = sorted[lower + 1] ?? lowVal
+  return lowVal + fraction * (highVal - lowVal)
 }
 
 /**
- * 是找出过高高评分和过低评分的玩家
+ * 找出过高评分和过低评分的玩家 (IQR 异常值检测)
  */
 export function findOutliersByIqr<T>(
   data: T[],
   keyGetter?: (value: T) => number,
   threshold: number = 1.5
 ): { below: T[]; over: T[] } {
-  if (!keyGetter) {
-    keyGetter = (value: T) => value as any as number
+  if (!data || data.length < 4) {
+    return { below: [], over: [] }
   }
 
-  const sorted = data.slice().sort((a, b) => keyGetter(a) - keyGetter(b))
-  const q1 = percentile(sorted.map(keyGetter), 0.25)
-  const q3 = percentile(sorted.map(keyGetter), 0.75)
+  const getter = keyGetter ?? ((value: T) => value as any as number)
+  const safeGetter = (item: T) => {
+    const v = getter(item)
+    return Number.isFinite(v) ? v : 0
+  }
+
+  const sorted = data.slice().sort((a, b) => safeGetter(a) - safeGetter(b))
+  const q1 = percentile(sorted.map(safeGetter), 0.25)
+  const q3 = percentile(sorted.map(safeGetter), 0.75)
   const iqr = q3 - q1
+
+  if (iqr === 0 || !Number.isFinite(iqr)) {
+    return { below: [], over: [] }
+  }
+
   const lowerBound = q1 - threshold * iqr
   const upperBound = q3 + threshold * iqr
 
@@ -72,9 +96,10 @@ export function findOutliersByIqr<T>(
   const over: T[] = []
 
   for (const d of data) {
-    if (keyGetter(d) < lowerBound) {
+    const val = safeGetter(d)
+    if (val < lowerBound) {
       below.push(d)
-    } else if (keyGetter(d) > upperBound) {
+    } else if (val > upperBound) {
       over.push(d)
     }
   }

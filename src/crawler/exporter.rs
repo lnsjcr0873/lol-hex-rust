@@ -90,3 +90,26 @@ impl Exporter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_export_heroes_summary_csv_bom_and_header() {
+        let db = Database::load_from_dir("data");
+        let bytes = Exporter::export_heroes_summary_csv_bytes(&db).expect("Should export heroes CSV");
+        assert!(bytes.starts_with(b"\xEF\xBB\xBF"), "Must contain UTF-8 BOM");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("英雄ID,英雄名称,职业定位,评级(Tier),胜率"));
+    }
+
+    #[test]
+    fn test_export_augments_summary_csv_bom_and_header() {
+        let db = Database::load_from_dir("data");
+        let bytes = Exporter::export_augments_summary_csv_bytes(&db).expect("Should export augments CSV");
+        assert!(bytes.starts_with(b"\xEF\xBB\xBF"), "Must contain UTF-8 BOM");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("强化ID,名称,品阶,层级(Tier),胜率"));
+    }
+}

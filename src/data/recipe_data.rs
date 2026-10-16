@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeMetadata {
@@ -136,11 +136,11 @@ pub fn calculate_item_net_cost(
 ) -> ItemNetCostResult {
     let raw_tid = target_item_id.trim();
     let tid = normalize_item_id(raw_tid);
-    let total_cost = *RECIPE_META
+    let total_cost = (*RECIPE_META
         .total_costs
         .get(&tid)
         .or_else(|| RECIPE_META.total_costs.get(raw_tid))
-        .unwrap_or(&3000);
+        .unwrap_or(&0)).max(0);
 
     let cur_gold_int = if current_gold.is_nan() || current_gold.is_infinite() {
         0
@@ -149,12 +149,14 @@ pub fn calculate_item_net_cost(
     };
 
     if gold_calc_mode == "FULL_COST" {
-        let diff = total_cost - cur_gold_int;
-        let is_afford = cur_gold_int >= total_cost;
-        let status_text = if is_afford {
+        let diff = (total_cost - cur_gold_int).max(0);
+        let is_afford = cur_gold_int >= total_cost && total_cost > 0;
+        let status_text = if total_cost == 0 {
+            format!("💰 {}g [价格未收录]", cur_gold_int)
+        } else if is_afford {
             format!("💰 {}/{}g [可全款购买]", cur_gold_int, total_cost)
         } else {
-            format!("💰 {}/{}g (差{}g)", cur_gold_int, total_cost, diff.max(0))
+            format!("💰 {}/{}g (差{}g)", cur_gold_int, total_cost, diff)
         };
 
         return ItemNetCostResult {
@@ -165,7 +167,7 @@ pub fn calculate_item_net_cost(
             matched_components: Vec::new(),
             has_all_components: false,
             is_affordable: is_afford,
-            remaining_diff: diff.max(0),
+            remaining_diff: diff,
             status_text,
             calc_mode: "FULL_COST".to_string(),
         };
@@ -174,21 +176,24 @@ pub fn calculate_item_net_cost(
     // Mode: NET_DEDUCT / NET_REMAINING
     let mut available_owned: Vec<String> = owned_item_ids
         .iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "0" && s != &tid && s != raw_tid && s != "None" && s != "undefined")
+        .map(|s| normalize_item_id(s.trim()))
+        .filter(|norm| {
+            !norm.is_empty() && norm != "0" && norm != &tid && norm != raw_tid && norm != "None" && norm != "undefined"
+        })
         .collect();
 
     let mut matched_components = Vec::new();
     let mut total_deducted: i64 = 0;
 
-    fn find_and_deduct_components(
+    fn satisfy_component(
         req_item_id: &str,
         available_owned: &mut Vec<String>,
         depth: usize,
         max_depth: usize,
-    ) -> Option<Vec<MatchedComponent>> {
-        if depth > max_depth {
-            return None;
+        visited: &mut HashSet<String>,
+    ) -> (Vec<MatchedComponent>, bool) {
+        if depth > max_depth || visited.contains(req_item_id) {
+            return (Vec::new(), false);
         }
 
         // Direct match in player inventory
@@ -199,35 +204,46 @@ pub fn calculate_item_net_cost(
                 .get(req_item_id)
                 .or_else(|| RECIPE_META.total_costs.get(req_item_id))
                 .copied()
-                .unwrap_or(300);
+                .unwrap_or(0)
+                .max(0);
             let name = RECIPE_META
                 .component_names
                 .get(req_item_id)
                 .cloned()
                 .unwrap_or_else(|| format!("散件#{}", req_item_id));
 
-            return Some(vec![MatchedComponent {
-                item_id: req_item_id.to_string(),
-                name,
-                price,
-                slot: if depth == 1 { "direct".to_string() } else { "nested".to_string() },
-            }]);
+            return (
+                vec![MatchedComponent {
+                    item_id: req_item_id.to_string(),
+                    name,
+                    price,
+                    slot: if depth == 1 { "direct".to_string() } else { "nested".to_string() },
+                }],
+                true,
+            );
         }
 
         // Recurse into sub-components for multi-tier composite recipes
         if let Some(sub_recipe) = RECIPE_META.recipes.get(req_item_id) {
-            let mut sub_matches = Vec::new();
-            for sub_id in sub_recipe {
-                if let Some(mut found) = find_and_deduct_components(sub_id, available_owned, depth + 1, max_depth) {
-                    sub_matches.append(&mut found);
+            if !sub_recipe.is_empty() {
+                visited.insert(req_item_id.to_string());
+                let mut sub_matches = Vec::new();
+                let mut all_sub_satisfied = true;
+                for sub_id in sub_recipe {
+                    let (found, satisfied) = satisfy_component(sub_id, available_owned, depth + 1, max_depth, visited);
+                    if !satisfied {
+                        all_sub_satisfied = false;
+                    }
+                    sub_matches.extend(found);
                 }
-            }
-            if !sub_matches.is_empty() {
-                return Some(sub_matches);
+                visited.remove(req_item_id);
+                if !sub_matches.is_empty() {
+                    return (sub_matches, all_sub_satisfied);
+                }
             }
         }
 
-        None
+        (Vec::new(), false)
     }
 
     let recipe = RECIPE_META
@@ -235,9 +251,20 @@ pub fn calculate_item_net_cost(
         .get(&tid)
         .or_else(|| RECIPE_META.recipes.get(raw_tid));
 
+    let mut all_satisfied = false;
     if let Some(recipe_items) = recipe {
-        for req_cid in recipe_items {
-            if let Some(matches) = find_and_deduct_components(req_cid, &mut available_owned, 1, 4) {
+        if !recipe_items.is_empty() {
+            all_satisfied = true;
+            let mut visited = HashSet::new();
+            visited.insert(tid.clone());
+            if !raw_tid.is_empty() {
+                visited.insert(raw_tid.to_string());
+            }
+            for req_cid in recipe_items {
+                let (matches, satisfied) = satisfy_component(req_cid, &mut available_owned, 1, 4, &mut visited);
+                if !satisfied {
+                    all_satisfied = false;
+                }
                 for m in matches {
                     total_deducted += m.price;
                     matched_components.push(m);
@@ -248,9 +275,11 @@ pub fn calculate_item_net_cost(
 
     let net_cost = (total_cost - total_deducted).max(0);
     let diff = net_cost - cur_gold_int;
-    let is_afford = cur_gold_int >= net_cost;
+    let is_afford = cur_gold_int >= net_cost && total_cost > 0;
 
-    let status_text = if !matched_components.is_empty() {
+    let status_text = if total_cost == 0 {
+        format!("💰 当前{}g [价格未收录]", cur_gold_int)
+    } else if !matched_components.is_empty() {
         if is_afford {
             format!(
                 "⚡ 散件已抵扣{}g，差价仅需{}g [立即升级]",
@@ -259,17 +288,17 @@ pub fn calculate_item_net_cost(
         } else {
             format!(
                 "⚡ 散件已抵扣{}g，升级还差{}g",
-                total_deducted, diff
+                total_deducted, diff.max(0)
             )
         }
     } else if is_afford {
         format!("💰 可直接购买 ({}g)", net_cost)
     } else {
-        format!("💰 还差{}g (总价{}g)", diff, total_cost)
+        format!("💰 还差{}g (总价{}g)", diff.max(0), total_cost)
     };
 
     let recipe_len = recipe.map(|r| r.len()).unwrap_or(0);
-    let has_all = recipe_len > 0 && matched_components.len() == recipe_len;
+    let has_all = recipe_len > 0 && all_satisfied;
 
     ItemNetCostResult {
         target_item_id: if !raw_tid.is_empty() { raw_tid.to_string() } else { tid },
@@ -284,3 +313,34 @@ pub fn calculate_item_net_cost(
         calc_mode: gold_calc_mode.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_item_net_cost_no_negative_diff() {
+        // Infinity and NaN current_gold handling
+        let res_nan = calculate_item_net_cost("3089", &[], f64::NAN, "FULL_COST");
+        assert_eq!(res_nan.remaining_diff, res_nan.total_cost);
+        assert!(!res_nan.status_text.contains("NaN"));
+
+        let res_inf = calculate_item_net_cost("3089", &[], f64::INFINITY, "FULL_COST");
+        assert_eq!(res_inf.remaining_diff, res_inf.total_cost);
+
+        let res_neg = calculate_item_net_cost("3089", &[], -999.0, "NET_DEDUCT");
+        assert_eq!(res_neg.remaining_diff, res_neg.net_cost);
+        assert!(!res_neg.status_text.contains("-"));
+
+        // Finished item in inventory does not self-deduct
+        let res_self = calculate_item_net_cost("3089", &["3089".to_string(), "Item_3089".to_string()], 500.0, "NET_DEDUCT");
+        assert_eq!(res_self.deducted_gold, 0);
+
+        // Unknown item ID
+        let res_unknown = calculate_item_net_cost("99999999", &[], 1000.0, "NET_DEDUCT");
+        assert_eq!(res_unknown.total_cost, 0);
+        assert_eq!(res_unknown.net_cost, 0);
+        assert_eq!(res_unknown.remaining_diff, 0);
+    }
+}
+

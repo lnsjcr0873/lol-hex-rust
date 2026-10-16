@@ -379,6 +379,21 @@ pub fn apply_current_runes_now() {
     });
 }
 
+fn truncate_text_to_half_width(s: &str, max_hw: usize) -> String {
+    let mut current_hw = 0;
+    let mut result = String::new();
+    for c in s.chars() {
+        let w = if c.is_ascii() { 1 } else { 2 };
+        if current_hw + w > max_hw {
+            result.push('…');
+            return result;
+        }
+        result.push(c);
+        current_hw += w;
+    }
+    result
+}
+
 fn cycle_slot_position(is_my_team: bool, slot_index: usize) {
     if let Ok(mut st) = GLOBAL_HUD.state.write() {
         if let HudContent::Ranked(ref mut data) = st.content {
@@ -614,31 +629,6 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
     }
 }
 
-fn handle_rbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32) {
-    let hotzones = if let Ok(guard) = GLOBAL_HOTZONES.read() {
-        guard.clone()
-    } else {
-        return;
-    };
-
-    let mut repaint_needed = false;
-    for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.pos_btns {
-        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
-            cycle_slot_position(*is_my_team, *slot_index);
-            repaint_needed = true;
-            break;
-        }
-    }
-
-    if repaint_needed {
-        unsafe {
-            use windows::Win32::Foundation::BOOL;
-            use windows::Win32::Graphics::Gdi::InvalidateRect;
-            let _ = InvalidateRect(hwnd, None, BOOL(0));
-        }
-    }
-}
-
 impl Default for NativeHud {
     fn default() -> Self {
         Self::new()
@@ -671,6 +661,7 @@ impl NativeHud {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         #[cfg(windows)]
@@ -737,6 +728,7 @@ impl NativeHud {
         self.request_repaint();
     }
 
+    #[allow(dead_code)]
     pub fn show_ranked_test(&self, data: RankedOverlayData, duration: Duration) {
         self.start();
         {
@@ -758,6 +750,9 @@ impl NativeHud {
             st.is_visible = false;
             st.is_test_mode = false;
             st.dirty = true;
+        }
+        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+            inter.last_local_locked = false;
         }
         #[cfg(windows)]
         {
@@ -1025,6 +1020,18 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
         SW_SHOWNOACTIVATE,
     };
+    use std::sync::Mutex;
+    static LAST_WIN_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
+    static LAST_CLIENT_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
+
+    let reset_geom_caches = || {
+        if let Ok(mut g) = LAST_WIN_GEOM.lock() {
+            *g = (-1, -1, -1, -1);
+        }
+        if let Ok(mut g) = LAST_CLIENT_GEOM.lock() {
+            *g = (-1, -1, -1, -1);
+        }
+    };
 
     let (content_type, is_test, is_expired) = if let Ok(mut st) = GLOBAL_HUD.state.write() {
         let mut expired = false;
@@ -1043,6 +1050,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     };
 
     if is_expired {
+        reset_geom_caches();
         let _ = ShowWindow(hwnd, SW_HIDE);
         return;
     }
@@ -1052,13 +1060,8 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
 
     if is_draft_bench {
         let game_running = crate::vision::ScreenCapture::get_lol_game_rect().is_some();
-        let client_active = crate::vision::ScreenCapture::is_lol_client_active();
-        if game_running || !client_active {
-            if let Ok(mut st) = GLOBAL_HUD.state.write() {
-                st.is_visible = false;
-                st.content = HudContent::None;
-                st.expires_at = None;
-            }
+        if game_running {
+            reset_geom_caches();
             let _ = ShowWindow(hwnd, SW_HIDE);
             return;
         }
@@ -1066,8 +1069,8 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
 
     if is_draft_ranked && !is_test {
         let game_running = crate::vision::ScreenCapture::get_lol_game_rect().is_some();
-        let client_active = crate::vision::ScreenCapture::is_lol_client_active();
-        if game_running || !client_active {
+        if game_running {
+            reset_geom_caches();
             let _ = ShowWindow(hwnd, SW_HIDE);
             return;
         }
@@ -1117,6 +1120,7 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     };
 
     if should_hide {
+        reset_geom_caches();
         let _ = ShowWindow(hwnd, SW_HIDE);
         return;
     }
@@ -1140,22 +1144,42 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
             let left_w = if left_collapsed { mini_w } else { wing_w };
             let right_w = if right_collapsed { mini_w } else { wing_w };
 
-            let screen_w = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
-                windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
-            );
+            use windows::Win32::Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+            };
+            let client_r = windows::Win32::Foundation::RECT {
+                left: rect.x,
+                top: rect.y,
+                right: rect.x + rect.width,
+                bottom: rect.y + rect.height,
+            };
+            let hmon = MonitorFromRect(&client_r, MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let (mon_left, mon_top, mon_right) = if GetMonitorInfoW(hmon, &mut mi).as_bool() {
+                (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right)
+            } else {
+                let sw = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                    windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
+                );
+                (0, 0, sw)
+            };
 
-            let actual_offset_y = if rect.y >= top_dock_height { top_dock_height } else { rect.y.max(0) };
-            let actual_left_margin = if rect.x >= left_w { left_w } else { 0 };
-            let right_avail = screen_w - (rect.x + rect.width);
-            let actual_right_margin = if right_avail >= right_w { right_w } else { 0 };
+            let left_avail = rect.x - mon_left;
+            let top_avail = rect.y - mon_top;
+            let right_avail = mon_right - (rect.x + rect.width);
+
+            let actual_offset_y = if top_avail >= top_dock_height { top_dock_height } else { top_avail.max(0) };
+            let actual_left_margin = if left_avail >= left_w { left_w } else { left_avail.max(0) };
+            let actual_right_margin = if right_avail >= right_w { right_w } else { right_avail.max(0) };
 
             let win_x = rect.x - actual_left_margin;
             let win_y = rect.y - actual_offset_y;
             let win_w = rect.width + actual_left_margin + actual_right_margin;
             let win_h = rect.height + actual_offset_y;
 
-            use std::sync::Mutex;
-            static LAST_WIN_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
             let target_geom = (win_x, win_y, win_w, win_h);
             let mut geom_changed = false;
             if let Ok(mut g) = LAST_WIN_GEOM.lock() {
@@ -1177,8 +1201,6 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                 );
             }
         } else {
-            use std::sync::Mutex;
-            static LAST_CLIENT_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
             let target_geom = (rect.x, rect.y, rect.width, rect.height);
             let mut geom_changed = false;
             if let Ok(mut g) = LAST_CLIENT_GEOM.lock() {
@@ -1935,6 +1957,12 @@ unsafe fn render_ranked_hud(
                 inter.active_tab = "runes".to_string();
             }
         }
+    } else if !data.decision_card.my_locked {
+        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+            if inter.last_local_locked {
+                inter.last_local_locked = false;
+            }
+        }
     }
 
     let (actual_left_margin, actual_offset_y, cw, ch) = if let Some(r) = crate::vision::ScreenCapture::get_lol_client_rect() {
@@ -2051,9 +2079,13 @@ unsafe fn render_ranked_hud(
 
     // 1.3 Middle Area Content
     let mid_start_x = tabs_end_x + 6;
-    if active_tab == "runes" && data.decision_card.rune_guide.is_some() {
-        let rg = data.decision_card.rune_guide.as_ref().unwrap();
-        let info_text = format!("⚡ [{} - {}] 对线符文已匹配  加点: {}", rg.champion_name, rg.position_cn, rg.skill_order);
+    let maybe_rg = if active_tab == "runes" { data.decision_card.rune_guide.as_ref() } else { None };
+    if let Some(rg) = maybe_rg {
+        let info_text = if rg.skill_order.is_empty() {
+            format!("⚡ [{} - {}] 对线符文已匹配", rg.champion_name, rg.position_cn)
+        } else {
+            format!("⚡ [{} - {}] 对线符文已匹配  加点: {}", rg.champion_name, rg.position_cn, rg.skill_order)
+        };
         draw_text_line(hdc, &info_text, mid_start_x, tab_y1 + 4, rgb(224, 242, 254));
 
         let btn_w = (150.0 * sx) as i32;
@@ -2080,7 +2112,7 @@ unsafe fn render_ranked_hud(
             draw_text_line(hdc, "⏳ 正在实时分析对位克制与推荐英雄...", mid_start_x + 10, tab_y1 + 4, rgb(148, 163, 184));
         } else {
             let visible_count = 4;
-            let offset = counter_scroll_offset.min(items.len().saturating_sub(visible_count));
+            let offset = counter_scroll_offset.min(items.len().saturating_sub(visible_count)).min(items.len());
 
             // Left scroll arrow ◀
             let arr_w = (16.0 * sx) as i32;
@@ -2102,7 +2134,8 @@ unsafe fn render_ranked_hud(
             let pill_start_x = arr_lx2 + (4.0 * sx) as i32;
             let pill_w = (86.0 * sx) as i32;
             let pill_gap = (4.0 * sx) as i32;
-            let visible_items = &items[offset..items.len().min(offset + visible_count)];
+            let slice_end = items.len().min(offset + visible_count);
+            let visible_items = if offset <= slice_end { &items[offset..slice_end] } else { &[] };
 
             for (p_idx, item) in visible_items.iter().enumerate() {
                 let px1 = pill_start_x + p_idx as i32 * (pill_w + pill_gap);
@@ -2114,7 +2147,11 @@ unsafe fn render_ranked_hud(
                     _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
                 };
                 draw_card_rect(hdc, px1, tab_y1, pill_w, tab_btn_h, t_bg, t_fg);
-                let p_label = format!("{} {:.0}%", item.name, item.counter_win_rate * 100.0);
+                let p_label = if item.counter_win_rate > 0.0 {
+                    format!("{} {:.0}%", item.name, item.counter_win_rate * 100.0)
+                } else {
+                    item.name.clone()
+                };
                 draw_text_line(hdc, &p_label, px1 + 4, tab_y1 + 4, rgb(255, 255, 255));
             }
 
@@ -2204,19 +2241,19 @@ unsafe fn render_ranked_hud(
             } else {
                 format!("[{}] {}", slot.position_cn, slot_name)
             };
-            let disp_row1 = if row1_left.chars().count() > 14 {
-                format!("{}…", row1_left.chars().take(13).collect::<String>())
-            } else {
-                row1_left
-            };
-            draw_text_line(hdc, &disp_row1, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
-
             let tier_str = if let Some(ref p) = slot.profile {
                 format!("{} {}P", p.tier_str, p.lp)
             } else {
                 format!("T{}级", slot.tier)
             };
-            draw_text_line(hdc, &tier_str, wx2 - 62, cy1 + 5, rgb(200, 170, 110));
+            let (tier_w, _) = measure_text_line(hdc, &tier_str);
+            let tier_x = (wx2 - 6 - tier_w).max(wx1 + 50);
+            draw_text_line(hdc, &tier_str, tier_x, cy1 + 5, rgb(200, 170, 110));
+
+            let max_avail_w = (tier_x - wx1 - 10).max(40);
+            let max_hw = (max_avail_w / 7) as usize;
+            let disp_row1 = truncate_text_to_half_width(&row1_left, max_hw);
+            draw_text_line(hdc, &disp_row1, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
 
             if let Some(ref p) = slot.profile {
                 if (p.recent_wins + p.recent_losses) > 0 {
@@ -2229,10 +2266,14 @@ unsafe fn render_ranked_hud(
                         let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
                         (format!("近{}场 {}% ({}胜{}负)", p.sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
                     };
-                    draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
 
                     let dot_start_x = wx2 - 48;
                     let dot_cy = cy1 + 29;
+                    let max_r2_w = (dot_start_x - wx1 - 10).max(40);
+                    let max_r2_hw = (max_r2_w / 7) as usize;
+                    let disp_row2 = truncate_text_to_half_width(&row2_text, max_r2_hw);
+                    draw_text_line(hdc, &disp_row2, wx1 + 6, cy1 + 24, wr_fg);
+
                     for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
                         let dx = dot_start_x + d_idx as i32 * 9;
                         let (fill_c, border_c) = if is_win {
@@ -2242,13 +2283,14 @@ unsafe fn render_ranked_hud(
                         };
                         draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
                     }
+                } else if p.wins > 0 || p.losses > 0 {
+                    let s_text = format!("排位 {}胜{}负 (总胜率{}%)", p.wins, p.losses, p.overall_win_rate_pct);
+                    draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(56, 189, 248));
+                } else if p.total_games > 0 {
+                    let s_text = format!("排位已获 {} 胜 (暂无近期明细)", p.total_games);
+                    draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(148, 163, 184));
                 } else {
-                    if p.total_games > 0 {
-                        let s_text = format!("排位已获 {} 胜 (同步实战中...)", p.total_games);
-                        draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(56, 189, 248));
-                    } else {
-                        draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
-                    }
+                    draw_text_line(hdc, "排位未定级 · 暂无实战记录", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
                 }
             } else {
                 draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
@@ -2269,8 +2311,10 @@ unsafe fn render_ranked_hud(
 
                     draw_card_rect(hdc, wx1 + 6, cy1 + 44, badge_w, 18, b_bg, b_border);
                     draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
+                } else if p.wins > 0 || p.losses > 0 {
+                    draw_text_line(hdc, "📊 实战数据已就绪", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
                 } else {
-                    draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+                    draw_text_line(hdc, "⏳ 等待首局实战样本", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
                 }
             } else {
                 draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
@@ -2345,17 +2389,21 @@ unsafe fn render_ranked_hud(
             } else {
                 format!("[{}] {}", slot.position_cn, slot_name)
             };
-            let disp_row1 = if row1_left.chars().count() > 14 {
-                format!("{}…", row1_left.chars().take(13).collect::<String>())
+            let tier_str = if let Some(ref p) = slot.profile {
+                format!("{} {}P", p.tier_str, p.lp)
             } else {
-                row1_left
+                format!("T{}级", slot.tier)
             };
+            let (tier_w, _) = measure_text_line(hdc, &tier_str);
+            let tier_x = (wx2 - 6 - tier_w).max(wx1 + 50);
+            draw_text_line(hdc, &tier_str, tier_x, cy1 + 5, rgb(200, 170, 110));
+
+            let max_avail_w = (tier_x - wx1 - 10).max(40);
+            let max_hw = (max_avail_w / 7) as usize;
+            let disp_row1 = truncate_text_to_half_width(&row1_left, max_hw);
             draw_text_line(hdc, &disp_row1, wx1 + 6, cy1 + 5, rgb(255, 255, 255));
 
             if let Some(ref p) = slot.profile {
-                let tier_str = format!("{} {}P", p.tier_str, p.lp);
-                draw_text_line(hdc, &tier_str, wx2 - 62, cy1 + 5, rgb(200, 170, 110));
-
                 if (p.recent_wins + p.recent_losses) > 0 {
                     let (row2_text, wr_fg) = if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
                         let col = if p.cur_champ_win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.cur_champ_win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
@@ -2366,10 +2414,14 @@ unsafe fn render_ranked_hud(
                         let col = if p.win_rate_pct >= 60 { rgb(52, 211, 153) } else if p.win_rate_pct >= 50 { rgb(56, 189, 248) } else { rgb(248, 113, 113) };
                         (format!("近{}场 {}% ({}胜{}负)", p.sample_count, p.win_rate_pct, p.recent_wins, p.recent_losses), col)
                     };
-                    draw_text_line(hdc, &row2_text, wx1 + 6, cy1 + 24, wr_fg);
 
                     let dot_start_x = wx2 - 48;
                     let dot_cy = cy1 + 29;
+                    let max_r2_w = (dot_start_x - wx1 - 10).max(40);
+                    let max_r2_hw = (max_r2_w / 7) as usize;
+                    let disp_row2 = truncate_text_to_half_width(&row2_text, max_r2_hw);
+                    draw_text_line(hdc, &disp_row2, wx1 + 6, cy1 + 24, wr_fg);
+
                     for (d_idx, &is_win) in p.recent_dots.iter().take(5).enumerate() {
                         let dx = dot_start_x + d_idx as i32 * 9;
                         let (fill_c, border_c) = if is_win {
@@ -2379,11 +2431,14 @@ unsafe fn render_ranked_hud(
                         };
                         draw_dot(hdc, dx, dot_cy, 3, fill_c, border_c);
                     }
-                } else if p.total_games > 0 {
-                    let s_text = format!("排位已获 {} 胜 (同步实战中...)", p.total_games);
+                } else if p.wins > 0 || p.losses > 0 {
+                    let s_text = format!("排位 {}胜{}负 (总胜率{}%)", p.wins, p.losses, p.overall_win_rate_pct);
                     draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(56, 189, 248));
+                } else if p.total_games > 0 {
+                    let s_text = format!("排位已获 {} 胜 (暂无近期明细)", p.total_games);
+                    draw_text_line(hdc, &s_text, wx1 + 6, cy1 + 24, rgb(148, 163, 184));
                 } else {
-                    draw_text_line(hdc, "⏳ 正在同步实战画像...", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
+                    draw_text_line(hdc, "排位未定级 · 暂无实战记录", wx1 + 6, cy1 + 24, rgb(148, 163, 184));
                 }
 
                 if (p.recent_wins + p.recent_losses) > 0 && !p.badge_text.is_empty() {
@@ -2399,8 +2454,10 @@ unsafe fn render_ranked_hud(
                     };
                     draw_card_rect(hdc, wx1 + 6, cy1 + 44, badge_w, 18, b_bg, b_border);
                     draw_text_line(hdc, &p.badge_text, wx1 + 10, cy1 + 46, b_fg);
+                } else if p.wins > 0 || p.losses > 0 {
+                    draw_text_line(hdc, "📊 实战数据已就绪", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
                 } else {
-                    draw_text_line(hdc, "🔄 实时连接 LCU 对局实录...", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
+                    draw_text_line(hdc, "⏳ 等待首局实战样本", wx1 + 6, cy1 + 46, rgb(100, 116, 139));
                 }
             } else {
                 draw_text_line(hdc, "🔒 选人期匿名保护", wx1 + 6, cy1 + 25, rgb(148, 163, 184));
@@ -2413,7 +2470,7 @@ unsafe fn render_ranked_hud(
     // 4. 5v5 Slots (My Team Left X=205, Their Team Right X=950)
     // -------------------------------------------------------------
     let slot_pitch_y = (92.0 * sy) as i32;
-    let slot_card_w = (130.0 * sx) as i32;
+    let slot_card_w = ((130.0 * sx) as i32).max(124);
     let slot_card_h = (44.0 * sy) as i32;
     let slot_start_y = actual_offset_y + (100.0 * sy) as i32;
 
@@ -2462,7 +2519,7 @@ unsafe fn render_ranked_hud(
             format!("梯队: {:.1}%", slot.win_rate * 100.0)
         };
         draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
-        new_hotzones.inspect_slot_btns.push(((actual_left_margin, sy1, left_slot_x + slot_card_w, sy1 + slot_card_h), true, idx));
+        new_hotzones.inspect_slot_btns.push(((left_slot_x, sy1, left_slot_x + slot_card_w, sy1 + slot_card_h), true, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let diff = m_wr - 0.5;
@@ -2524,7 +2581,7 @@ unsafe fn render_ranked_hud(
             format!("梯队: {:.1}%", slot.win_rate * 100.0)
         };
         draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
-        new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, actual_left_margin + cw, sy1 + slot_card_h), false, idx));
+        new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, right_slot_x + slot_card_w, sy1 + slot_card_h), false, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let enemy_wr = 1.0 - m_wr;
@@ -2656,27 +2713,37 @@ unsafe fn render_ranked_hud(
                         4 => (rgb(249, 115, 22), rgb(63, 27, 10)),
                         _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
                     };
-                    draw_card_rect(hdc, f_x + 10, ry + 5, 20, 16, t_bg, t_fg);
-                    draw_text_line(hdc, &format!("T{}", item.tier), f_x + 12, ry + 6, t_fg);
+                    if item.tier > 0 {
+                        draw_card_rect(hdc, f_x + 10, ry + 5, 20, 16, t_bg, t_fg);
+                        draw_text_line(hdc, &format!("T{}", item.tier), f_x + 12, ry + 6, t_fg);
+                    }
 
                     draw_text_line(hdc, &item.name, f_x + 36, ry + 6, rgb(241, 245, 249));
 
-                    let wr_pct = item.counter_win_rate * 100.0;
-                    let wr_diff = wr_pct - 50.0;
-                    let wr_fg = if wr_diff >= 2.0 {
-                        rgb(0, 230, 150)
-                    } else if wr_diff <= -2.0 {
-                        rgb(239, 68, 68)
+                    let (wr_str, wr_fg) = if item.counter_win_rate > 0.0 {
+                        let wr_pct = item.counter_win_rate * 100.0;
+                        let wr_diff = wr_pct - 50.0;
+                        let wr_fg = if wr_diff >= 2.0 {
+                            rgb(0, 230, 150)
+                        } else if wr_diff <= -2.0 {
+                            rgb(239, 68, 68)
+                        } else {
+                            rgb(251, 191, 36)
+                        };
+                        (format!("{:.1}%", wr_pct), wr_fg)
                     } else {
-                        rgb(251, 191, 36)
+                        ("- -".to_string(), rgb(148, 163, 184))
                     };
-                    let wr_str = format!("{:.1}%", wr_pct);
                     draw_text_line(hdc, &wr_str, f_x + 120, ry + 6, wr_fg);
 
-                    let g_str = if item.games >= 1000 {
-                        format!("{:.1}k", item.games as f64 / 1000.0)
+                    let g_str = if item.games > 0 {
+                        if item.games >= 1000 {
+                            format!("{:.1}k", item.games as f64 / 1000.0)
+                        } else {
+                            format!("{}", item.games)
+                        }
                     } else {
-                        format!("{}", item.games)
+                        "-".to_string()
                     };
                     draw_text_line(hdc, &g_str, f_x + 215, ry + 6, rgb(148, 163, 184));
                 }
@@ -2686,20 +2753,28 @@ unsafe fn render_ranked_hud(
             let py = f_y + f_h - 26;
             draw_h_line(hdc, f_x + 6, py - 2, f_x + f_w - 6, rgb(30, 41, 59));
             if items.len() > page_size {
+                let can_prev = page_idx > 0;
                 let prev_w = 42;
                 let prev_x = f_x + 10;
-                draw_card_rect(hdc, prev_x, py, prev_w, 20, rgb(20, 30, 50), rgb(51, 65, 85));
-                draw_text_line(hdc, "◀ 上页", prev_x + 4, py + 3, rgb(148, 163, 184));
-                new_hotzones.inspect_nav_btns.push(((prev_x, py, prev_x + prev_w, py + 20), -(page_size as i32)));
+                let (prev_bg, prev_fg) = if can_prev { (rgb(20, 30, 50), rgb(203, 213, 225)) } else { (rgb(11, 19, 32), rgb(51, 65, 85)) };
+                draw_card_rect(hdc, prev_x, py, prev_w, 20, prev_bg, rgb(51, 65, 85));
+                draw_text_line(hdc, "◀ 上页", prev_x + 4, py + 3, prev_fg);
+                if can_prev {
+                    new_hotzones.inspect_nav_btns.push(((prev_x, py, prev_x + prev_w, py + 20), -(page_size as i32)));
+                }
 
                 let page_info = format!("{}/{}页 (共{}位)", page_idx + 1, total_pages, items.len());
                 draw_text_line(hdc, &page_info, f_x + 68, py + 3, rgb(203, 213, 225));
 
+                let can_next = page_idx + 1 < total_pages;
                 let next_w = 42;
                 let next_x = f_x + f_w - next_w - 10;
-                draw_card_rect(hdc, next_x, py, next_w, 20, rgb(20, 30, 50), rgb(51, 65, 85));
-                draw_text_line(hdc, "下页 ▶", next_x + 4, py + 3, rgb(148, 163, 184));
-                new_hotzones.inspect_nav_btns.push(((next_x, py, next_x + next_w, py + 20), page_size as i32));
+                let (next_bg, next_fg) = if can_next { (rgb(20, 30, 50), rgb(203, 213, 225)) } else { (rgb(11, 19, 32), rgb(51, 65, 85)) };
+                draw_card_rect(hdc, next_x, py, next_w, 20, next_bg, rgb(51, 65, 85));
+                draw_text_line(hdc, "下页 ▶", next_x + 4, py + 3, next_fg);
+                if can_next {
+                    new_hotzones.inspect_nav_btns.push(((next_x, py, next_x + next_w, py + 20), page_size as i32));
+                }
             } else {
                 draw_text_line(hdc, "💡 点击头像/卡片可切换查看英雄", f_x + 20, py + 3, rgb(100, 116, 139));
             }
@@ -2765,19 +2840,35 @@ unsafe fn draw_card_rect(
     bg_color: windows::Win32::Foundation::COLORREF,
     border_color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, RoundRect, SelectObject};
+    use windows::Win32::Graphics::Gdi::{CreatePen, CreateSolidBrush, DeleteObject, RoundRect, SelectObject, PS_SOLID};
 
-    let border_brush = CreateSolidBrush(border_color);
-    let old_brush = SelectObject(hdc, border_brush);
+    let pen = CreatePen(PS_SOLID, 1, border_color);
+    let brush = CreateSolidBrush(bg_color);
+    let old_pen = SelectObject(hdc, pen);
+    let old_brush = SelectObject(hdc, brush);
+
     let _ = RoundRect(hdc, x, y, x + w, y + h, 8, 8);
 
-    let bg_brush = CreateSolidBrush(bg_color);
-    let _ = SelectObject(hdc, bg_brush);
-    let _ = RoundRect(hdc, x + 1, y + 1, x + w - 1, y + h - 1, 6, 6);
-
     let _ = SelectObject(hdc, old_brush);
-    let _ = DeleteObject(border_brush);
-    let _ = DeleteObject(bg_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = DeleteObject(brush);
+    let _ = DeleteObject(pen);
+}
+
+#[cfg(windows)]
+unsafe fn measure_text_line(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+) -> (i32, i32) {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
+    let hfont = get_cached_font(12, 400);
+    let old_font = SelectObject(hdc, hfont);
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+    let _ = SelectObject(hdc, old_font);
+    (size.cx, size.cy)
 }
 
 #[cfg(windows)]
@@ -2788,11 +2879,14 @@ unsafe fn draw_text_line(
     y: i32,
     color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{SetBkMode, SetTextColor, TextOutW, TRANSPARENT};
+    use windows::Win32::Graphics::Gdi::{SelectObject, SetBkMode, SetTextColor, TextOutW, TRANSPARENT};
+    let hfont = get_cached_font(12, 400);
+    let old_font = SelectObject(hdc, hfont);
     let _ = SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, color);
     let wide: Vec<u16> = text.encode_utf16().collect();
     let _ = TextOutW(hdc, x, y, &wide);
+    let _ = SelectObject(hdc, old_font);
 }
 
 #[cfg(windows)]
@@ -2825,6 +2919,8 @@ unsafe fn draw_pill_badge(
     let _ = DeleteObject(brush);
     let _ = DeleteObject(pen);
 
+    let hfont = get_cached_font(11, 600);
+    let old_font = SelectObject(hdc, hfont);
     let _ = SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, text_color);
 
@@ -2836,6 +2932,7 @@ unsafe fn draw_pill_badge(
     };
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     let _ = DrawTextW(hdc, &mut wide, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    let _ = SelectObject(hdc, old_font);
 }
 
 #[cfg(windows)]

@@ -37,13 +37,13 @@ export function useRawDetails() {
       return (data.json.participants || [])
         .map((p: any) => {
           const { challenges, missions, PlayerBehavior, ...rest } = p
-          const dmg = p.totalDamageDealtToChampions || 0
-          const gold = p.goldEarned || 1
+          const dmg = Number(p.totalDamageDealtToChampions) || 0
+          const gold = Number(p.goldEarned) || 0
           return {
             ...rest,
             ...PlayerBehavior,
             ...challenges,
-            damageGoldEfficiency: (dmg / gold) * 100,
+            damageGoldEfficiency: gold > 0 ? (dmg / gold) * 100 : 0,
             akariScore: akariScoresByPuuid.value[p.puuid],
             championId: p.championId,
             participantId: p.participantId,
@@ -66,16 +66,16 @@ export function useRawDetails() {
     return lcuParticipants
       .map((p: any) => {
         const idObj = identities.find((i: any) => i.participantId === p.participantId)
-        const puuid = idObj?.player?.puuid || ''
-        const sname = idObj?.player?.gameName || idObj?.player?.summonerName || ''
-        const tag = idObj?.player?.tagLine || ''
+        const puuid = idObj?.player?.puuid || p.puuid || p.player?.puuid || ''
+        const sname = idObj?.player?.gameName || idObj?.player?.summonerName || p.summonerName || p.gameName || p.player?.gameName || p.player?.summonerName || ''
+        const tag = idObj?.player?.tagLine || p.tagLine || p.player?.tagLine || ''
         const stats = p.stats || {}
-        const dmg = stats.totalDamageDealtToChampions || 0
-        const gold = stats.goldEarned || 1
+        const dmg = Number(stats.totalDamageDealtToChampions) || 0
+        const gold = Number(stats.goldEarned) || 0
 
         return {
           ...stats,
-          damageGoldEfficiency: (dmg / gold) * 100,
+          damageGoldEfficiency: gold > 0 ? (dmg / gold) * 100 : 0,
           akariScore: akariScoresByPuuid.value[puuid],
           championId: p.championId,
           participantId: p.participantId,

@@ -59,10 +59,13 @@ impl LcuConnector {
         let parts: Vec<&str> = content.trim().split(':').collect();
         if parts.len() >= 5 {
             if let Ok(port) = parts[2].parse::<u16>() {
-                return Some(LcuCredentials {
-                    port,
-                    auth_token: parts[3].to_string(),
-                });
+                let token = parts[3].trim();
+                if port > 0 && !token.is_empty() {
+                    return Some(LcuCredentials {
+                        port,
+                        auth_token: token.to_string(),
+                    });
+                }
             }
         }
         None
@@ -74,14 +77,20 @@ impl LcuConnector {
 
         let port: u16 = if let Some(idx) = cmd.find(port_key) {
             let rest = &cmd[idx + port_key.len()..];
+            let rest = rest.trim_start_matches(|c| c == '"' || c == '\'');
             let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            num_str.parse().ok()?
+            let p: u16 = num_str.parse().ok()?;
+            if p == 0 {
+                return None;
+            }
+            p
         } else {
             return None;
         };
 
         let auth_token: String = if let Some(idx) = cmd.find(token_key) {
             let rest = &cmd[idx + token_key.len()..];
+            let rest = rest.trim_start_matches(|c| c == '"' || c == '\'');
             let token_str: String = rest
                 .chars()
                 .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
@@ -97,6 +106,28 @@ impl LcuConnector {
         Some(LcuCredentials { port, auth_token })
     }
 
+    /// Extracts region and platform ID metadata from command line arguments.
+    pub fn parse_commandline_metadata(cmd: &str) -> (Option<String>, Option<String>) {
+        let extract = |key: &str| -> Option<String> {
+            if let Some(idx) = cmd.find(key) {
+                let rest = &cmd[idx + key.len()..];
+                let rest = rest.trim_start_matches(|c| c == '"' || c == '\'');
+                let val: String = rest
+                    .chars()
+                    .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+                    .collect();
+                if !val.is_empty() {
+                    return Some(val);
+                }
+            }
+            None
+        };
+
+        let region = extract("--region=");
+        let rso_platform_id = extract("--rso-platform-id=");
+        (region, rso_platform_id)
+    }
+
     #[cfg(windows)]
     pub fn sniff_from_commandline_win32() -> Option<LcuCredentials> {
         use std::os::windows::process::CommandExt;
@@ -110,8 +141,14 @@ impl LcuConnector {
         {
             if output.status.success() {
                 let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if let Some(creds) = Self::parse_commandline(line) {
+                        tracing::info!("Successfully sniffed LCU credentials via WMIC: port {}", creds.port);
+                        return Some(creds);
+                    }
+                }
                 if let Some(creds) = Self::parse_commandline(&text) {
-                    tracing::info!("Successfully sniffed LCU credentials via WMIC: port {}", creds.port);
+                    tracing::info!("Successfully sniffed LCU credentials via WMIC (fallback): port {}", creds.port);
                     return Some(creds);
                 }
             }
@@ -126,8 +163,14 @@ impl LcuConnector {
         {
             if output.status.success() {
                 let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if let Some(creds) = Self::parse_commandline(line) {
+                        tracing::info!("Successfully sniffed LCU credentials via PowerShell: port {}", creds.port);
+                        return Some(creds);
+                    }
+                }
                 if let Some(creds) = Self::parse_commandline(&text) {
-                    tracing::info!("Successfully sniffed LCU credentials via PowerShell: port {}", creds.port);
+                    tracing::info!("Successfully sniffed LCU credentials via PowerShell (fallback): port {}", creds.port);
                     return Some(creds);
                 }
             }
@@ -184,14 +227,17 @@ impl LcuConnector {
                 sz_exe_file: [0u16; 260],
             };
 
-            let mut target_pid = None;
+            let mut ux_pids = Vec::new();
+            let mut client_pids = Vec::new();
+
             if Process32FirstW(snapshot, &mut entry) != 0 {
                 loop {
                     let len = entry.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(entry.sz_exe_file.len());
                     let exe_name = String::from_utf16_lossy(&entry.sz_exe_file[..len]).to_lowercase();
-                    if exe_name == "leagueclientux.exe" || exe_name == "leagueclient.exe" {
-                        target_pid = Some(entry.th32_process_id);
-                        break;
+                    if exe_name == "leagueclientux.exe" {
+                        ux_pids.push(entry.th32_process_id);
+                    } else if exe_name == "leagueclient.exe" {
+                        client_pids.push(entry.th32_process_id);
                     }
                     if Process32NextW(snapshot, &mut entry) == 0 {
                         break;
@@ -200,27 +246,32 @@ impl LcuConnector {
             }
             let _ = CloseHandle(snapshot);
 
-            let pid = target_pid?;
-            // PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            let proc_handle = OpenProcess(0x1000, 0, pid);
-            if proc_handle.is_null() {
-                return None;
-            }
+            // Check LeagueClientUx.exe instances first, then LeagueClient.exe
+            let mut candidate_pids = ux_pids;
+            candidate_pids.extend(client_pids);
 
-            let mut path_buf = [0u16; 1024];
-            let mut size = path_buf.len() as u32;
-            let q_res = QueryFullProcessImageNameW(proc_handle, 0, path_buf.as_mut_ptr(), &mut size);
-            let _ = CloseHandle(proc_handle);
+            for pid in candidate_pids {
+                // PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                let proc_handle = OpenProcess(0x1000, 0, pid);
+                if proc_handle.is_null() {
+                    continue;
+                }
 
-            if q_res != 0 && size > 0 {
-                let exe_path_str = String::from_utf16_lossy(&path_buf[..size as usize]);
-                let exe_path = PathBuf::from(exe_path_str);
-                if let Some(dir) = exe_path.parent() {
-                    let lockfile = dir.join("lockfile");
-                    if lockfile.exists() {
-                        if let Ok(content) = fs::read_to_string(&lockfile) {
-                            if let Some(creds) = Self::parse_lockfile(&content) {
-                                return Some(creds);
+                let mut path_buf = [0u16; 1024];
+                let mut size = path_buf.len() as u32;
+                let q_res = QueryFullProcessImageNameW(proc_handle, 0, path_buf.as_mut_ptr(), &mut size);
+                let _ = CloseHandle(proc_handle);
+
+                if q_res != 0 && size > 0 {
+                    let exe_path_str = String::from_utf16_lossy(&path_buf[..size as usize]);
+                    let exe_path = PathBuf::from(exe_path_str);
+                    if let Some(dir) = exe_path.parent() {
+                        let lockfile = dir.join("lockfile");
+                        if lockfile.exists() {
+                            if let Ok(content) = fs::read_to_string(&lockfile) {
+                                if let Some(creds) = Self::parse_lockfile(&content) {
+                                    return Some(creds);
+                                }
                             }
                         }
                     }
@@ -228,5 +279,50 @@ impl LcuConnector {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_commandline_unquoted() {
+        let cmd = r#""LeagueClientUx.exe" "--app-port=51842" "--remoting-auth-token=test_token_123" "--region=TENCENT""#;
+        let creds = LcuConnector::parse_commandline(cmd).expect("Should parse unquoted/quoted commandline");
+        assert_eq!(creds.port, 51842);
+        assert_eq!(creds.auth_token, "test_token_123");
+    }
+
+    #[test]
+    fn test_parse_commandline_quoted_values() {
+        let cmd = r#"LeagueClientUx.exe --app-port="52000" --remoting-auth-token="super-secret-auth" --rso-platform-id="HN10""#;
+        let creds = LcuConnector::parse_commandline(cmd).expect("Should parse quoted values");
+        assert_eq!(creds.port, 52000);
+        assert_eq!(creds.auth_token, "super-secret-auth");
+    }
+
+    #[test]
+    fn test_parse_commandline_single_quotes() {
+        let cmd = "LeagueClientUx.exe --app-port='49152' --remoting-auth-token='single_quoted_tok'";
+        let creds = LcuConnector::parse_commandline(cmd).expect("Should parse single quoted values");
+        assert_eq!(creds.port, 49152);
+        assert_eq!(creds.auth_token, "single_quoted_tok");
+    }
+
+    #[test]
+    fn test_parse_commandline_metadata() {
+        let cmd = r#"LeagueClientUx.exe --region="TENCENT" --rso-platform-id="HN10" --app-port=1234"#;
+        let (region, rso_platform_id) = LcuConnector::parse_commandline_metadata(cmd);
+        assert_eq!(region.as_deref(), Some("TENCENT"));
+        assert_eq!(rso_platform_id.as_deref(), Some("HN10"));
+    }
+
+    #[test]
+    fn test_parse_lockfile() {
+        let content = "LeagueClient:12345:51842:secret_token:https\n";
+        let creds = LcuConnector::parse_lockfile(content).expect("Should parse lockfile");
+        assert_eq!(creds.port, 51842);
+        assert_eq!(creds.auth_token, "secret_token");
     }
 }

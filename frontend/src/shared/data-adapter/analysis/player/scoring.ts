@@ -17,11 +17,17 @@ import {
 } from './constants'
 
 function clamp(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min
+  }
   return Math.max(Math.min(value, max), min)
 }
 
 function scoreLinearRange(value: number, min: number, max: number, maxScore: number) {
-  return ((clamp(value, min, max) - min) / (max - min)) * maxScore
+  const range = max - min
+  if (range <= 0) return 0
+  const clamped = clamp(value, min, max)
+  return ((clamped - min) / range) * maxScore
 }
 
 export function scoreExpectedContribution(ratio: number, fullScoreRatio: number, maxScore: number) {
@@ -34,7 +40,8 @@ export function scoreExpectedContribution(ratio: number, fullScoreRatio: number,
 }
 
 export function scoreKda(kda: number) {
-  const effectiveKda = Math.max(kda - AKARI_KDA_BASELINE, 0)
+  const safeKda = !Number.isFinite(kda) || kda < 0 ? 0 : kda
+  const effectiveKda = Math.max(safeKda - AKARI_KDA_BASELINE, 0)
   return clamp(Math.sqrt(effectiveKda) * AKARI_KDA_WEIGHT, 0, AKARI_KDA_MAX_SCORE)
 }
 

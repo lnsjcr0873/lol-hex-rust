@@ -75,7 +75,7 @@ impl LiveClientDataReader {
         }
 
         if let Some(players) = data.get("allPlayers").and_then(|v| v.as_array()) {
-            let mut local_team = "";
+            let mut local_team = String::new();
             for p in players {
                 let is_local = if let Some(active) = active_opt {
                     Self::check_is_local_player(active, p)
@@ -84,38 +84,14 @@ impl LiveClientDataReader {
                 };
 
                 if is_local {
-                    local_team = p.get("team").and_then(|v| v.as_str()).unwrap_or("");
-                    if let Some(cname) = p.get("championName").and_then(|v| v.as_str()) {
-                        stats.hero_name = cname.to_string();
-                    } else if let Some(raw_cname) = p.get("rawChampionName").and_then(|v| v.as_str()) {
-                        let clean = raw_cname.split('_').last().unwrap_or(raw_cname);
-                        stats.hero_name = clean.to_string();
-                    }
-
-                    if let Some(skin_id) = p.get("skinID").and_then(|v| v.as_i64()) {
-                        if skin_id > 0 {
-                            let cid = if skin_id >= 1000 { skin_id / 1000 } else { skin_id };
-                            stats.hero_id = cid.to_string();
-                        }
-                    }
-                    if stats.hero_id.is_empty() {
-                        if let Some(cid) = p.get("championId").and_then(|v| v.as_i64()) {
-                            if cid > 0 {
-                                stats.hero_id = cid.to_string();
-                            }
-                        }
-                    }
-
-                    if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
-                        for it in items {
-                            if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {
-                                if iid > 0 {
-                                    stats.current_items.push(iid.to_string());
-                                }
-                            }
-                        }
-                    }
+                    local_team = Self::extract_player_info(p, &mut stats);
+                    break;
                 }
+            }
+
+            // Fallback for single-player games (Practice tool, solo custom match)
+            if stats.hero_name.is_empty() && players.len() == 1 {
+                local_team = Self::extract_player_info(&players[0], &mut stats);
             }
 
             if !local_team.is_empty() {
@@ -131,7 +107,50 @@ impl LiveClientDataReader {
         stats
     }
 
+    fn extract_player_info(p: &Value, stats: &mut LiveGameStats) -> String {
+        let team = p.get("team").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if let Some(cname) = p.get("championName").and_then(|v| v.as_str()) {
+            stats.hero_name = cname.to_string();
+        } else if let Some(raw_cname) = p.get("rawChampionName").and_then(|v| v.as_str()) {
+            let clean = raw_cname.split('_').last().unwrap_or(raw_cname);
+            stats.hero_name = clean.to_string();
+        }
+
+        if let Some(skin_id) = p.get("skinID").and_then(|v| v.as_i64()) {
+            if skin_id > 0 {
+                let cid = if skin_id >= 1000 { skin_id / 1000 } else { skin_id };
+                stats.hero_id = cid.to_string();
+            }
+        }
+        if stats.hero_id.is_empty() {
+            if let Some(cid) = p.get("championId").and_then(|v| v.as_i64()) {
+                if cid > 0 {
+                    stats.hero_id = cid.to_string();
+                }
+            }
+        }
+
+        if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
+            stats.current_items.clear();
+            for it in items {
+                if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {
+                    if iid > 0 {
+                        stats.current_items.push(iid.to_string());
+                    }
+                }
+            }
+        }
+
+        team
+    }
+
     fn check_is_local_player(active: &Value, player: &Value) -> bool {
+        let a_puuid = active.get("puuid").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let p_puuid = player.get("puuid").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !a_puuid.is_empty() && !p_puuid.is_empty() && a_puuid.eq_ignore_ascii_case(p_puuid) {
+            return true;
+        }
+
         let a_sum = active.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").trim();
         let p_sum = player.get("summonerName").and_then(|v| v.as_str()).unwrap_or("").trim();
         if !a_sum.is_empty() && !p_sum.is_empty() && a_sum.eq_ignore_ascii_case(p_sum) {
@@ -150,20 +169,73 @@ impl LiveClientDataReader {
             return true;
         }
 
-        // Compare riotId with summonerName when #TAG is stripped
-        if !a_riot.is_empty() && !p_sum.is_empty() {
-            let clean_a = a_riot.split('#').next().unwrap_or(a_riot).trim();
-            if clean_a.eq_ignore_ascii_case(p_sum) {
-                return true;
-            }
-        }
-        if !a_sum.is_empty() && !p_riot.is_empty() {
-            let clean_p = p_riot.split('#').next().unwrap_or(p_riot).trim();
-            if clean_p.eq_ignore_ascii_case(a_sum) {
-                return true;
-            }
+        // Cross-compare summonerName, riotIdGameName, and tag-stripped riotId
+        let a_base = if !a_game_name.is_empty() {
+            a_game_name
+        } else if !a_riot.is_empty() {
+            a_riot.split('#').next().unwrap_or(a_riot).trim()
+        } else {
+            a_sum
+        };
+
+        let p_base = if !p_game_name.is_empty() {
+            p_game_name
+        } else if !p_riot.is_empty() {
+            p_riot.split('#').next().unwrap_or(p_riot).trim()
+        } else {
+            p_sum
+        };
+
+        if !a_base.is_empty() && !p_base.is_empty() && a_base.eq_ignore_ascii_case(p_base) {
+            return true;
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_check_is_local_player_puuid() {
+        let active = json!({ "puuid": "puuid-1234", "summonerName": "ActivePlayer" });
+        let player = json!({ "puuid": "puuid-1234", "summonerName": "DifferentName" });
+        assert!(LiveClientDataReader::check_is_local_player(&active, &player));
+    }
+
+    #[test]
+    fn test_check_is_local_player_cross_riot_id() {
+        let active = json!({ "riotId": "Faker#KR1", "summonerName": "" });
+        let player = json!({ "riotIdGameName": "Faker", "riotIdTagLine": "KR1", "summonerName": "" });
+        assert!(LiveClientDataReader::check_is_local_player(&active, &player));
+    }
+
+    #[test]
+    fn test_check_is_local_player_case_insensitive() {
+        let active = json!({ "summonerName": "theshy" });
+        let player = json!({ "summonerName": "TheShy" });
+        assert!(LiveClientDataReader::check_is_local_player(&active, &player));
+    }
+
+    #[test]
+    fn test_extract_player_info_skin_and_items() {
+        let player = json!({
+            "championName": "Aatrox",
+            "skinID": 266001,
+            "team": "ORDER",
+            "items": [
+                { "itemID": 1055, "count": 1 },
+                { "itemID": 2003, "count": 2 }
+            ]
+        });
+        let mut stats = LiveGameStats::default();
+        let team = LiveClientDataReader::extract_player_info(&player, &mut stats);
+        assert_eq!(team, "ORDER");
+        assert_eq!(stats.hero_name, "Aatrox");
+        assert_eq!(stats.hero_id, "266");
+        assert_eq!(stats.current_items, vec!["1055", "2003"]);
     }
 }

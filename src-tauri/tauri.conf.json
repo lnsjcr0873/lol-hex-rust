@@ -24,6 +24,22 @@
         "decorations": false,
         "transparent": false,
         "center": true
+      },
+      {
+        "label": "ongoing-overlay",
+        "title": "HexBrain 实时对局悬浮窗",
+        "url": "index.html?window=overlay",
+        "width": 1120,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

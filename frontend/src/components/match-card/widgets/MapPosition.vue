@@ -62,8 +62,11 @@ const pointColorClass = computed(() => {
 })
 
 const mappedPoints = computed(() => {
-  return props.points.map((pt) =>
-    mapToImagePosition(pt.x, pt.y, props.size, props.size, props.mapId)
-  )
+  if (!Array.isArray(props.points)) return []
+  return props.points
+    .filter((pt) => pt && Number.isFinite(pt.x) && Number.isFinite(pt.y))
+    .map((pt) =>
+      mapToImagePosition(pt.x, pt.y, props.size || 260, props.size || 260, props.mapId)
+    )
 })
 </script>

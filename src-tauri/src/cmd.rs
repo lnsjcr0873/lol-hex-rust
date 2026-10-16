@@ -3,7 +3,7 @@ use lol_hex_rust::engine::player_history::OngoingPlayerCard;
 use lol_hex_rust::web::routes::{build_mock_match_detail, build_mock_match_timeline, parse_riot_match_detail};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::TauriAppState;
 
@@ -21,17 +21,17 @@ pub struct GenericResult {
 
 fn spell_meta(spell_id: i32) -> (&'static str, &'static str) {
     match spell_id {
-        1 => ("净化", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_boost.png"),
-        3 => ("虚弱", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_exhaust.png"),
-        4 => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
-        6 => ("幽灵疾步", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_haste.png"),
-        7 => ("治疗术", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_heal.png"),
-        11 => ("惩戒", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_smite.png"),
-        12 => ("传送", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_teleport.png"),
-        14 => ("引燃", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_ignite.png"),
-        21 => ("屏障", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_barrier.png"),
-        32 => ("雪球", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_mark.png"),
-        _ => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
+        1 => ("净化", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerBoost.png"),
+        3 => ("虚弱", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerExhaust.png"),
+        4 => ("闪现", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png"),
+        6 => ("幽灵疾步", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHaste.png"),
+        7 => ("治疗术", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHeal.png"),
+        11 => ("惩戒", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png"),
+        12 => ("传送", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerTeleport.png"),
+        14 => ("引燃", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerDot.png"),
+        21 => ("屏障", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerBarrier.png"),
+        32 => ("雪球", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSnowball.png"),
+        _ => ("", ""),
     }
 }
 
@@ -95,8 +95,8 @@ fn convert_ongoing_card(card: &OngoingPlayerCard, team_str: &'static str, db: &D
     json!({
         "puuid": card.puuid,
         "summoner_id": card.puuid,
-        "game_name": card.summoner_name,
-        "tag_line": "CN",
+        "game_name": if !card.summoner_name.is_empty() { card.summoner_name.clone() } else { cname.clone() },
+        "tag_line": card.full_name.split('#').nth(1).filter(|s| !s.is_empty()).unwrap_or(""),
         "profile_icon_id": card.profile_icon_id,
         "summoner_level": card.level,
         "team": team_str,
@@ -114,7 +114,7 @@ fn convert_ongoing_card(card: &OngoingPlayerCard, team_str: &'static str, db: &D
         "spell2_name": s2_name,
         "spell2_icon": s2_icon,
         "tier": card.tactical_analysis.tier,
-        "division": card.tactical_analysis.tier_str,
+        "division": card.tactical_analysis.division,
         "lp": card.tactical_analysis.lp,
         "recent_kda": card.tactical_analysis.avg_kda_str,
         "recent_kda_ratio": card.tactical_analysis.avg_kda_ratio,
@@ -122,16 +122,49 @@ fn convert_ongoing_card(card: &OngoingPlayerCard, team_str: &'static str, db: &D
         "recent_games_count": card.tactical_analysis.recent_count,
         "champ_recent_games": card.tactical_analysis.cur_champ_games,
         "champ_recent_win_rate": card.tactical_analysis.cur_champ_win_rate_pct,
+        "top_champs": card.tactical_analysis.top_champs.iter().map(|tc| {
+            json!({
+                "champion_id": tc.champion_id,
+                "champion_name": tc.champion_name,
+                "games": tc.games,
+                "win_rate": tc.win_rate,
+                "win_rate_pct": tc.win_rate_pct,
+                "kda": tc.kda,
+            })
+        }).collect::<Vec<Value>>(),
         "recent_matches": recent_matches,
+        "matches": card.matches.iter().take(10).map(|m| {
+            json!({
+                "game_id": m.game_id,
+                "game_creation": m.game_creation,
+                "game_duration": m.game_duration,
+                "game_duration_str": m.game_duration_str,
+                "queue_id": m.queue_id,
+                "mode_cn": m.mode_cn,
+                "champion_id": m.champion_id,
+                "champion_name": m.champion_name,
+                "champion_avatar": m.champion_avatar,
+                "win": m.win,
+                "kills": m.kills,
+                "deaths": m.deaths,
+                "assists": m.assists,
+                "kda_str": m.kda_str,
+                "kda_ratio": m.kda_ratio,
+                "cs": m.cs,
+                "cs_per_min": m.cs_per_min,
+                "items": m.items,
+                "all_items": m.all_items
+            })
+        }).collect::<Vec<Value>>(),
         "badges": badges_json,
         "premade_party": premade_party,
         "radar": {
-            "output": radar.get("damage").copied().unwrap_or(60),
-            "kda": radar.get("kda").copied().unwrap_or(60),
-            "join_rate": radar.get("kp").copied().unwrap_or(60),
-            "survival": radar.get("survival").copied().unwrap_or(60),
-            "gold": radar.get("economy").copied().unwrap_or(60),
-            "vision": radar.get("vision").copied().unwrap_or(60)
+            "output": radar.get("damage").copied().unwrap_or(0),
+            "kda": radar.get("kda").copied().unwrap_or(0),
+            "join_rate": radar.get("kp").copied().unwrap_or(0),
+            "survival": radar.get("survival").copied().unwrap_or(0),
+            "gold": radar.get("economy").copied().unwrap_or(0),
+            "vision": radar.get("vision").copied().unwrap_or(0)
         }
     })
 }
@@ -224,24 +257,28 @@ pub async fn get_ongoing_match(
     let cur_sum = state.lcu.get_current_summoner().await;
     let my_puuid = cur_sum.and_then(|s| s.get("puuid").and_then(|v| v.as_str()).map(|v| v.to_string())).unwrap_or_default();
 
-    let q_name = match ongoing.phase.as_str() {
-        "ChampSelect" => "排位选人阶段 (5v5 实时透视)",
-        "GameStart" => "对局载入阶段 (10人画像已锁定)",
-        "InProgress" => "游戏进行中 (对局透视已同步)",
-        _ => "实时对局侦查",
+    let q_name = if !ongoing.queue_name.is_empty() {
+        ongoing.queue_name.clone()
+    } else {
+        match ongoing.phase.as_str() {
+            "ChampSelect" => "排位选人阶段".to_string(),
+            "GameStart" => "对局载入阶段".to_string(),
+            "InProgress" => "游戏进行中".to_string(),
+            _ => "实时对局侦查".to_string(),
+        }
     };
 
     Ok(json!({
         "gameflow_phase": ongoing.phase,
-        "queue_id": 420,
+        "queue_id": ongoing.queue_id,
         "queue_name": q_name,
-        "is_my_team_blue": true,
+        "is_my_team_blue": ongoing.is_my_team_blue,
         "my_puuid": my_puuid,
         "chat_room_id": ongoing.chat_room_id,
         "blue_team": blue,
         "red_team": red,
         "lcu_connected": true,
-        "is_active": true,
+        "is_active": ongoing.is_active,
         "is_mock": ongoing.is_mock,
         "message": ongoing.message
     }))
@@ -284,29 +321,58 @@ pub async fn send_chat_records(
 
     let ongoing = state.history.get_ongoing_match(&state.lcu, &state.db).await;
     let mut lines = Vec::new();
-    lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
+    if format.as_deref() == Some("concise") {
+        lines.push("⚡【HexBrain 战绩简报】".to_string());
+        let mut summaries = Vec::new();
+        for p in ongoing.my_team.iter().take(5) {
+            let pos = match p.position.to_uppercase().as_str() {
+                "TOP" => "上",
+                "JUNGLE" => "野",
+                "MID" | "MIDDLE" => "中",
+                "BOTTOM" | "BOT" | "ADC" => "下",
+                "UTILITY" | "SUPPORT" => "辅",
+                _ => "",
+            };
+            let cname = if !p.champion_name.is_empty() && p.champion_name != "选择中..." {
+                p.champion_name.clone()
+            } else {
+                p.summoner_name.clone()
+            };
+            let prefix = if !pos.is_empty() { format!("{}:", pos) } else { String::new() };
+            if p.tactical_analysis.recent_count > 0 {
+                summaries.push(format!("{}{}({}%胜)", prefix, cname, p.tactical_analysis.recent_win_rate_pct));
+            } else {
+                summaries.push(format!("{}{}", prefix, cname));
+            }
+        }
+        lines.push(summaries.join(" | "));
+    } else {
+        lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
 
-    for (idx, p) in ongoing.my_team.iter().take(5).enumerate() {
-        let pos = match idx {
-            0 => "上路",
-            1 => "打野",
-            2 => "中路",
-            3 => "射手",
-            _ => "辅助",
-        };
-        let wr = p.tactical_analysis.recent_win_rate_pct;
-        let tag = p.premade_tag.as_deref().unwrap_or("");
-        let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
-        lines.push(format!(
-            "{}. {} [{}] {} (近{}场胜率{}%){}",
-            idx + 1,
-            pos,
-            p.summoner_name,
-            p.tactical_analysis.tier_str,
-            p.tactical_analysis.recent_count,
-            wr,
-            tag_suffix
-        ));
+        for (idx, p) in ongoing.my_team.iter().take(5).enumerate() {
+            let pos = match p.position.to_uppercase().as_str() {
+                "TOP" => "上路",
+                "JUNGLE" => "打野",
+                "MID" | "MIDDLE" => "中路",
+                "BOTTOM" | "BOT" | "ADC" => "射手",
+                "UTILITY" | "SUPPORT" => "辅助",
+                _ => "",
+            };
+            let pos_str = if !pos.is_empty() { format!("{} ", pos) } else { String::new() };
+            let wr = p.tactical_analysis.recent_win_rate_pct;
+            let tag = p.premade_tag.as_deref().unwrap_or("");
+            let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
+            lines.push(format!(
+                "{}. {}[{}] {} (近{}场胜率{}%){}",
+                idx + 1,
+                pos_str,
+                p.summoner_name,
+                p.tactical_analysis.tier_str,
+                p.tactical_analysis.recent_count,
+                wr,
+                tag_suffix
+            ));
+        }
     }
 
     if !target_room.is_empty() {
@@ -328,8 +394,8 @@ pub async fn send_chat_records(
         })
     } else {
         Ok(ChatBroadcastResponse {
-            success: true,
-            message: "未检测到活跃聊天室（演练文本已在本地准备完毕）".to_string(),
+            success: false,
+            message: "未检测到活跃选人聊天室，请在英雄选择阶段重试".to_string(),
         })
     }
 }
@@ -341,7 +407,7 @@ pub async fn get_summoner_profile(
 ) -> Result<Value, String> {
     let current_sum = state.lcu.get_current_summoner().await;
 
-    let target_puuid = if let Some(ref p) = puuid {
+    let mut target_puuid = if let Some(ref p) = puuid {
         p.clone()
     } else if let Some(ref cur) = current_sum {
         cur.get("puuid").and_then(|v| v.as_str()).unwrap_or("").to_string()
@@ -356,28 +422,72 @@ pub async fn get_summoner_profile(
         }));
     }
 
-    let sum_name = current_sum
+    let target_sum = if let Some(ref p) = puuid {
+        if let Some(ref cur) = current_sum {
+            if cur.get("puuid").and_then(|v| v.as_str()) == Some(p.as_str()) {
+                current_sum.clone()
+            } else if let Some(by_puuid) = state.lcu.get_summoner_by_puuid(p).await {
+                Some(by_puuid)
+            } else {
+                state.lcu.get_summoner_by_name(p).await
+            }
+        } else if let Some(by_puuid) = state.lcu.get_summoner_by_puuid(p).await {
+            Some(by_puuid)
+        } else {
+            state.lcu.get_summoner_by_name(p).await
+        }
+    } else {
+        current_sum.clone()
+    };
+
+    if let Some(ref s) = target_sum {
+        if let Some(real_puuid) = s.get("puuid").and_then(|v| v.as_str()) {
+            if !real_puuid.is_empty() {
+                target_puuid = real_puuid.to_string();
+            }
+        }
+    }
+
+    let mut sum_name = target_sum
         .as_ref()
-        .and_then(|s| s.get("gameName").or_else(|| s.get("displayName")))
+        .and_then(|s| s.get("gameName").or_else(|| s.get("displayName")).or_else(|| s.get("summonerName")))
         .and_then(|v| v.as_str())
-        .unwrap_or("召唤师")
+        .unwrap_or("")
         .to_string();
-    let tag_line = current_sum
+    let mut tag_line = target_sum
         .as_ref()
         .and_then(|s| s.get("tagLine"))
         .and_then(|v| v.as_str())
-        .unwrap_or("CN")
+        .unwrap_or("")
         .to_string();
-    let level = current_sum
+    let mut level = target_sum
         .as_ref()
         .and_then(|s| s.get("summonerLevel"))
         .and_then(|v| v.as_i64())
-        .unwrap_or(30) as i32;
-    let icon_id = current_sum
+        .unwrap_or(0) as i32;
+    let mut icon_id = target_sum
         .as_ref()
         .and_then(|s| s.get("profileIconId"))
         .and_then(|v| v.as_i64())
-        .unwrap_or(1) as i32;
+        .unwrap_or(0) as i32;
+
+    if sum_name.is_empty() {
+        if let Some(cached) = state.history.get_player_data_fresh(&target_puuid, std::time::Duration::from_secs(600)).await {
+            sum_name = cached.summoner_name.clone();
+            if let Some(tag) = cached.raw_summoner.get("tagLine").and_then(|v| v.as_str()) {
+                tag_line = tag.to_string();
+            }
+            if let Some(lvl) = cached.raw_summoner.get("summonerLevel").and_then(|v| v.as_i64()) {
+                level = lvl as i32;
+            }
+            if let Some(icon) = cached.raw_summoner.get("profileIconId").and_then(|v| v.as_i64()) {
+                icon_id = icon as i32;
+            }
+        }
+    }
+    if sum_name.is_empty() {
+        sum_name = "召唤师".to_string();
+    }
 
     // Real ranked stats
     let ranked = state.lcu.get_player_ranked_stats(&target_puuid).await;
@@ -422,14 +532,16 @@ pub async fn get_summoner_profile(
         0
     };
 
-    // Real recent 20 matches & tactical summary
+    // Real recent matches & tactical summary
+    let sample_limit = state.history.sample_count.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    let end_idx = sample_limit.saturating_sub(1);
     let cached = state
         .history
-        .fetch_and_cache_player(&target_puuid, &sum_name, &state.lcu)
+        .fetch_and_cache_player(&target_puuid, &sum_name, &state.lcu, 0, end_idx)
         .await;
     let tactical = cached
         .as_ref()
-        .map(|c| state.history.compute_tactical_profile(c, 0, 20))
+        .map(|c| state.history.compute_tactical_profile(c, 0, sample_limit))
         .unwrap_or_default();
 
     let top_champions: Vec<Value> = tactical
@@ -469,12 +581,12 @@ pub async fn get_summoner_profile(
         "losses_flex": losses_flex,
         "win_rate_flex": wr_flex,
         "recent_radar": {
-            "output": radar.get("damage").copied().unwrap_or(60),
-            "kda": radar.get("kda").copied().unwrap_or(60),
-            "join_rate": radar.get("kp").copied().unwrap_or(60),
-            "survival": radar.get("survival").copied().unwrap_or(60),
-            "gold": radar.get("economy").copied().unwrap_or(60),
-            "vision": radar.get("vision").copied().unwrap_or(60)
+            "output": radar.get("damage").copied().unwrap_or(0),
+            "kda": radar.get("kda").copied().unwrap_or(0),
+            "join_rate": radar.get("kp").copied().unwrap_or(0),
+            "survival": radar.get("survival").copied().unwrap_or(0),
+            "gold": radar.get("economy").copied().unwrap_or(0),
+            "vision": radar.get("vision").copied().unwrap_or(0)
         },
         "recent_summary": {
             "total_games": tactical.recent_count,
@@ -491,6 +603,10 @@ pub async fn get_match_history(
     state: State<'_, TauriAppState>,
     puuid: Option<String>,
     queue_id: Option<i64>,
+    beg_index: Option<usize>,
+    end_index: Option<usize>,
+    page: Option<usize>,
+    page_size: Option<usize>,
 ) -> Result<Value, String> {
     let current_sum = state.lcu.get_current_summoner().await;
 
@@ -506,17 +622,53 @@ pub async fn get_match_history(
         return Ok(json!([]));
     }
 
-    let sum_name = current_sum
-        .as_ref()
-        .and_then(|s| s.get("gameName").or_else(|| s.get("displayName")))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let sum_name = if let Some(ref cur) = current_sum {
+        if cur.get("puuid").and_then(|v| v.as_str()) == Some(target_puuid.as_str()) {
+            cur.get("gameName").or_else(|| cur.get("displayName")).and_then(|v| v.as_str()).unwrap_or("").to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
 
-    let record = state
+    let (resolved_beg, resolved_end) = match (beg_index, end_index) {
+        (Some(b), Some(e)) => (b, e.max(b)),
+        (Some(b), None) => {
+            let count = page_size.unwrap_or(20).clamp(1, 200);
+            (b, b.saturating_add(count.saturating_sub(1)))
+        }
+        (None, Some(e)) => (0, e),
+        (None, None) => {
+            let p = page.unwrap_or(1).max(1);
+            let ps = page_size.unwrap_or(20).clamp(1, 200);
+            let b = (p - 1).saturating_mul(ps);
+            let e = b.saturating_add(ps.saturating_sub(1));
+            (b, e)
+        }
+    };
+    let resolved_end = resolved_end.min(resolved_beg.saturating_add(199));
+
+    let record = match state
         .history
-        .fetch_and_cache_player(&target_puuid, &sum_name, &state.lcu)
-        .await;
+        .fetch_and_cache_player(&target_puuid, &sum_name, &state.lcu, resolved_beg, resolved_end)
+        .await
+    {
+        Some(mut r) => {
+            let count = (resolved_end.saturating_add(1)).saturating_sub(resolved_beg);
+            r.matches = r.matches.into_iter().skip(resolved_beg).take(count).collect();
+            Some(r)
+        }
+        None => {
+            if let Some(mut cached) = state.history.get_player_data_fresh(&target_puuid, std::time::Duration::from_secs(600)).await {
+                let count = (resolved_end.saturating_add(1)).saturating_sub(resolved_beg);
+                cached.matches = cached.matches.into_iter().skip(resolved_beg).take(count).collect();
+                Some(cached)
+            } else {
+                None
+            }
+        }
+    };
     let matches = record.map(|r| r.matches).unwrap_or_default();
 
     let filtered: Vec<Value> = matches
@@ -535,10 +687,14 @@ pub async fn get_match_history(
                 "queue_id": m.queue_id,
                 "queue_name": m.mode_cn,
                 "is_win": m.win,
+                "team_id": m.team_id,
+                "is_blue": m.is_blue,
                 "champion_id": m.champion_id,
                 "champion_name": m.champion_name,
                 "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", m.champion_id),
                 "role": role_cn,
+                "spell1_id": m.spell1_id,
+                "spell2_id": m.spell2_id,
                 "kills": m.kills,
                 "deaths": m.deaths,
                 "assists": m.assists,
@@ -548,15 +704,36 @@ pub async fn get_match_history(
                 "items": m.items,
                 "total_damage": m.damage,
                 "damage_share_pct": m.damage_share_pct,
+                "physical_damage": m.physical_damage,
+                "magic_damage": m.magic_damage,
+                "true_damage": m.true_damage,
+                "primary_rune": m.primary_rune,
+                "secondary_rune": m.secondary_rune,
                 "damage_taken": m.damage_taken,
                 "gold_earned": m.gold,
                 "minions_killed": m.cs,
-                "participants_preview": []
+                "participants_preview": m.participants_preview
             })
         })
         .collect();
 
     Ok(json!(filtered))
+}
+
+#[tauri::command]
+pub async fn get_champion_mastery(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+) -> Result<Value, String> {
+    let target = if puuid == "me" || puuid == "current" {
+        String::new()
+    } else {
+        puuid
+    };
+    if let Some(masteries) = state.lcu.get_champion_mastery(&target).await {
+        return Ok(masteries);
+    }
+    Ok(json!([]))
 }
 
 #[tauri::command]
@@ -571,8 +748,8 @@ pub async fn get_match_detail(
         }
     }
 
-    // 2. Only return demo mock if explicitly requested with negative ID (e.g. game_id == -1)
-    if game_id < 0 {
+    // 2. Demo / mock fallback for mock IDs
+    if game_id <= 0 || game_id == 99991234 || game_id == 100200300 {
         let mock = build_mock_match_detail(game_id, &state.db);
         return Ok(mock);
     }
@@ -590,12 +767,123 @@ pub async fn get_match_timeline(
         return Ok(timeline);
     }
 
-    // 2. Demo / mock fallback when LCU is not connected or in mock mode
-    if !state.lcu.is_connected().await {
+    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0 or 99991234)
+    if game_id == 0 || game_id == 99991234 || game_id == 100200300 {
         return Ok(build_mock_match_timeline(game_id));
     }
 
     Err(format!("无法获取对局 {} 的时间线数据", game_id))
+}
+
+#[tauri::command]
+pub async fn get_raw_match_history(
+    state: State<'_, TauriAppState>,
+    puuid: Option<String>,
+    queue_id: Option<i32>,
+    beg_index: Option<usize>,
+    end_index: Option<usize>,
+) -> Result<Value, String> {
+    let current_sum = state.lcu.get_current_summoner().await;
+
+    let target_puuid = if let Some(ref p) = puuid {
+        if p == "me" || p == "current" {
+            current_sum
+                .as_ref()
+                .and_then(|s| s.get("puuid"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            p.clone()
+        }
+    } else if let Some(ref cur) = current_sum {
+        cur.get("puuid").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+
+    if target_puuid.is_empty() {
+        return Ok(json!({
+            "accountId": 0,
+            "games": {
+                "games": []
+            }
+        }));
+    }
+
+    let b_idx = beg_index.unwrap_or(0);
+    let e_idx = end_index.unwrap_or_else(|| b_idx.saturating_add(19)).max(b_idx);
+    let e_idx = e_idx.min(b_idx.saturating_add(199));
+
+    let mut raw_history = match state.lcu.get_raw_match_history(&target_puuid, b_idx, e_idx).await {
+        Some(hist) => hist,
+        None => {
+            return Err("无法从客户端获取原始战绩数据".to_string());
+        }
+    };
+
+    // If queue_id filter is requested (and > 0), filter the games array in place
+    if let Some(qid) = queue_id {
+        if qid > 0 {
+            let filter_fn = |arr: &mut Vec<Value>| {
+                arr.retain(|game| {
+                    game.get("queueId").and_then(|q| q.as_i64()).map(|q| q == qid as i64).unwrap_or(false)
+                });
+            };
+
+            if let Some(g_val) = raw_history.get_mut("games") {
+                if let Some(arr) = g_val.as_array_mut() {
+                    filter_fn(arr);
+                } else if let Some(arr) = g_val.get_mut("games").and_then(|g| g.as_array_mut()) {
+                    filter_fn(arr);
+                }
+            } else if let Some(arr) = raw_history.as_array_mut() {
+                filter_fn(arr);
+            }
+        }
+    }
+
+    Ok(raw_history)
+}
+
+#[tauri::command]
+pub async fn get_raw_match_timeline(
+    state: State<'_, TauriAppState>,
+    game_id: u64,
+) -> Result<Value, String> {
+    // 1. Try real LCU endpoint (with LRU cache and concurrency protection)
+    if let Some(timeline) = state.lcu.get_raw_match_timeline(game_id).await {
+        return Ok(timeline);
+    }
+
+    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0, 99991234, 100200300)
+    if game_id == 0 || game_id == 99991234 || game_id == 100200300 {
+        return Ok(build_mock_match_timeline(game_id));
+    }
+
+    Err(format!("无法获取对局 {} 的原始时间线数据", game_id))
+}
+
+#[tauri::command]
+pub async fn get_raw_match_detail(
+    state: State<'_, TauriAppState>,
+    game_id: u64,
+) -> Result<Value, String> {
+    if game_id == 0 {
+        return Err("Invalid game_id: 0".to_string());
+    }
+
+    // 1. Try real LCU endpoint (with LRU cache in LCU client)
+    if let Some(detail) = state.lcu.get_raw_match_detail(game_id).await {
+        return Ok(detail);
+    }
+
+    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0, 99991234, 100200300)
+    if game_id == 99991234 || game_id == 100200300 {
+        return Ok(build_mock_match_detail(game_id as i64, &state.db));
+    }
+
+    Err(format!("无法获取对局 {} 的原始详情数据", game_id))
 }
 
 #[tauri::command]
@@ -606,9 +894,9 @@ pub async fn get_automation_config(
     Ok(json!({
         "auto_accept_match": cfg.auto_accept_match,
         "auto_accept_delay_seconds": cfg.auto_accept_delay_seconds,
-        "auto_swap_bench": false,
-        "auto_apply_runes": true,
-        "bench_preferred_champions": ["266", "84", "64", "222"]
+        "auto_swap_bench": cfg.auto_swap_bench,
+        "auto_apply_runes": cfg.auto_apply_runes,
+        "bench_preferred_champions": cfg.bench_preferred_champions
     }))
 }
 
@@ -618,11 +906,26 @@ pub async fn update_automation_config(
     config: Value,
 ) -> Result<GenericResult, String> {
     let auto_accept = config.get("auto_accept_match").and_then(|v| v.as_bool());
-    let delay = config.get("auto_accept_delay_seconds").and_then(|v| v.as_u64());
+    let delay = config.get("auto_accept_delay_seconds")
+        .and_then(|v| v.as_f64().or_else(|| v.as_u64().map(|u| u as f64)))
+        .map(|d| (d.round() as u64).clamp(0, 15));
+    let auto_swap = config.get("auto_swap_bench").and_then(|v| v.as_bool());
+    let auto_runes = config.get("auto_apply_runes").and_then(|v| v.as_bool());
+    let bench_champs = config.get("bench_preferred_champions").and_then(|v| v.as_array()).map(|arr| {
+        let mut seen = std::collections::HashSet::new();
+        arr.iter().filter_map(|x| {
+            let s = x.as_str().map(|s| s.trim().to_string()).or_else(|| x.as_i64().map(|n| n.to_string()))?;
+            if !s.is_empty() && seen.insert(s.clone()) {
+                Some(s)
+            } else {
+                None
+            }
+        }).collect()
+    });
 
     state
         .config
-        .update(None, None, None, None, None, None, None, auto_accept, delay)
+        .update_automation(auto_accept, delay, auto_swap, auto_runes, bench_champs)
         .await;
 
     Ok(GenericResult {
@@ -631,22 +934,159 @@ pub async fn update_automation_config(
     })
 }
 
+pub async fn do_apply_runes_and_spells(
+    lcu: &lol_hex_rust::lcu::LcuClient,
+    db: &lol_hex_rust::data::loader::Database,
+    champion_id: i64,
+) -> (bool, String) {
+    lcu.do_apply_runes_and_spells(db, champion_id).await
+}
+
 #[tauri::command]
 pub async fn apply_runes_and_spells(
-    _state: State<'_, TauriAppState>,
+    state: State<'_, TauriAppState>,
     champion_id: i64,
 ) -> Result<GenericResult, String> {
     tracing::info!("apply_runes_and_spells for champion: {}", champion_id);
-    let cid_str = champion_id.to_string();
-    let opgg = lol_hex_rust::crawler::OpggClient::new();
-    if let Some(detail) = opgg.get_champion_detail(&cid_str, "all").await {
-        if let Some(runes) = detail.get("recommendedRunes") {
-            tracing::info!("Found recommended runes: {:?}", runes);
-        }
-    }
-
+    let (success, message) = do_apply_runes_and_spells(&state.lcu, &state.db, champion_id).await;
     Ok(GenericResult {
-        success: true,
-        message: Some("推荐符文与召唤师技能已自动应用至客户端".to_string()),
+        success,
+        message: Some(message),
     })
 }
+
+#[tauri::command]
+pub async fn search_summoner(
+    state: State<'_, TauriAppState>,
+    name: String,
+) -> Result<Value, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("搜索内容不能为空".to_string());
+    }
+
+    // 1. Try search by summoner name
+    if let Some(mut sum) = state.lcu.get_summoner_by_name(trimmed).await {
+        if sum.get("tagLine").and_then(|v| v.as_str()).map_or(true, |t| t.is_empty()) {
+            if let Some(tag) = trimmed.split('#').nth(1) {
+                if !tag.trim().is_empty() {
+                    sum["tagLine"] = json!(tag.trim());
+                }
+            }
+        }
+        return Ok(sum);
+    }
+
+    // 2. Try lookup by puuid
+    if let Some(sum) = state.lcu.get_summoner_by_puuid(trimmed).await {
+        return Ok(sum);
+    }
+
+    // 3. Fallback / mock search support
+    if trimmed.contains("演练")
+        || trimmed.contains("测试")
+        || trimmed.contains("mock")
+        || trimmed.contains("demo")
+        || trimmed.contains("Demo")
+    {
+        return Ok(json!({
+            "puuid": "mock_demo_summoner_search",
+            "gameName": trimmed,
+            "tagLine": "DEMO",
+            "displayName": trimmed,
+            "profileIconId": 548,
+            "summonerLevel": 188
+        }));
+    }
+
+    Err(format!("未查询到召唤师 '{}' 的信息", trimmed))
+}
+
+#[tauri::command]
+pub async fn toggle_ongoing_overlay(app: AppHandle) -> Result<bool, String> {
+    if let Some(window) = app.get_webview_window("ongoing-overlay") {
+        let is_visible = window.is_visible().map_err(|e| e.to_string())?;
+        if is_visible {
+            window.hide().map_err(|e| e.to_string())?;
+            Ok(false)
+        } else {
+            window.show().map_err(|e| e.to_string())?;
+            let _ = window.set_focus();
+            Ok(true)
+        }
+    } else {
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "ongoing-overlay",
+            tauri::WebviewUrl::App("index.html?window=overlay".into()),
+        )
+        .title("HexBrain 实时对局悬浮窗")
+        .inner_size(1120.0, 720.0)
+        .min_inner_size(800.0, 500.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+        window.show().map_err(|e| e.to_string())?;
+        let _ = window.set_focus();
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+pub async fn set_ongoing_overlay_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("ongoing-overlay") {
+        if visible {
+            window.show().map_err(|e| e.to_string())?;
+            let _ = window.set_focus();
+        } else {
+            window.hide().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    } else if visible {
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "ongoing-overlay",
+            tauri::WebviewUrl::App("index.html?window=overlay".into()),
+        )
+        .title("HexBrain 实时对局悬浮窗")
+        .inner_size(1120.0, 720.0)
+        .min_inner_size(800.0, 500.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+        window.show().map_err(|e| e.to_string())?;
+        let _ = window.set_focus();
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub async fn set_ongoing_overlay_always_on_top(
+    app: AppHandle,
+    always_on_top: bool,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("ongoing-overlay") {
+        window
+            .set_always_on_top(always_on_top)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn is_ongoing_overlay_visible(app: AppHandle) -> Result<bool, String> {
+    if let Some(window) = app.get_webview_window("ongoing-overlay") {
+        window.is_visible().map_err(|e| e.to_string())
+    } else {
+        Ok(false)
+    }
+}
+

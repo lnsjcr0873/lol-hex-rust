@@ -169,6 +169,11 @@ export function getChampionName(champId: number): string {
   return CHAMPION_NAMES_MAP[champId] || `英雄${champId}`
 }
 
+export function getChampionTitle(champId: number): string {
+  return CHAMPION_NAMES_MAP[champId] || ''
+}
+
+
 export function getChampionIconUrl(champId: number): string {
   if (!champId || champId <= 0) {
     return 'https://ddragon.leagueoflegends.com/cdn/14.24.1/img/profileicon/29.png'

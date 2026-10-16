@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::config::{get_preset_definitions, ConfigManager};
 use crate::data::loader::Database;
 use crate::engine::player_history::{
-    compute_radar, evaluate_match_participants, MatchParticipantInput, OngoingMatchResponse,
+    compute_radar, evaluate_match_participants, CachedPlayerRecord, MatchParticipantInput, OngoingMatchResponse,
     ParsedMatchRecord, PlayerHistoryManager,
 };
 use crate::lcu::LcuClient;
@@ -33,6 +33,18 @@ pub struct AppState {
 pub struct HistoryQuery {
     pub limit: Option<usize>,
     pub queue_id: Option<i32>,
+    #[serde(rename = "queueId")]
+    pub queue_id_camel: Option<i32>,
+    pub beg_index: Option<usize>,
+    #[serde(rename = "begIndex")]
+    pub beg_index_camel: Option<usize>,
+    pub end_index: Option<usize>,
+    #[serde(rename = "endIndex")]
+    pub end_index_camel: Option<usize>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+    #[serde(rename = "pageSize")]
+    pub page_size_camel: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +83,15 @@ pub struct ConfigUpdatePayload {
     #[serde(rename = "autoAcceptDelaySeconds")]
     pub auto_accept_delay_seconds_camel: Option<u64>,
     pub auto_accept_delay_seconds: Option<u64>,
+    #[serde(rename = "autoSwapBench")]
+    pub auto_swap_bench_camel: Option<bool>,
+    pub auto_swap_bench: Option<bool>,
+    #[serde(rename = "autoApplyRunes")]
+    pub auto_apply_runes_camel: Option<bool>,
+    pub auto_apply_runes: Option<bool>,
+    #[serde(rename = "benchPreferredChampions")]
+    pub bench_preferred_champions_camel: Option<Vec<String>>,
+    pub bench_preferred_champions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,8 +127,12 @@ pub fn create_router(state: AppState) -> axum::Router {
         .route("/api/match/ongoing", axum::routing::get(get_ongoing_match))
         .route("/api/match/mock-ongoing", axum::routing::get(get_mock_ongoing))
         .route("/api/match/history/:puuid", axum::routing::get(get_match_history))
+        .route("/api/match/raw-history/:puuid", axum::routing::get(get_raw_match_history))
+        .route("/api/player/champion-mastery/:puuid", axum::routing::get(get_player_champion_mastery))
         .route("/api/match/detail/:game_id", axum::routing::get(get_match_detail))
+        .route("/api/match/raw-detail/:game_id", axum::routing::get(get_raw_match_detail))
         .route("/api/match/timeline/:game_id", axum::routing::get(get_match_timeline))
+        .route("/api/match/raw-timeline/:game_id", axum::routing::get(get_raw_match_timeline))
         .route("/api/chat/send-records", axum::routing::post(send_chat_records))
         // Settings & Preference APIs
         .route("/api/config", axum::routing::get(get_config).post(update_config))
@@ -171,9 +196,9 @@ async fn get_current_summoner(State(state): State<AppState>) -> Json<Value> {
             .and_then(|v| v.as_str())
             .unwrap_or("召唤师")
             .to_string();
-        let tag_line = sum.get("tagLine").and_then(|v| v.as_str()).unwrap_or("CN").to_string();
-        let level = sum.get("summonerLevel").and_then(|v| v.as_i64()).unwrap_or(128) as i32;
-        let icon_id = sum.get("profileIconId").and_then(|v| v.as_i64()).unwrap_or(548) as i32;
+        let tag_line = sum.get("tagLine").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let level = sum.get("summonerLevel").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let icon_id = sum.get("profileIconId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
         let ranked = if !puuid.is_empty() {
             state.lcu.get_player_ranked_stats(&puuid).await
@@ -194,59 +219,33 @@ async fn get_current_summoner(State(state): State<AppState>) -> Json<Value> {
             },
             "ranked": ranked.unwrap_or(json!({
                 "solo": {
-                    "tier": "EMERALD",
-                    "division": "III",
-                    "tier_str": "翡翠 III",
-                    "lp": 58,
-                    "wins": 42,
-                    "losses": 30,
-                    "win_rate": 0.58
+                    "tier": "UNRANKED",
+                    "division": "",
+                    "tier_str": "未定级",
+                    "lp": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "win_rate": 0.0
                 },
                 "flex": {
-                    "tier": "PLATINUM",
-                    "division": "I",
-                    "tier_str": "铂金 I",
-                    "lp": 80,
-                    "wins": 25,
-                    "losses": 15,
-                    "win_rate": 0.625
+                    "tier": "UNRANKED",
+                    "division": "",
+                    "tier_str": "未定级",
+                    "lp": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "win_rate": 0.0
                 }
             }))
         }));
     }
 
-    // Fallback Mock Summoner
+    // When LCU is disconnected, return explicit disconnected state
     Json(json!({
-        "summoner": {
-            "puuid": "mock_current_puuid",
-            "name": "狂傲天王",
-            "gameName": "狂傲天王",
-            "tag_line": "MOCK",
-            "tagLine": "MOCK",
-            "level": 168,
-            "profile_icon_id": 548,
-            "profileIconId": 548
-        },
-        "ranked": {
-            "solo": {
-                "tier": "EMERALD",
-                "division": "III",
-                "tier_str": "翡翠 III",
-                "lp": 58,
-                "wins": 58,
-                "losses": 42,
-                "win_rate": 0.58
-            },
-            "flex": {
-                "tier": "PLATINUM",
-                "division": "I",
-                "tier_str": "铂金 I",
-                "lp": 80,
-                "wins": 30,
-                "losses": 20,
-                "win_rate": 0.60
-            }
-        }
+        "is_connected": false,
+        "summoner": null,
+        "ranked": null,
+        "message": "英雄联盟客户端未连接（请先启动游戏并登录）"
     }))
 }
 
@@ -260,20 +259,54 @@ async fn get_mock_ongoing(State(state): State<AppState>) -> Json<OngoingMatchRes
     Json(resp)
 }
 
+async fn get_player_champion_mastery(
+    AxPath(puuid): AxPath<String>,
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let target = if puuid == "me" || puuid == "current" {
+        String::new()
+    } else {
+        puuid
+    };
+    if let Some(val) = state.lcu.get_champion_mastery(&target).await {
+        return Json(val);
+    }
+    Json(json!([]))
+}
+
 async fn get_match_history(
     AxPath(puuid): AxPath<String>,
     Query(query): Query<HistoryQuery>,
     State(state): State<AppState>,
 ) -> Json<Value> {
-    let limit = query.limit.unwrap_or(20);
-    let queue_id = query.queue_id.unwrap_or(0);
+    let queue_id = query.queue_id.or(query.queue_id_camel).unwrap_or(0);
+    let beg_idx = query.beg_index.or(query.beg_index_camel);
+    let end_idx = query.end_index.or(query.end_index_camel);
+    let p_size = query.page_size.or(query.page_size_camel).or(query.limit);
+
+    let (resolved_beg, resolved_end) = match (beg_idx, end_idx) {
+        (Some(b), Some(e)) => (b, e.max(b)),
+        (Some(b), None) => {
+            let count = p_size.unwrap_or(20).clamp(1, 200);
+            (b, b + count.saturating_sub(1))
+        }
+        (None, Some(e)) => (0, e),
+        (None, None) => {
+            let p = query.page.unwrap_or(1).max(1);
+            let ps = p_size.unwrap_or(20).clamp(1, 200);
+            let b = (p - 1) * ps;
+            let e = b + ps - 1;
+            (b, e)
+        }
+    };
+    let resolved_end = resolved_end.min(resolved_beg + 199);
 
     let mut query_name = String::new();
     let mut resolved_puuid = if puuid == "me" || puuid == "current" {
         if let Some(sum) = state.lcu.get_current_summoner().await {
-            sum.get("puuid").and_then(|v| v.as_str()).unwrap_or("mock_puuid_0").to_string()
+            sum.get("puuid").and_then(|v| v.as_str()).unwrap_or("").to_string()
         } else {
-            "mock_puuid_0".to_string()
+            String::new()
         }
     } else {
         puuid.clone()
@@ -290,30 +323,47 @@ async fn get_match_history(
         }
     }
 
-    // Check cache with 120s TTL for fresh match history
-    let cached = state.history.get_player_data_fresh(&resolved_puuid, std::time::Duration::from_secs(120)).await;
-    let record = match cached {
-        Some(rec) => rec,
-        None => {
-            if let Some(rec) = state.history.fetch_and_cache_player(&resolved_puuid, &query_name, &state.lcu).await {
-                rec
-            } else {
-                let (mock_slot, mock_cid) = if resolved_puuid.starts_with("mock_puuid_") {
-                    let parts: Vec<&str> = resolved_puuid.trim_start_matches("mock_puuid_").split('_').collect();
-                    let slot = parts.last().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-                    let mock_pool = [266, 64, 517, 145, 111];
-                    (slot, mock_pool[slot % mock_pool.len()])
-                } else {
-                    (0, 266)
-                };
-                let mut mock = state.history.build_mock_player_profile(mock_slot, mock_cid);
-                if !query_name.is_empty() {
-                    mock.summoner_name = query_name.clone();
-                    mock.raw_summoner["name"] = json!(query_name);
-                    mock.raw_summoner["gameName"] = json!(query_name);
-                }
-                mock
-            }
+    // Dynamic fetch with cache fallback:
+    let record = if let Some(rec) = state.history.fetch_and_cache_player(&resolved_puuid, &query_name, &state.lcu, resolved_beg, resolved_end).await {
+        let count = (resolved_end + 1).saturating_sub(resolved_beg);
+        let mut sliced = rec;
+        if resolved_beg > 0 {
+            sliced.matches = sliced.matches.into_iter().skip(resolved_beg).take(count).collect();
+        } else if sliced.matches.len() > count {
+            sliced.matches.truncate(count);
+        }
+        sliced
+    } else if let Some(mut cached) = state.history.get_player_data_fresh(&resolved_puuid, std::time::Duration::from_secs(600)).await {
+        let count = (resolved_end + 1).saturating_sub(resolved_beg);
+        cached.matches = cached.matches.into_iter().skip(resolved_beg).take(count).collect();
+        cached
+    } else if resolved_puuid.starts_with("mock_puuid_") {
+        let parts: Vec<&str> = resolved_puuid.trim_start_matches("mock_puuid_").split('_').collect();
+        let slot = parts.last().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+        let mock_pool = [266, 64, 517, 145, 111];
+        let mut mock = state.history.build_mock_player_profile(slot, mock_pool[slot % mock_pool.len()]);
+        if !query_name.is_empty() {
+            mock.summoner_name = query_name.clone();
+            mock.raw_summoner["name"] = json!(query_name);
+            mock.raw_summoner["gameName"] = json!(query_name);
+        }
+        let count = (resolved_end + 1).saturating_sub(resolved_beg);
+        mock.matches = mock.matches.into_iter().skip(resolved_beg).take(count).collect();
+        mock
+    } else {
+        CachedPlayerRecord {
+            puuid: resolved_puuid.clone(),
+            summoner_name: if !query_name.is_empty() { query_name.clone() } else { "未连接客户端".to_string() },
+            tier: "UNRANKED".to_string(),
+            tier_str: "未定级".to_string(),
+            tier_color: "#94a3b8".to_string(),
+            lp: 0,
+            ranked_wins: 0,
+            ranked_losses: 0,
+            matches: Vec::new(),
+            fetched_at: std::time::Instant::now(),
+            raw_summoner: json!({}),
+            raw_ranked: json!({}),
         }
     };
 
@@ -324,7 +374,10 @@ async fn get_match_history(
     };
 
     let first_cid = filtered_matches.first().map(|m| m.champion_id).unwrap_or(0);
-    let mut tactical = state.history.compute_tactical_profile(&record, first_cid, limit);
+    let sample_count = (resolved_end + 1).saturating_sub(resolved_beg);
+    let mut rec_for_eval = record.clone();
+    rec_for_eval.matches = filtered_matches.clone();
+    let mut tactical = state.history.compute_tactical_profile(&rec_for_eval, first_cid, sample_count);
     let radar = compute_radar(&filtered_matches);
     tactical.radar = radar.clone();
 
@@ -356,10 +409,14 @@ async fn get_match_detail(
         }
     }
 
-    // 2. Generate structured 10-player mock details for review
-    let gid = game_id.parse::<i64>().unwrap_or(99991234);
-    let mock = build_mock_match_detail(gid, &state.db);
-    Json(mock)
+    // 2. Only return demo mock if explicitly requested with negative ID or demo ID
+    let gid = game_id.parse::<i64>().unwrap_or(0);
+    if gid < 0 || game_id.starts_with('-') || gid == 99991234 {
+        let mock = build_mock_match_detail(gid, &state.db);
+        return Json(mock);
+    }
+
+    Json(json!({ "error": "未能从客户端获取该场对局详情" }))
 }
 
 async fn get_match_timeline(
@@ -373,8 +430,107 @@ async fn get_match_timeline(
         }
     }
 
-    let mock = build_mock_match_timeline(gid);
-    Json(mock)
+    if gid == 0 || game_id.starts_with('-') || gid == 99991234 || gid == 100200300 {
+        let mock = build_mock_match_timeline(gid);
+        return Json(mock);
+    }
+
+    Json(json!({ "error": "未能从客户端获取该场对局时间轴" }))
+}
+
+async fn get_raw_match_history(
+    AxPath(puuid): AxPath<String>,
+    Query(query): Query<HistoryQuery>,
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let current_sum = state.lcu.get_current_summoner().await;
+    let target_puuid = if puuid == "me" || puuid == "current" {
+        current_sum
+            .as_ref()
+            .and_then(|s| s.get("puuid"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        puuid
+    };
+
+    if target_puuid.is_empty() {
+        return Json(json!({
+            "accountId": 0,
+            "games": {
+                "games": []
+            }
+        }));
+    }
+
+    let b_idx = query.beg_index.or(query.beg_index_camel).unwrap_or(0);
+    let p_size = query.page_size.or(query.page_size_camel).or(query.limit).unwrap_or(20).clamp(1, 200);
+    let e_idx = query.end_index.or(query.end_index_camel).unwrap_or_else(|| b_idx.saturating_add(p_size).saturating_sub(1)).max(b_idx);
+    let queue_id = query.queue_id.or(query.queue_id_camel);
+
+    if let Some(mut raw_history) = state.lcu.get_raw_match_history(&target_puuid, b_idx, e_idx).await {
+        if let Some(qid) = queue_id {
+            if qid > 0 {
+                let filter_fn = |arr: &mut Vec<Value>| {
+                    arr.retain(|game| {
+                        game.get("queueId").and_then(|q| q.as_i64()).map(|q| q == qid as i64).unwrap_or(false)
+                    });
+                };
+
+                if let Some(g_val) = raw_history.get_mut("games") {
+                    if let Some(arr) = g_val.as_array_mut() {
+                        filter_fn(arr);
+                    } else if let Some(arr) = g_val.get_mut("games").and_then(|g| g.as_array_mut()) {
+                        filter_fn(arr);
+                    }
+                } else if let Some(arr) = raw_history.as_array_mut() {
+                    filter_fn(arr);
+                }
+            }
+        }
+        return Json(raw_history);
+    }
+
+    Json(json!({ "error": "无法从客户端获取原始战绩数据" }))
+}
+
+async fn get_raw_match_timeline(
+    AxPath(game_id): AxPath<String>,
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let gid = game_id.parse::<u64>().unwrap_or(0);
+    if gid > 0 {
+        if let Some(timeline) = state.lcu.get_raw_match_timeline(gid).await {
+            return Json(timeline);
+        }
+    }
+
+    if gid == 0 || game_id.starts_with('-') || gid == 99991234 || gid == 100200300 {
+        let mock = build_mock_match_timeline(gid);
+        return Json(mock);
+    }
+
+    Json(json!({ "error": "无法获取原始时间线数据" }))
+}
+
+async fn get_raw_match_detail(
+    AxPath(game_id): AxPath<String>,
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let gid = game_id.parse::<u64>().unwrap_or(0);
+    if gid > 0 {
+        if let Some(detail) = state.lcu.get_raw_match_detail(gid).await {
+            return Json(detail);
+        }
+    }
+
+    if gid == 0 || game_id.starts_with('-') || gid == 99991234 || gid == 100200300 {
+        let mock = build_mock_match_detail(gid as i64, &state.db);
+        return Json(mock);
+    }
+
+    Json(json!({ "error": "无法获取原始详情数据" }))
 }
 
 pub fn spell_meta(spell_id: i32) -> (&'static str, &'static str) {
@@ -416,11 +572,13 @@ fn resolve_participant_role(p: &Value, pid: i64) -> String {
 }
 
 pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
-    let game_id = raw.get("gameId").and_then(|v| v.as_i64())?;
+    let game_id = raw.get("gameId")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())))
+        .or_else(|| raw.get("id").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))))?;
     let game_creation = raw.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
-    let game_duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(1800);
+    let game_duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
     let game_duration_str = format!("{}:{:02}", game_duration / 60, game_duration % 60);
-    let queue_id = raw.get("queueId").and_then(|v| v.as_i64()).unwrap_or(420) as i32;
+    let queue_id = raw.get("queueId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let game_mode = raw.get("gameMode").and_then(|v| v.as_str()).unwrap_or("CLASSIC").to_string();
 
     let mode_cn = match queue_id {
@@ -440,20 +598,22 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         _ => if game_mode == "ARAM" { "极地大乱斗" } else { "召唤师峡谷" },
     };
 
-    let p_identities = raw.get("participantIdentities").and_then(|v| v.as_array())?;
+    let p_identities = raw.get("participantIdentities").and_then(|v| v.as_array());
     let participants = raw.get("participants").and_then(|v| v.as_array())?;
 
     let mut name_map = HashMap::new();
-    for pi in p_identities {
-        let pid = pi.get("participantId").and_then(|v| v.as_i64()).unwrap_or(0);
-        let player = pi.get("player");
-        let name = player
-            .and_then(|p| p.get("summonerName").or_else(|| p.get("gameName")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("召唤师");
-        let puuid = player.and_then(|p| p.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
-        let tag_line = player.and_then(|p| p.get("tagLine")).and_then(|v| v.as_str()).unwrap_or("CN");
-        name_map.insert(pid, (name.to_string(), puuid.to_string(), tag_line.to_string()));
+    if let Some(identities) = p_identities {
+        for pi in identities {
+            let pid = pi.get("participantId").and_then(|v| v.as_i64()).unwrap_or(0);
+            let player = pi.get("player");
+            let name = player
+                .and_then(|p| p.get("summonerName").or_else(|| p.get("gameName")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("召唤师");
+            let puuid = player.and_then(|p| p.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
+            let tag_line = player.and_then(|p| p.get("tagLine")).and_then(|v| v.as_str()).unwrap_or("");
+            name_map.insert(pid, (name.to_string(), puuid.to_string(), tag_line.to_string()));
+        }
     }
 
     let mut blue_turrets = 0i32;
@@ -493,6 +653,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     struct RawParsedP {
         pid: i64,
         team_id: i64,
+        win: bool,
         puuid: String,
         summoner_name: String,
         tag_line: String,
@@ -517,17 +678,35 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         items: Vec<i32>,
         role: String,
         tier: String,
+        vision_score: i32,
     }
 
     let mut raw_players = Vec::new();
     let mut blue_participant_win = false;
 
     for p in participants {
-        let team_id = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(100);
+        let team_id = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(0);
         let pid = p.get("participantId").and_then(|v| v.as_i64()).unwrap_or(0);
         let cid = p.get("championId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let cname = db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid));
-        let (sname, puuid, tag_line) = name_map.get(&pid).cloned().unwrap_or(("召唤师".to_string(), String::new(), "CN".to_string()));
+        let (raw_sname, mut puuid, mut tag_line) = name_map.get(&pid).cloned().unwrap_or_default();
+        let sname = if !raw_sname.is_empty() {
+            raw_sname
+        } else if let Some(n) = p.get("summonerName").or_else(|| p.get("gameName")).and_then(|v| v.as_str()) {
+            n.to_string()
+        } else {
+            format!("玩家{}", pid)
+        };
+        if puuid.is_empty() {
+            if let Some(p_id) = p.get("puuid").and_then(|v| v.as_str()) {
+                puuid = p_id.to_string();
+            }
+        }
+        if tag_line.is_empty() {
+            if let Some(t) = p.get("tagLine").and_then(|v| v.as_str()) {
+                tag_line = t.to_string();
+            }
+        }
 
         let stats = p.get("stats");
         let win = stats.and_then(|s| s.get("win")).map(|w| {
@@ -538,19 +717,20 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             blue_participant_win = true;
         }
 
-        let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let d = stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let a = stats.and_then(|s| s.get("assists")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let lvl = stats.and_then(|s| s.get("champLevel")).and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-        let dmg = stats.and_then(|s| s.get("totalDamageDealtToChampions")).and_then(|v| v.as_i64()).unwrap_or(0);
-        let taken = stats.and_then(|s| s.get("totalDamageTaken")).and_then(|v| v.as_i64()).unwrap_or(0);
-        let mitig = stats.and_then(|s| s.get("damageSelfMitigated")).and_then(|v| v.as_i64()).unwrap_or(0);
-        let gold = stats.and_then(|s| s.get("goldEarned")).and_then(|v| v.as_i64()).unwrap_or(0);
-        let cs = stats.and_then(|s| s.get("totalMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32
-            + stats.and_then(|s| s.get("neutralMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as i32;
+        let d = stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as i32;
+        let a = stats.and_then(|s| s.get("assists")).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as i32;
+        let lvl = stats.and_then(|s| s.get("champLevel")).and_then(|v| v.as_i64()).unwrap_or(1).clamp(1, 30) as i32;
+        let dmg = stats.and_then(|s| s.get("totalDamageDealtToChampions")).and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+        let taken = stats.and_then(|s| s.get("totalDamageTaken")).and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+        let mitig = stats.and_then(|s| s.get("damageSelfMitigated")).and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+        let gold = stats.and_then(|s| s.get("goldEarned")).and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+        let cs = (stats.and_then(|s| s.get("totalMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0).max(0)
+            + stats.and_then(|s| s.get("neutralMinionsKilled")).and_then(|v| v.as_i64()).unwrap_or(0).max(0)) as i32;
+        let vs = stats.and_then(|s| s.get("visionScore")).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as i32;
 
-        let s1 = p.get("spell1Id").and_then(|v| v.as_i64()).unwrap_or(4) as i32;
-        let s2 = p.get("spell2Id").and_then(|v| v.as_i64()).unwrap_or(12) as i32;
+        let s1 = p.get("spell1Id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let s2 = p.get("spell2Id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let (_, spell1_icon) = spell_meta(s1);
         let (_, spell2_icon) = spell_meta(s2);
 
@@ -566,7 +746,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         let role = resolve_participant_role(p, pid);
         let tier = p.get("highestAchievedSeasonTier")
             .and_then(|v| v.as_str())
-            .unwrap_or("DIAMOND")
+            .unwrap_or("UNRANKED")
             .to_string();
 
         let team_str = if team_id == 100 { "blue" } else { "red" };
@@ -574,6 +754,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         raw_players.push(RawParsedP {
             pid,
             team_id,
+            win,
             puuid,
             summoner_name: sname,
             tag_line,
@@ -598,26 +779,29 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             items,
             role,
             tier,
+            vision_score: vs,
         });
     }
 
     let final_blue_win = blue_win_flag.unwrap_or(blue_participant_win);
     let final_red_win = red_win_flag.unwrap_or(!final_blue_win);
 
-    if blue_turrets == 0 && red_turrets == 0 {
-        if final_blue_win {
-            blue_turrets = 9; red_turrets = 2;
-            blue_dragons = 3; red_dragons = 1;
-            blue_barons = 1; red_barons = 0;
-        } else {
-            blue_turrets = 2; red_turrets = 9;
-            blue_dragons = 1; red_dragons = 3;
-            blue_barons = 0; red_barons = 1;
-        }
+    // In ARAM or special modes where dragons/barons don't exist, ensure 0
+    if queue_id == 450 || queue_id == 860 {
+        blue_dragons = 0;
+        red_dragons = 0;
+        blue_barons = 0;
+        red_barons = 0;
     }
 
     let eval_inputs: Vec<MatchParticipantInput> = raw_players.iter().map(|p| {
-        let is_win = if p.team_id == 100 { final_blue_win } else { final_red_win };
+        let is_win = if queue_id == 1700 || queue_id == 1710 || (p.team_id != 100 && p.team_id != 200) {
+            p.win
+        } else if p.team_id == 100 {
+            final_blue_win
+        } else {
+            final_red_win
+        };
         MatchParticipantInput {
             participant_id: p.pid,
             puuid: p.puuid.clone(),
@@ -631,7 +815,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             damage_mitigated: p.damage_mitigated,
             gold: p.gold_earned,
             cs: p.minions_killed,
-            vision_score: 30,
+            vision_score: p.vision_score,
         }
     }).collect();
 
@@ -703,6 +887,8 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
             "cs": p.minions_killed,
             "items": p.items,
             "item_trinket": item_trinket,
+            "vision_score": p.vision_score,
+            "visionScore": p.vision_score,
             "badges": []
         });
 
@@ -917,8 +1103,8 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
         let puuid = p.get("puuid").and_then(|v| v.as_str()).unwrap_or("");
         let sname = p.get("summoner_name").and_then(|v| v.as_str()).unwrap_or("");
         let cid = p.get("champion_id").and_then(|v| v.as_i64()).unwrap_or(0);
-        let s1 = p.get("spell1_id").and_then(|v| v.as_i64()).unwrap_or(4);
-        let s2 = p.get("spell2_id").and_then(|v| v.as_i64()).unwrap_or(14);
+        let s1 = p.get("spell1_id").and_then(|v| v.as_i64()).unwrap_or(0);
+        let s2 = p.get("spell2_id").and_then(|v| v.as_i64()).unwrap_or(0);
         let k = p.get("kills").and_then(|v| v.as_i64()).unwrap_or(0);
         let d = p.get("deaths").and_then(|v| v.as_i64()).unwrap_or(0);
         let a = p.get("assists").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -928,7 +1114,7 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
         let gold = p.get("gold_earned").and_then(|v| v.as_i64()).unwrap_or(0);
         let cs = p.get("minions_killed").and_then(|v| v.as_i64()).unwrap_or(0);
         let lvl = p.get("champion_level").and_then(|v| v.as_i64()).unwrap_or(1);
-        let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("MIDDLE");
+        let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("");
 
         raw_identities.push(json!({
             "participantId": pid,
@@ -1272,20 +1458,22 @@ async fn send_chat_records(
     lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
 
     for (idx, p) in ongoing.my_team.iter().take(5).enumerate() {
-        let pos = match idx {
-            0 => "上路",
-            1 => "打野",
-            2 => "中路",
-            3 => "射手",
-            _ => "辅助",
+        let pos = match p.position.to_uppercase().as_str() {
+            "TOP" => "上路",
+            "JUNGLE" => "打野",
+            "MID" | "MIDDLE" => "中路",
+            "BOTTOM" | "BOT" | "ADC" => "射手",
+            "UTILITY" | "SUPPORT" => "辅助",
+            _ => "",
         };
+        let pos_str = if !pos.is_empty() { format!("{} ", pos) } else { String::new() };
         let wr = p.tactical_analysis.recent_win_rate_pct;
         let tag = p.premade_tag.as_deref().unwrap_or("");
         let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
         lines.push(format!(
-            "{}. {} [{}] {} (近{}场胜率{}%){}",
+            "{}. {}[{}] {} (近{}场胜率{}%){}",
             idx + 1,
-            pos,
+            pos_str,
             p.summoner_name,
             p.tactical_analysis.tier_str,
             p.tactical_analysis.recent_count,
@@ -1310,10 +1498,9 @@ async fn send_chat_records(
             "message": if any_success { "战绩透视已成功广播至选人聊天室！" } else { "客户端拒绝发送，请确认当前处于选人阶段" }
         }))
     } else {
-        // Fallback: If not connected to active room, still return success for UI feedback
         Json(json!({
-            "success": true,
-            "message": "战绩推演完毕（模拟选人环境已预先生成透视文本）"
+            "success": false,
+            "message": "未检测到活跃选人聊天室，请在英雄选择阶段重试"
         }))
     }
 }
@@ -1348,6 +1535,14 @@ async fn update_config(
     let aads = payload.auto_accept_delay_seconds.or(payload.auto_accept_delay_seconds_camel);
 
     let updated = state.config.update(rc, hw, as_, ci, gcm, tm, preset, aam, aads).await;
+    let asb = payload.auto_swap_bench.or(payload.auto_swap_bench_camel);
+    let aar = payload.auto_apply_runes.or(payload.auto_apply_runes_camel);
+    let bpc = payload.bench_preferred_champions.or(payload.bench_preferred_champions_camel);
+    let updated = if asb.is_some() || aar.is_some() || bpc.is_some() {
+        state.config.update_automation(aam, aads, asb, aar, bpc).await
+    } else {
+        updated
+    };
     let presets = get_preset_definitions();
     let preset_info = presets.get(&updated.current_preset).cloned();
 
@@ -1407,20 +1602,28 @@ async fn update_item_preferences(
     }))
 }
 
-async fn get_overlay_status() -> Json<Value> {
+async fn get_overlay_status(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.ingame_overlay.config.read().await;
     Json(json!({
-        "inGamePhase": false,
-        "isWindowActive": false,
-        "isDeadBoost": false,
-        "hotkey": "[",
-        "voice": true,
-        "completedMilestones": ["round_start", "round_lvl7"],
-        "pendingMilestone": "round_lvl11",
-        "currentWindowReason": "待命中"
+        "inGamePhase": state.ingame_overlay.is_showing.load(std::sync::atomic::Ordering::Relaxed),
+        "isWindowActive": state.ingame_overlay.running.load(std::sync::atomic::Ordering::Relaxed),
+        "hotkey": cfg.hotkey,
+        "voice": cfg.voice_enabled,
+        "autoSensingEnabled": cfg.auto_sensing_enabled,
     }))
 }
 
-async fn update_overlay_config(Json(_body): Json<Value>) -> Json<Value> {
+async fn update_overlay_config(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let mut cfg = state.ingame_overlay.config.write().await;
+    if let Some(v) = body.get("autoSensingEnabled").and_then(|v| v.as_bool()) {
+        cfg.auto_sensing_enabled = v;
+    }
+    if let Some(v) = body.get("voice").or_else(|| body.get("voiceEnabled")).and_then(|v| v.as_bool()) {
+        cfg.voice_enabled = v;
+    }
+    if let Some(v) = body.get("hotkey").and_then(|v| v.as_str()) {
+        cfg.hotkey = v.to_string();
+    }
     Json(json!({ "success": true, "message": "Overlay 配置已更新" }))
 }
 
@@ -1434,17 +1637,26 @@ async fn mock_overlay(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "success": true, "message": "模拟感知已激活" }))
 }
 
-async fn get_item_overlay_status() -> Json<Value> {
+async fn get_item_overlay_status(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.item_overlay.config.read().await;
     Json(json!({
-        "enabled": true,
-        "voice": true,
-        "hotkey": "]",
-        "activeAugments": ["棱彩神话", "终极连击"],
-        "threatSummary": "敌方攻守均衡，按流派常规出装"
+        "enabled": cfg.enabled,
+        "voice": cfg.voice_enabled,
+        "hotkey": cfg.hotkey,
     }))
 }
 
-async fn update_item_overlay_config(Json(_body): Json<Value>) -> Json<Value> {
+async fn update_item_overlay_config(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let mut cfg = state.item_overlay.config.write().await;
+    if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        cfg.enabled = v;
+    }
+    if let Some(v) = body.get("voice").or_else(|| body.get("voiceEnabled")).and_then(|v| v.as_bool()) {
+        cfg.voice_enabled = v;
+    }
+    if let Some(v) = body.get("hotkey").and_then(|v| v.as_str()) {
+        cfg.hotkey = v.to_string();
+    }
     Json(json!({ "success": true, "message": "装备推荐 HUD 配置已保存" }))
 }
 
@@ -1453,23 +1665,44 @@ async fn trigger_item_overlay(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "success": true, "message": "装备推荐扫描已执行" }))
 }
 
-async fn get_bench_overlay_status() -> Json<Value> {
+async fn get_bench_overlay_status(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.bench_overlay.config.read().await;
     Json(json!({
-        "enabled": true,
-        "isShowing": false,
-        "badgePosition": "bottom",
-        "verticalOffset": 8
+        "enabled": cfg.enabled,
+        "clickToSwap": cfg.click_to_swap,
+        "isShowing": state.bench_overlay.is_showing.load(std::sync::atomic::Ordering::Relaxed),
+        "badgePosition": cfg.badge_position,
+        "verticalOffset": cfg.vertical_offset
     }))
 }
 
-async fn update_bench_overlay_config(Json(_body): Json<Value>) -> Json<Value> {
+async fn update_bench_overlay_config(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let mut cfg = state.bench_overlay.config.write().await;
+    if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        cfg.enabled = v;
+    }
+    if let Some(v) = body.get("clickToSwap").and_then(|v| v.as_bool()) {
+        cfg.click_to_swap = v;
+    }
+    if let Some(v) = body.get("badgePosition").and_then(|v| v.as_str()) {
+        cfg.badge_position = v.to_string();
+    }
+    if let Some(v) = body.get("verticalOffset").and_then(|v| v.as_i64()) {
+        cfg.vertical_offset = v as i32;
+    }
     Json(json!({ "success": true, "message": "备战席 HUD 配置已保存" }))
 }
 
 async fn champ_select_reroll(State(state): State<AppState>) -> Json<Value> {
-    // In LCU: POST /lol-champ-select/v1/session/my-selection/reroll
-    let port_opt = state.lcu.ensure_credentials().await;
-    Json(json!({ "success": port_opt, "message": "已发送摇骰子请求" }))
+    let success = state.lcu.reroll_champion().await;
+    Json(json!({
+        "success": success,
+        "message": if success {
+            "已成功消耗骰子重置英雄！"
+        } else {
+            "重随骰子失败：请确认处于极地大乱斗选人阶段且剩余骰子充足"
+        }
+    }))
 }
 
 async fn champ_select_mock(State(state): State<AppState>) -> Json<Value> {

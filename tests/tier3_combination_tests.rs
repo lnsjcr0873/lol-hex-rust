@@ -170,7 +170,7 @@ async fn test_t3_03_account_switch_and_scoreboard_cache_invalidation() {
     // Simulate match history fetch for Account A
     let history_a = canned_match_history("puuid-user-A", 10, 0.8, 157, &[]);
     server.state.set_match_history("puuid-user-A", history_a).await;
-    let hist_res_a = client.get_player_match_history("puuid-user-A", 10).await.unwrap();
+    let hist_res_a = client.get_player_match_history("puuid-user-A", 0, 9).await.unwrap();
     assert_eq!(hist_res_a["games"]["games"].as_array().unwrap().len(), 10);
 
     // Account switch / relog to Account B
@@ -181,7 +181,7 @@ async fn test_t3_03_account_switch_and_scoreboard_cache_invalidation() {
     // Account B gets fresh, separate history
     let history_b = canned_match_history("puuid-user-B", 5, 0.4, 238, &[]);
     server.state.set_match_history("puuid-user-B", history_b).await;
-    let hist_res_b = client.get_player_match_history("puuid-user-B", 5).await.unwrap();
+    let hist_res_b = client.get_player_match_history("puuid-user-B", 0, 4).await.unwrap();
     assert_eq!(hist_res_b["games"]["games"].as_array().unwrap().len(), 5);
 
     // History manager sample limits maintained across switches
@@ -217,7 +217,7 @@ async fn test_t3_04_high_concurrency_batch_queries_and_radar() {
 
         handles.push(tokio::spawn(async move {
             let _permit = sem_clone.acquire().await.unwrap();
-            let history_val = client_clone.get_player_match_history(&puuid, 20).await?;
+            let history_val = client_clone.get_player_match_history(&puuid, 0, 19).await?;
 
             let games = history_val["games"]["games"].as_array().unwrap();
             let mut parsed_matches = Vec::new();

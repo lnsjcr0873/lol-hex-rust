@@ -54,7 +54,9 @@ impl CounterItemEngine {
         for e in enemy_team {
             let cname = e
                 .get("championName")
+                .or_else(|| e.get("champion_name"))
                 .or_else(|| e.get("name"))
+                .or_else(|| e.get("hero_name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
@@ -66,15 +68,21 @@ impl CounterItemEngine {
                             match t_str {
                                 "HIGH_HEAL" => {
                                     profile.has_high_heal = true;
-                                    healer_names.push(disp_name);
+                                    if !healer_names.contains(&disp_name) {
+                                        healer_names.push(disp_name);
+                                    }
                                 }
                                 "SUPER_TANK" => {
                                     profile.has_super_tank = true;
-                                    tank_names.push(disp_name);
+                                    if !tank_names.contains(&disp_name) {
+                                        tank_names.push(disp_name);
+                                    }
                                 }
                                 "SHIELD_HEAVY" => {
                                     profile.has_shield_heavy = true;
-                                    shield_names.push(disp_name);
+                                    if !shield_names.contains(&disp_name) {
+                                        shield_names.push(disp_name);
+                                    }
                                 }
                                 "HIGH_CC" => profile.has_high_cc = true,
                                 _ => {}
@@ -214,9 +222,12 @@ impl CounterItemEngine {
 
         for it in candidate_items {
             let mut c = it.clone();
-            let iid = c.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            let iid = c.get("itemId")
+                .or_else(|| c.get("id"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                .unwrap_or_default();
 
-            if urgent.contains(iid) {
+            if urgent.contains(&iid) {
                 let current_score = c.get("tacticalScore").and_then(|v| v.as_f64()).unwrap_or(50.0);
                 let boosted = current_score + (15.0 * intensity);
                 c["tacticalScore"] = Value::from((boosted * 10.0).round() / 10.0);
@@ -228,5 +239,69 @@ impl CounterItemEngine {
         }
 
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_analyze_enemy_threats_deduplication_and_name_fields() {
+        let enemies = vec![
+            json!({ "championName": "Soraka" }),
+            json!({ "champion_name": "Soraka" }),
+            json!({ "name": "Aatrox" }),
+        ];
+
+        let threat = CounterItemEngine::analyze_enemy_threats(&enemies);
+        assert!(threat.has_high_heal);
+        // "众星之子" and "暗裔剑魔" should each appear only once
+        let heal_note = threat.summary;
+        assert_eq!(heal_note.matches("众星之子").count(), 1);
+        assert_eq!(heal_note.matches("暗裔剑魔").count(), 1);
+    }
+
+    #[test]
+    fn test_apply_counter_recommendations_numeric_item_id() {
+        let threat = ThreatProfile {
+            has_high_heal: true,
+            summary: "强回血需重伤".to_string(),
+            ..Default::default()
+        };
+
+        let arch = ArchetypeInfo {
+            favored_tags: vec!["AP".to_string()],
+            forbidden_tags: vec!["AD".to_string()],
+            ..Default::default()
+        };
+
+        // Item with numeric itemId: 3165 (Morellonomicon)
+        let candidate_items = vec![
+            json!({
+                "itemId": 3165,
+                "itemName": "莫雷洛秘典",
+                "tacticalScore": 60.0
+            }),
+            json!({
+                "id": "3089",
+                "itemName": "灭世者的死亡之帽",
+                "tacticalScore": 80.0
+            })
+        ];
+
+        let out = CounterItemEngine::apply_counter_recommendations(
+            &candidate_items,
+            &threat,
+            &arch,
+            &HashSet::new(),
+            1.0,
+            true,
+        );
+
+        let morello = out.iter().find(|it| it["itemId"] == 3165).unwrap();
+        assert_eq!(morello["isCounterItem"], true);
+        assert_eq!(morello["tacticalScore"], 75.0); // 60.0 + 15.0
     }
 }

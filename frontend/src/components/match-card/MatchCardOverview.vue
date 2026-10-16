@@ -84,19 +84,19 @@
                   {{ participant.kills }} / <span class="text-red-400">{{ participant.deaths }}</span> / {{ participant.assists }}
                 </div>
                 <div class="text-[10px] font-mono text-slate-400 mt-0.5">
-                  <span class="text-slate-200 font-bold">{{ participant.kda.toFixed(2) }} KDA</span>
-                  <span class="text-[#0ac8b9] ml-1">({{ (participant.killParticipation * 100).toFixed(0) }}% 参团)</span>
+                  <span class="text-slate-200 font-bold">{{ formattedKda }} KDA</span>
+                  <span class="text-[#0ac8b9] ml-1">({{ Math.round((participant.killParticipation || 0) * 100) }}% 参团)</span>
                 </div>
               </div>
 
               <!-- Damage & CS -->
               <div class="text-right font-mono text-xs hidden sm:block">
                 <div class="text-slate-200 font-bold">
-                  {{ (participant.totalDamageDealtToChampions / 1000).toFixed(1) }}k 输出
+                  {{ (((participant.totalDamageDealtToChampions || 0) / 1000)).toFixed(1) }}k 输出
                   <span class="text-[#0ac8b9] text-[10px] ml-0.5">({{ damageSharePct }}%)</span>
                 </div>
                 <div class="text-[10px] text-slate-400 mt-0.5">
-                  {{ participant.cs }} 刀 ({{ ((participant.cs / Math.max(basicInfo.gameDuration / 60, 1))).toFixed(1) }}/分)
+                  {{ participant.cs || 0 }} 刀 ({{ csPerMin }}/分)
                 </div>
               </div>
             </div>
@@ -207,10 +207,25 @@ const gameResultText = computed(() =>
 
 const queueName = computed(() => getQueueName(basicInfo.value.queueId))
 
+const formattedKda = computed(() => {
+  const k = participant.value?.kda
+  if (typeof k !== 'number' || !Number.isFinite(k)) return '0.00'
+  return k.toFixed(2)
+})
+
 const damageSharePct = computed(() => {
   if (!participant.value || !team.value || !team.value.totalDamageDealtToChampions) return 0
-  return Math.round(
-    (participant.value.totalDamageDealtToChampions / team.value.totalDamageDealtToChampions) * 100
-  )
+  const dmg = participant.value.totalDamageDealtToChampions || 0
+  const teamDmg = team.value.totalDamageDealtToChampions
+  if (!Number.isFinite(dmg) || !Number.isFinite(teamDmg) || teamDmg <= 0) return 0
+  return Math.round((dmg / teamDmg) * 100)
+})
+
+const csPerMin = computed(() => {
+  const durationSec = basicInfo.value?.gameDuration || 0
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return '0.0'
+  const cs = participant.value?.cs || 0
+  if (!Number.isFinite(cs)) return '0.0'
+  return ((cs / durationSec) * 60).toFixed(1)
 })
 </script>

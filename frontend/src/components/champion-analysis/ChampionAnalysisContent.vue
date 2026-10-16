@@ -1,5 +1,5 @@
 <template>
-  <div class="w-[520px] max-w-[calc(100vw-2rem)] text-xs text-slate-200 select-none p-1">
+  <div v-if="analysis" class="w-[520px] max-w-[calc(100vw-2rem)] text-xs text-slate-200 select-none p-3.5 bg-[#0a1120] border border-[#1e2e4a] rounded-xl shadow-2xl relative z-50 backdrop-blur-md">
     <!-- Header -->
     <div class="flex items-center gap-3 pb-2 border-b border-slate-700/60">
       <ChampionIcon :champion-id="analysis.championId" class="w-10 h-10 rounded-lg shadow" />
@@ -11,11 +11,11 @@
           </span>
         </div>
         <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400">
-          <span>总场次: {{ analysis.winLoss.all.count }}场</span>
+          <span>总场次: {{ analysis.winLoss?.all?.count ?? 0 }}场</span>
           <span>·</span>
-          <span>胜场: {{ analysis.winLoss.all.wins }}</span>
+          <span>胜场: {{ analysis.winLoss?.all?.wins ?? 0 }}</span>
           <span>·</span>
-          <span>败场: {{ analysis.winLoss.all.losses }}</span>
+          <span>败场: {{ analysis.winLoss?.all?.losses ?? 0 }}</span>
         </div>
       </div>
       <div class="flex shrink-0 items-center gap-2">
@@ -23,12 +23,12 @@
           <div
             class="text-sm font-extrabold tabular-nums font-mono"
             :class="{
-              'text-emerald-400': analysis.winLoss.all.winRate >= 0.53,
-              'text-slate-200': analysis.winLoss.all.winRate > 0.47 && analysis.winLoss.all.winRate < 0.53,
-              'text-red-400': analysis.winLoss.all.winRate <= 0.47
+              'text-emerald-400': (analysis.winLoss?.all?.winRate ?? 0) >= 0.53,
+              'text-slate-200': (analysis.winLoss?.all?.winRate ?? 0) > 0.47 && (analysis.winLoss?.all?.winRate ?? 0) < 0.53,
+              'text-red-400': (analysis.winLoss?.all?.winRate ?? 0) <= 0.47
             }"
           >
-            {{ formatPercent(analysis.winLoss.all.winRate) }}
+            {{ formatPercent(analysis.winLoss?.all?.winRate ?? 0) }}
           </div>
           <div class="text-[10px] text-slate-400">
             综合胜率
@@ -53,19 +53,19 @@
         <div class="h-56 overflow-y-auto pr-1 space-y-2.5">
           <!-- Standard vs Arena vs ARAM modes breakdown -->
           <div
-            v-if="analysis.winLoss.normal.count > 0 && analysis.winLoss.cherry.count > 0"
+            v-if="(analysis.winLoss?.normal?.count ?? 0) > 0 && (analysis.winLoss?.cherry?.count ?? 0) > 0"
             class="grid grid-cols-2 gap-2"
           >
             <div class="rounded bg-black/25 p-2 border border-slate-700/40">
               <div class="text-[10px] text-slate-400">标准峡谷模式</div>
               <div class="mt-0.5 font-bold text-slate-100 font-mono">
-                {{ formatPercent(analysis.winLoss.normal.winRate) }} · {{ analysis.winLoss.normal.wins }}胜{{ analysis.winLoss.normal.losses }}负
+                {{ formatPercent(analysis.winLoss?.normal?.winRate ?? 0) }} · {{ analysis.winLoss?.normal?.wins ?? 0 }}胜{{ analysis.winLoss?.normal?.losses ?? 0 }}负
               </div>
             </div>
             <div class="rounded bg-black/25 p-2 border border-slate-700/40">
               <div class="text-[10px] text-slate-400">斗魂竞技场</div>
               <div class="mt-0.5 font-bold text-slate-100 font-mono">
-                前二率 {{ formatPercent(analysis.winLoss.cherry.top1Rate) }} · {{ analysis.winLoss.cherry.count }}场
+                前二率 {{ formatPercent(analysis.winLoss?.cherry?.top1Rate ?? 0) }} · {{ analysis.winLoss?.cherry?.count ?? 0 }}场
               </div>
             </div>
           </div>
@@ -180,14 +180,14 @@ const props = defineProps<{
 const formatPercent = (val: number) => `${Math.round((val || 0) * 100)}%`
 
 const averageKdaLine = computed(() => {
-  const count = Math.max(props.analysis.winLoss?.all?.count ?? 1, 1)
-  const kills = props.analysis.summary?.kills ?? 0
-  const deaths = props.analysis.summary?.deaths ?? 0
-  const assists = props.analysis.summary?.assists ?? 0
+  const count = Math.max(props.analysis?.winLoss?.all?.count ?? 1, 1)
+  const kills = props.analysis?.summary?.kills ?? 0
+  const deaths = props.analysis?.summary?.deaths ?? 0
+  const assists = props.analysis?.summary?.assists ?? 0
   return `${(kills / count).toFixed(1)} / ${(deaths / count).toFixed(1)} / ${(assists / count).toFixed(1)}`
 })
 
 const hasPositionData = computed(() => {
-  return !!props.analysis.positions
+  return Boolean(props.analysis?.positions)
 })
 </script>

@@ -155,8 +155,7 @@ impl InGameOverlay {
                     None => false,
                 };
 
-                if has_dark_fingerprint {
-                    let bmp = bmp_opt.unwrap();
+                if let (true, Some(bmp)) = (has_dark_fingerprint, bmp_opt) {
                     let lines = crate::vision::OcrScanner::run_windows_ocr_bytes(&bmp).await;
 
                     // 锻造器过滤
@@ -231,7 +230,14 @@ impl InGameOverlay {
                             }
 
                             if !cards.is_empty() {
-                                if let Some(best) = cards.iter().max_by(|a, b| a.win_rate.partial_cmp(&b.win_rate).unwrap_or(std::cmp::Ordering::Equal)) {
+                                if let Some(best) = cards.iter().max_by(|a, b| {
+                                    a.win_rate
+                                        .partial_cmp(&b.win_rate)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                        .then_with(|| a.delta_win_rate.partial_cmp(&b.delta_win_rate).unwrap_or(std::cmp::Ordering::Equal))
+                                        .then_with(|| a.games.cmp(&b.games))
+                                        .then_with(|| a.name.cmp(&b.name))
+                                }) {
                                     if last_recommended_name.as_deref() != Some(&best.name) {
                                         last_recommended_name = Some(best.name.clone());
                                         let slot_pos = cards.iter().position(|c| c.name == best.name).unwrap_or(0) + 1;
@@ -282,6 +288,7 @@ impl InGameOverlay {
         });
     }
 
+    #[allow(dead_code)]
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.is_showing.store(false, Ordering::SeqCst);
@@ -447,7 +454,14 @@ impl InGameOverlay {
                 }
 
                 if !cards.is_empty() {
-                    if let Some(best) = cards.iter().max_by(|a, b| a.win_rate.partial_cmp(&b.win_rate).unwrap_or(std::cmp::Ordering::Equal)) {
+                    if let Some(best) = cards.iter().max_by(|a, b| {
+                        a.win_rate
+                            .partial_cmp(&b.win_rate)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.delta_win_rate.partial_cmp(&b.delta_win_rate).unwrap_or(std::cmp::Ordering::Equal))
+                            .then_with(|| a.games.cmp(&b.games))
+                            .then_with(|| a.name.cmp(&b.name))
+                    }) {
                         crate::overlay::TextToSpeech::speak(&format!("建议优选{}，胜率{:.0}%", best.name, best.win_rate * 100.0));
                     }
                     let data = AugmentOverlayData {
@@ -474,6 +488,7 @@ impl InGameOverlay {
         });
     }
 
+    #[allow(dead_code)]
     pub fn trigger_scan(&self) {
         self.is_showing.store(true, Ordering::SeqCst);
         let placeholder = AugmentOverlayData {
@@ -483,6 +498,7 @@ impl InGameOverlay {
         GLOBAL_HUD.show_augments(placeholder, Duration::from_secs(12));
     }
 
+    #[allow(dead_code)]
     pub fn show_cards(&self, hero_name: &str, cards: Vec<AugmentCardView>) {
         self.is_showing.store(true, Ordering::SeqCst);
         let data = AugmentOverlayData {

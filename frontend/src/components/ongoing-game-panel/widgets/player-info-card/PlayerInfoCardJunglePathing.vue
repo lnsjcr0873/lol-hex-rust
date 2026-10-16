@@ -1,6 +1,6 @@
 <template>
   <div v-if="isJungler" class="mb-1.5 w-full select-none">
-    <NPopover :delay="60" :keep-alive-on-hover="true" placement="right-start">
+    <NPopover v-if="jungleStats" :delay="60" :keep-alive-on-hover="true" placement="right-start">
       <template #trigger>
         <div
           class="flex w-full cursor-pointer items-center gap-2 rounded border border-indigo-500/50 bg-indigo-950/30 px-2 py-1.5 transition-all hover:bg-indigo-950/50 hover:border-indigo-400"
@@ -44,6 +44,19 @@
         <JunglePathingContent :stats="jungleStats" />
       </div>
     </NPopover>
+
+    <!-- Honest fallback when 14-min timeline data is not available -->
+    <div
+      v-else
+      class="flex w-full items-center gap-2 rounded border border-slate-700/40 bg-slate-900/30 px-2 py-1.5 text-slate-400 text-[11px]"
+    >
+      <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-slate-800 text-[10px] text-slate-400 font-semibold">
+        打野
+      </div>
+      <div class="min-w-0 flex-1 truncate text-[10px] text-slate-400">
+        暂无前14分钟刷野偏好数据
+      </div>
+    </div>
   </div>
 </template>
 

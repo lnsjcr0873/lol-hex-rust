@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { AlertTriangle, Tag, X } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -63,6 +63,14 @@ const emit = defineEmits<{
 }>()
 
 const tagsList = ref(props.tags || [])
+
+watch(
+  () => props.tags,
+  (newTags) => {
+    tagsList.value = newTags ? [...newTags] : []
+  },
+  { deep: true }
+)
 
 function removeTag(idx: number) {
   tagsList.value.splice(idx, 1)

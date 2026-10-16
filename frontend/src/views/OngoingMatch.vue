@@ -76,6 +76,16 @@
           <span>{{ isDemoMode ? '退出演练 (切回实时)' : '模拟演练模式' }}</span>
         </button>
 
+        <!-- Standalone Floating Window Toggle -->
+        <button
+          @click="handleToggleOverlay"
+          class="px-3 py-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 shadow-sm"
+          title="弹出游戏内置顶独立对局悬浮窗 (支持拖拽/贴边/透明置顶)"
+        >
+          <ExternalLink class="w-3.5 h-3.5" />
+          <span>独立悬浮窗</span>
+        </button>
+
         <button
           @click="refreshData"
           class="p-2 rounded-lg bg-[#0f172a] hover:bg-[#162238] border border-[#1e293b] text-slate-300 hover:text-white text-xs transition"
@@ -169,19 +179,29 @@
         <OngoingGamePanel
           :blue-team="activeBlueTeam"
           :red-team="activeRedTeam"
-          :self-puuid="matchData?.my_puuid || 'p-blue-1'"
+          :self-puuid="matchData?.my_puuid || (isDemoMode ? 'p-blue-1' : '')"
           :selected-puuid="selectedPlayer?.puuid"
           @select-player="handlePlayerSelect"
           @inspect-player="handlePlayerInspect"
+          @preview-game="handlePreviewGame"
         />
       </div>
     </div>
+
+    <!-- Connected Match Previewer Modal (1:1 with LeagueAkari) -->
+    <ConnectedMatchPreviewer
+      v-model:show="showPreviewModal"
+      :game-id="previewGameId"
+      :puuid="previewPuuid"
+      @navigate-to-summoner-by-puuid="handleInspectHistory"
+    />
 
     <!-- Player Detail Drawer -->
     <PlayerDetailDrawer
       v-if="selectedPlayer"
       :player="selectedPlayer"
       @close="selectedPlayer = null"
+      @inspect-history="handleInspectHistory"
     />
   </div>
 </template>
@@ -194,13 +214,15 @@ import {
   RotateCw,
   Radio,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  ExternalLink
 } from 'lucide-vue-next'
 import type { OngoingMatchData, PlayerCard } from '../api/types'
-import { getOngoingMatch, sendChatRecords } from '../api/tauri'
+import { getOngoingMatch, sendChatRecords, toggleOngoingOverlay } from '../api/tauri'
 import { mockOngoingMatch } from '../api/mockData'
 import OngoingGamePanel from '../components/ongoing-game-panel/OngoingGamePanel.vue'
 import PlayerDetailDrawer from '../components/PlayerDetailDrawer.vue'
+import ConnectedMatchPreviewer from '../components/match-preview/ConnectedMatchPreviewer.vue'
 import type { EnhancedPlayerCard } from '../components/ongoing-game-panel/types'
 
 const matchData = ref<OngoingMatchData | null>(null)
@@ -209,7 +231,16 @@ const isRefreshing = ref(false)
 const isBroadcasting = ref(false)
 const selectedPlayer = ref<EnhancedPlayerCard | null>(null)
 const toastMessage = ref('')
+const showPreviewModal = ref(false)
+const previewGameId = ref(0)
+const previewPuuid = ref('')
 let pollTimer: number | null = null
+
+const handlePreviewGame = (payload: { gameId: number; puuid?: string }) => {
+  previewGameId.value = payload.gameId
+  previewPuuid.value = payload.puuid || ''
+  showPreviewModal.value = true
+}
 
 const activeBlueTeam = computed<PlayerCard[]>(() => {
   if (isDemoMode.value) {
@@ -225,20 +256,25 @@ const activeRedTeam = computed<PlayerCard[]>(() => {
   return matchData.value?.red_team || []
 })
 
+let toastTimer: number | null = null
 const showToast = (msg: string) => {
+  if (toastTimer) clearTimeout(toastTimer)
   toastMessage.value = msg
-  setTimeout(() => {
+  toastTimer = window.setTimeout(() => {
     toastMessage.value = ''
+    toastTimer = null
   }, 2800)
 }
 
 const refreshData = async () => {
+  if (isDemoMode.value) {
+    matchData.value = mockOngoingMatch
+    return
+  }
   isRefreshing.value = true
   try {
-    if (isDemoMode.value) {
-      matchData.value = mockOngoingMatch
-    } else {
-      const data = await getOngoingMatch(false)
+    const data = await getOngoingMatch(false)
+    if (!isDemoMode.value) {
       matchData.value = data
     }
   } catch (err) {
@@ -264,25 +300,38 @@ const sendChat = async (format: 'concise' | 'detailed') => {
   if (isBroadcasting.value) return
   isBroadcasting.value = true
   try {
-    const roomId = matchData.value?.chat_room_id || 'mock-room'
+    const roomId = matchData.value?.chat_room_id || ''
     const res = await sendChatRecords(roomId, format)
     showToast(res.message || '战绩已广播至聊天室')
   } catch (err) {
     console.error('Chat broadcast error:', err)
-    showToast('战绩广播已模拟完成')
+    showToast('战绩广播发送失败，请确认是否处于选人阶段')
   } finally {
     isBroadcasting.value = false
   }
 }
+
+const emit = defineEmits<{
+  (e: 'navigate-to-summoner', puuid: string): void
+}>()
 
 const handlePlayerSelect = (player: EnhancedPlayerCard) => {
   selectedPlayer.value = player
 }
 
 const handlePlayerInspect = (puuid: string) => {
-  const found = [...activeBlueTeam.value, ...activeRedTeam.value].find((p) => p.puuid === puuid)
-  if (found) {
-    selectedPlayer.value = found as EnhancedPlayerCard
+  emit('navigate-to-summoner', puuid)
+}
+
+const handleInspectHistory = (puuid: string) => {
+  emit('navigate-to-summoner', puuid)
+}
+
+const handleToggleOverlay = async () => {
+  try {
+    await toggleOngoingOverlay()
+  } catch (e) {
+    console.warn('Failed to toggle ongoing overlay:', e)
   }
 }
 
@@ -295,7 +344,9 @@ onMounted(() => {
       isPolling = true
       try {
         const data = await getOngoingMatch(false)
-        matchData.value = data
+        if (!isDemoMode.value) {
+          matchData.value = data
+        }
       } catch {
         // Suppress background poll errors
       } finally {
@@ -308,6 +359,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (pollTimer) {
     clearInterval(pollTimer)
+  }
+  if (toastTimer) {
+    clearTimeout(toastTimer)
   }
 })
 </script>

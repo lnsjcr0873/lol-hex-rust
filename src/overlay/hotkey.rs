@@ -57,6 +57,7 @@ impl HotkeyManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         #[cfg(windows)]
@@ -65,6 +66,7 @@ impl HotkeyManager {
             if tid != 0 {
                 #[link(name = "user32")]
                 extern "system" {
+                    #[allow(dead_code)]
                     fn PostThreadMessageW(idthread: u32, msg: u32, wparam: usize, lparam: isize) -> i32;
                 }
                 unsafe {
@@ -73,6 +75,12 @@ impl HotkeyManager {
                 }
             }
         }
+    }
+}
+
+impl Drop for HotkeyManager {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 

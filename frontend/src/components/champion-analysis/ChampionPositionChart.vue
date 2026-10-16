@@ -30,7 +30,7 @@ import { Doughnut } from 'vue-chartjs'
 
 ChartJS.register(ArcElement, Tooltip)
 
-const { positions } = defineProps<{
+const props = defineProps<{
   positions: AggregatedPositionAnalysis
 }>()
 
@@ -51,8 +51,8 @@ const POSITION_LABELS: Record<string, string> = {
 }
 
 const entries = computed(() => {
-  if (!positions) return []
-  return Object.entries(positions)
+  if (!props.positions) return []
+  return Object.entries(props.positions)
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1])
     .map(([position, count]) => ({

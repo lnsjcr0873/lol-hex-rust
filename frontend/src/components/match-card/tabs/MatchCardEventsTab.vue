@@ -20,7 +20,11 @@
                   <span class="font-bold text-xs text-rose-400">击杀事件</span>
 
                   <!-- Map position popover -->
-                  <NPopover v-if="e.position" trigger="hover" placement="right">
+                  <NPopover
+                    v-if="e.position && Number.isFinite(e.position.x) && Number.isFinite(e.position.y)"
+                    trigger="hover"
+                    placement="right"
+                  >
                     <template #trigger>
                       <button class="px-1.5 py-0.2 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">
                         地图落点
@@ -30,7 +34,11 @@
                   </NPopover>
 
                   <!-- Victim damage details popover -->
-                  <NPopover trigger="hover" placement="right">
+                  <NPopover
+                    v-if="Array.isArray(e.victimDamageReceived) && e.victimDamageReceived.length > 0"
+                    trigger="hover"
+                    placement="right"
+                  >
                     <template #trigger>
                       <button class="px-1.5 py-0.2 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700">
                         受击明细
@@ -46,6 +54,7 @@
                 <!-- Killer & Assistants -->
                 <div class="flex items-center space-x-1">
                   <ChampionIcon
+                    v-if="e.killerId > 0"
                     :champion-id="participantMap[e.killerId]?.championId"
                     :size="24"
                     round
@@ -53,7 +62,7 @@
                     :style="{ borderColor: getTeamColor(participantMap[e.killerId]?.teamIdentifier) }"
                   />
                   <span class="font-bold text-slate-200">
-                    {{ participantMap[e.killerId]?.gameName || '击杀者' }}
+                    {{ e.killerId === 0 ? '防御塔/野怪处决' : (participantMap[e.killerId]?.gameName || '击杀者') }}
                   </span>
                   <div v-if="e.assistingParticipantIds?.length" class="flex items-center space-x-0.5 pl-1">
                     <span class="text-[10px] text-slate-500">+助攻:</span>
@@ -95,7 +104,8 @@
                 <span class="font-bold text-xs text-amber-400">防御建筑摧毁</span>
               </template>
               <div class="flex items-center space-x-2 text-xs">
-                <Tower class="w-4 h-4 text-amber-400" />
+                <Inhibitor v-if="e.buildingType === 'INHIBITOR_BUILDING'" class="w-4 h-4 text-cyan-400" />
+                <Tower v-else class="w-4 h-4 text-amber-400" />
                 <span class="text-slate-300">
                   {{ e.buildingType === 'INHIBITOR_BUILDING' ? '召唤水晶已被摧毁' : '防御塔已被摧毁' }}
                 </span>
@@ -113,42 +123,27 @@
               </template>
               <div class="flex items-center space-x-2 text-xs">
                 <Dragon v-if="e.monsterType === 'DRAGON'" class="w-4 h-4 text-orange-400" />
+                <RiftHerald v-else-if="e.monsterType === 'RIFTHERALD'" class="w-4 h-4 text-purple-300" />
+                <VoidGrub v-else-if="e.monsterType === 'HORDE'" class="w-4 h-4 text-purple-400" />
+                <Atakhan v-else-if="e.monsterType === 'ATAKHAN'" class="w-4 h-4 text-rose-500" />
                 <Baron v-else class="w-4 h-4 text-purple-400" />
                 <span class="text-slate-200">
                   {{ e.monsterSubType || e.monsterType || '远古野怪' }} 已被击杀
                 </span>
                 <span v-if="e.killerId" class="text-slate-400">
-                  (击杀者: {{ participantMap[e.killerId]?.gameName }})
+                  (击杀者: {{ participantMap[e.killerId]?.gameName || '未知' }})
                 </span>
               </div>
             </NTimelineItem>
           </template>
 
-          <!-- Fallback items if frames had no raw events -->
+          <!-- Empty state if frames had no raw events -->
           <template v-if="filteredEvents.length === 0">
             <NTimelineItem
-              title="一血爆发 (第一滴血)"
-              time="03:15"
-              type="error"
-              content="对局早期激烈对抗完成首杀"
-            />
-            <NTimelineItem
-              title="首条巨龙被掌控"
-              time="06:20"
-              type="success"
-              content="炼金科技亚龙已被击杀"
-            />
-            <NTimelineItem
-              title="首座一塔告破"
-              time="09:40"
-              type="warning"
-              content="下路外侧防御塔被摧毁"
-            />
-            <NTimelineItem
-              title="纳什男爵决战"
-              time="21:30"
+              title="暂无详细战术事件记录"
+              :time="formatDuration(basicInfo.gameDuration)"
               type="info"
-              content="大龙团战爆发并成功封锁龙坑"
+              content="当前对局模式未记录击杀与野怪事件时间点"
             />
           </template>
 
@@ -206,8 +201,12 @@ import ChampionIcon from '../widgets/ChampionIcon.vue'
 import MapPosition from '../widgets/MapPosition.vue'
 import VictimDamageDetails from '../widgets/VictimDamageDetails.vue'
 import Tower from '../icons/Tower.vue'
+import Inhibitor from '../icons/Inhibitor.vue'
 import Dragon from '../icons/Dragon.vue'
 import Baron from '../icons/Baron.vue'
+import RiftHerald from '../icons/RiftHerald.vue'
+import VoidGrub from '../icons/VoidGrub.vue'
+import Atakhan from '../icons/Atakhan.vue'
 
 const { participants, frames, basicInfo } = useMatchCard()
 
@@ -228,7 +227,7 @@ const allEvents = computed(() => {
       events.push(...f.events)
     }
   }
-  return events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+  return events.sort((a, b) => (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0))
 })
 
 const filteredEvents = computed(() => {

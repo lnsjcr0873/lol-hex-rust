@@ -116,7 +116,7 @@ mod f1_lcu_api_contract {
         let history = canned_match_history("puuid-uzi-001", 20, 0.65, 145, &["tm-1", "tm-2"]);
         server.state.set_match_history("puuid-uzi-001", history).await;
 
-        let res = client.get_player_match_history("puuid-uzi-001", 20).await.expect("history");
+        let res = client.get_player_match_history("puuid-uzi-001", 0, 19).await.expect("history");
         let games = res["games"]["games"].as_array().expect("games array");
         assert_eq!(games.len(), 20);
         assert_eq!(games[0]["queueId"].as_i64().unwrap(), 420);
@@ -698,11 +698,24 @@ mod f8_summoner_profile_and_filters {
         mgr.set_sample_match_count(30);
         assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 30);
 
+        // Extended valid counts: 40, 50, 100, 200
+        mgr.set_sample_match_count(40);
+        assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 40);
+
+        mgr.set_sample_match_count(50);
+        assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 50);
+
+        mgr.set_sample_match_count(100);
+        assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 100);
+
+        mgr.set_sample_match_count(200);
+        assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 200);
+
         // Invalid numbers fallback to 20
         mgr.set_sample_match_count(15);
         assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 20);
 
-        mgr.set_sample_match_count(100);
+        mgr.set_sample_match_count(75);
         assert_eq!(mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed), 20);
     }
 

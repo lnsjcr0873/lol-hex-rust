@@ -280,27 +280,30 @@ impl ItemOverlay {
         let detail_opt = db.get_hero_detail(hero_id);
         const BOOTS_IDS: &[&str] = &["1001", "3006", "3009", "3020", "3047", "3111", "3117", "3158", "3010"];
 
+        let get_iid = |v: &Value| -> String {
+            v.get("itemId")
+                .and_then(|x| x.as_str().map(|s| s.to_string()).or_else(|| x.as_i64().map(|n| n.to_string())))
+                .unwrap_or_default()
+        };
+
         if let Some(detail) = detail_opt {
             match subtab {
                 "featured" => {
                     if let Some(items_arr) = detail.items.as_array() {
                         let mut candidates: Vec<&Value> = items_arr.iter()
                             .filter(|it| {
-                                let iid = it.get("itemId")
-                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-                                    .unwrap_or_default();
+                                let iid = get_iid(it);
                                 !iid.is_empty() && !BOOTS_IDS.contains(&iid.as_str())
                             })
                             .collect();
                         candidates.sort_by(|a, b| {
-                            let sa = a.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                            let sb = b.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let sa = a.get("hexScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                            let sb = b.get("hexScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                             sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| get_iid(a).cmp(&get_iid(b)))
                         });
                         for it in candidates.into_iter().take(5) {
-                            let iid = it.get("itemId")
-                                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-                                .unwrap_or_default();
+                            let iid = get_iid(it);
                             let iname = it.get("itemName").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| db.resolve_item_name(&iid));
                             let wr = it.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
                             let score = it.get("hexScore").and_then(|v| v.as_f64()).unwrap_or(80.0);
@@ -325,21 +328,18 @@ impl ItemOverlay {
                     if let Some(items_arr) = detail.items.as_array() {
                         let mut candidates: Vec<&Value> = items_arr.iter()
                             .filter(|it| {
-                                let iid = it.get("itemId")
-                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-                                    .unwrap_or_default();
+                                let iid = get_iid(it);
                                 !iid.is_empty() && !BOOTS_IDS.contains(&iid.as_str())
                             })
                             .collect();
                         candidates.sort_by(|a, b| {
-                            let pa = a.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                            let pb = b.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let pa = a.get("pickRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                            let pb = b.get("pickRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                             pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| get_iid(a).cmp(&get_iid(b)))
                         });
                         for it in candidates.into_iter().take(5) {
-                            let iid = it.get("itemId")
-                                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-                                .unwrap_or_default();
+                            let iid = get_iid(it);
                             let iname = it.get("itemName").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| db.resolve_item_name(&iid));
                             let wr = it.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
                             let core_delta = it.get("coreDelta").or_else(|| it.get("deltaWinRate")).and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -364,16 +364,15 @@ impl ItemOverlay {
                     if let Some(items_arr) = detail.items.as_array() {
                         let mut candidates: Vec<&Value> = items_arr.iter()
                             .filter(|it| {
-                                let iid = it.get("itemId")
-                                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
-                                    .unwrap_or_default();
+                                let iid = get_iid(it);
                                 BOOTS_IDS.contains(&iid.as_str())
                             })
                             .collect();
                         candidates.sort_by(|a, b| {
-                            let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                            let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let wa = a.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                            let wb = b.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                                .then_with(|| get_iid(a).cmp(&get_iid(b)))
                         });
                         for it in candidates.into_iter().take(5) {
                             let iid = it.get("itemId")
@@ -402,9 +401,14 @@ impl ItemOverlay {
                 "trios" => {
                     let mut trios_list = detail.terminal_item_trios.clone();
                     trios_list.sort_by(|a, b| {
-                        let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let wa = a.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                        let wb = b.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                         wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| {
+                                let ka = a.get("trioKey").and_then(|v| v.as_str()).unwrap_or("");
+                                let kb = b.get("trioKey").and_then(|v| v.as_str()).unwrap_or("");
+                                ka.cmp(kb)
+                            })
                     });
                     for (idx, trio) in trios_list.into_iter().take(5).enumerate() {
                         let names: Vec<String> = trio.get("itemNames")
@@ -461,6 +465,8 @@ impl ItemOverlay {
         if !self.running.load(Ordering::SeqCst) {
             return;
         }
+
+        let current_gold = if current_gold.is_finite() && current_gold > 0.0 { current_gold } else { 0.0 };
 
         let resolved_id = if !hero_id.is_empty() {
             hero_id.to_string()
@@ -530,38 +536,44 @@ impl ItemOverlay {
         );
 
         let sig_changed = {
-            let guard = self.last_item_signature.read().unwrap();
+            let guard = self.last_item_signature.read().unwrap_or_else(|e| e.into_inner());
             *guard != current_sig
         };
 
         // 2. 若装备签名未变，仅金币发生变动：仅平滑更新差额与进度条，绝不打乱或重排装备！
         if !sig_changed {
+            let safe_gold = if current_gold.is_finite() && current_gold >= 0.0 {
+                current_gold
+            } else {
+                0.0
+            };
+
             if let Ok(mut g) = self.last_live_context.write() {
                 if let Some(ref mut ctx) = *g {
-                    ctx.current_gold = current_gold;
+                    ctx.current_gold = safe_gold;
                 }
             }
             if let Ok(mut guard) = self.cached_overlay_data.write() {
                 if let Some(ref mut data) = *guard {
-                    if (data.current_gold - current_gold).abs() < 1.0 {
+                    if (data.current_gold - safe_gold).abs() < 1.0 {
                         // 金币无实际变动，直接返回，0 重绘 0 刷新！
                         return;
                     }
 
-                    data.current_gold = current_gold;
+                    data.current_gold = safe_gold;
                     if let Some(ref mut next) = data.next_item {
-                        next.is_affordable = (current_gold as i64) >= next.net_cost;
-                        next.gold_diff = (next.net_cost - current_gold as i64).max(0);
-                        next.progress_pct = (current_gold / next.net_cost.max(1) as f64).clamp(0.0, 1.0);
+                        next.is_affordable = (safe_gold as i64) >= next.net_cost;
+                        next.gold_diff = (next.net_cost - safe_gold as i64).max(0);
+                        next.progress_pct = (safe_gold / next.net_cost.max(1) as f64).clamp(0.0, 1.0);
                         next.gold_status_text = if next.is_affordable {
-                            format!("💰 {}/{}g  [🎉可直接全款]", current_gold as i64, next.net_cost)
+                            format!("💰 {}/{}g  [🎉可直接全款]", safe_gold as i64, next.net_cost)
                         } else {
-                            format!("💰 {}/{}g (差{}g)", current_gold as i64, next.net_cost, next.gold_diff)
+                            format!("💰 {}/{}g (差{}g)", safe_gold as i64, next.net_cost, next.gold_diff)
                         };
                     }
                     for item in &mut data.alternatives {
-                        item.is_affordable = (current_gold as i64) >= (item.net_cost as i64);
-                        item.gold_diff = ((item.net_cost as i64) - (current_gold as i64)).max(0) as i32;
+                        item.is_affordable = (safe_gold as i64) >= (item.net_cost as i64);
+                        item.gold_diff = ((item.net_cost as i64) - (safe_gold as i64)).max(0) as i32;
                     }
 
                     // 仅当玩家当前手动打开时，才通知 HUD 局部刷新数值
@@ -976,11 +988,11 @@ impl ItemOverlay {
         };
 
         {
-            let mut sig_guard = self.last_item_signature.write().unwrap();
+            let mut sig_guard = self.last_item_signature.write().unwrap_or_else(|e| e.into_inner());
             *sig_guard = current_sig;
         }
         {
-            let mut cache_guard = self.cached_overlay_data.write().unwrap();
+            let mut cache_guard = self.cached_overlay_data.write().unwrap_or_else(|e| e.into_inner());
             *cache_guard = Some(overlay_data.clone());
         }
 

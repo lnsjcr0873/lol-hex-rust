@@ -41,9 +41,12 @@ impl HexItemSynergyEngine {
 
         for it in candidate_items {
             let mut c = it.clone();
-            let iid = c.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            let iid = c.get("itemId")
+                .or_else(|| c.get("id"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                .unwrap_or_default();
             let empty_tags = Vec::new();
-            let tags = ENGINE_META.item_feature_tags.get(iid).unwrap_or(&empty_tags);
+            let tags = ENGINE_META.item_feature_tags.get(&iid).unwrap_or(&empty_tags);
 
             let mut synergy_bonus = 0.0;
             if is_ap_synergy && tags.iter().any(|t| t == "AP" || t == "MAGIC_PEN") {
@@ -74,13 +77,57 @@ impl HexItemSynergyEngine {
             scored_items.push(c);
         }
 
-        // Sort descending by tacticalScore safely
+        // Sort descending by tacticalScore safely with deterministic secondary tie-breaker
         scored_items.sort_by(|a, b| {
-            let sa = a.get("tacticalScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let sb = b.get("tacticalScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let sa = a.get("tacticalScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+            let sb = b.get("tacticalScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
             sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ida = a.get("itemId").or_else(|| a.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+                    let idb = b.get("itemId").or_else(|| b.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+                    ida.cmp(idb)
+                })
         });
 
         scored_items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_rerank_items_with_synergy_numeric_item_id() {
+        let active_augments = vec![json!({
+            "name": "珠光护手",
+            "description": "法术强度和暴击几率提升"
+        })];
+
+        // 3089 = Rabadon's Deathcap (has AP tag in item_feature_tags)
+        let candidate_items = vec![
+            json!({
+                "itemId": 3089,
+                "tacticalScore": 50.0
+            }),
+            json!({
+                "itemId": 3031, // Infinity Edge
+                "tacticalScore": 50.0
+            })
+        ];
+
+        let reranked = HexItemSynergyEngine::rerank_items_with_synergy(
+            &candidate_items,
+            &active_augments,
+            &HashSet::new(),
+            "103",
+            1.0,
+            true,
+        );
+
+        let cap = reranked.iter().find(|it| it["itemId"] == 3089).unwrap();
+        assert_eq!(cap["hasAugmentSynergy"], true);
+        assert!(cap["tacticalScore"].as_f64().unwrap() >= 62.0); // 50.0 + 12.0
     }
 }

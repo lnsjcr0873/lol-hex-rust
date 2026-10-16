@@ -19,3 +19,4 @@ node_modules/
 src-tauri/gen/
 .agents/
 dist-new/
+scratch/

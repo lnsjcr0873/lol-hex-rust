@@ -49,39 +49,28 @@ const participantMap = computed(() => {
 })
 
 const totalDamageReceived = computed(() => {
-  if (Array.isArray(props.event.victimDamageReceived)) {
-    return props.event.victimDamageReceived.reduce((acc: number, d: any) => acc + (d.totalDamage || 0), 0)
+  if (Array.isArray(props.event?.victimDamageReceived)) {
+    return props.event.victimDamageReceived.reduce((acc: number, d: any) => acc + (d?.totalDamage || 0), 0)
   }
-  return 1000
+  return 0
 })
 
 const damageBreakdown = computed(() => {
-  if (Array.isArray(props.event.victimDamageReceived) && props.event.victimDamageReceived.length > 0) {
+  if (Array.isArray(props.event?.victimDamageReceived) && props.event.victimDamageReceived.length > 0) {
     const total = Math.max(totalDamageReceived.value, 1)
     return props.event.victimDamageReceived.map((d: any) => {
-      const p = participantMap.value[d.participantId]
+      const p = participantMap.value[d?.participantId]
       const cid = p ? p.championId : 0
-      const cname = p ? getChampionName(cid) : (d.spellName || '未知攻击')
+      const cname = p ? getChampionName(cid) : (d?.spellName || '未知攻击')
+      const dmg = Number.isFinite(d?.totalDamage) ? d.totalDamage : 0
+      const pct = Number.isFinite(dmg) && total > 0 ? ((dmg / total) * 100).toFixed(0) : '0'
       return {
         championId: cid,
         name: cname,
-        damage: d.totalDamage || 0,
-        percentage: (((d.totalDamage || 0) / total) * 100).toFixed(0)
+        damage: dmg,
+        percentage: pct
       }
     })
-  }
-
-  // Fallback: estimate from killer
-  const killer = participantMap.value[props.event.killerId]
-  if (killer) {
-    return [
-      {
-        championId: killer.championId,
-        name: getChampionName(killer.championId),
-        damage: 1000,
-        percentage: '100'
-      }
-    ]
   }
 
   return []

@@ -115,47 +115,7 @@ const currentPage = ref(1)
 const pageSize = 3
 
 const games = computed<EncounteredGameRecord[]>(() => {
-  if (props.encounteredList && props.encounteredList.length > 0) {
-    return props.encounteredList
-  }
-  return [
-    {
-      gameId: 1001,
-      queueName: '排位赛单双排',
-      date: '10-10',
-      isOpponent: false,
-      selfChampionId: 266,
-      selfWin: true,
-      selfKda: '12/2/8',
-      targetChampionId: 84,
-      targetWin: true,
-      targetKda: '9/4/6'
-    },
-    {
-      gameId: 1002,
-      queueName: '排位赛单双排',
-      date: '10-09',
-      isOpponent: true,
-      selfChampionId: 266,
-      selfWin: true,
-      selfKda: '8/3/11',
-      targetChampionId: 39,
-      targetWin: false,
-      targetKda: '4/7/2'
-    },
-    {
-      gameId: 1003,
-      queueName: '极地大乱斗',
-      date: '10-08',
-      isOpponent: false,
-      selfChampionId: 103,
-      selfWin: false,
-      selfKda: '7/9/15',
-      targetChampionId: 222,
-      targetWin: false,
-      targetKda: '10/8/12'
-    }
-  ]
+  return props.encounteredList || []
 })
 
 const totalPages = computed(() => Math.ceil(games.value.length / pageSize))

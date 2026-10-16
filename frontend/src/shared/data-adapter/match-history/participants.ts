@@ -2,7 +2,7 @@ import { Participant } from '@shared/types/league-client/match-history'
 
 import { noZero } from '../utils'
 import { LcuOrSgpGameSummary } from '../wrapper'
-import { MatchBasicInfo } from './match-basic'
+import { toBasicInfo, type MatchBasicInfo } from './match-basic'
 import { WinResult, computeWinResult } from './win-result'
 
 export type MatchParticipantPerkSelection = {
@@ -118,6 +118,7 @@ export type MatchParticipant = {
 
 // 以 SGP 的格式为参照，将 LCU 数据映射为抽象格式
 function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
+  const stats = participant?.stats || ({} as any)
   return {
     statPerks: null, // lcu has no stat perks record
     styles: [
@@ -125,49 +126,49 @@ function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
         description: 'primaryStyle',
         selections: [
           {
-            perk: participant.stats.perk0,
-            var1: participant.stats.perk0Var1,
-            var2: participant.stats.perk0Var2,
-            var3: participant.stats.perk0Var3
+            perk: stats.perk0 || 0,
+            var1: stats.perk0Var1 || 0,
+            var2: stats.perk0Var2 || 0,
+            var3: stats.perk0Var3 || 0
           },
           {
-            perk: participant.stats.perk1,
-            var1: participant.stats.perk1Var1,
-            var2: participant.stats.perk1Var2,
-            var3: participant.stats.perk1Var3
+            perk: stats.perk1 || 0,
+            var1: stats.perk1Var1 || 0,
+            var2: stats.perk1Var2 || 0,
+            var3: stats.perk1Var3 || 0
           },
           {
-            perk: participant.stats.perk2,
-            var1: participant.stats.perk2Var1,
-            var2: participant.stats.perk2Var2,
-            var3: participant.stats.perk2Var3
+            perk: stats.perk2 || 0,
+            var1: stats.perk2Var1 || 0,
+            var2: stats.perk2Var2 || 0,
+            var3: stats.perk2Var3 || 0
           },
           {
-            perk: participant.stats.perk3,
-            var1: participant.stats.perk3Var1,
-            var2: participant.stats.perk3Var2,
-            var3: participant.stats.perk3Var3
+            perk: stats.perk3 || 0,
+            var1: stats.perk3Var1 || 0,
+            var2: stats.perk3Var2 || 0,
+            var3: stats.perk3Var3 || 0
           }
         ],
-        style: participant.stats.perkPrimaryStyle
+        style: stats.perkPrimaryStyle || 0
       },
       {
         description: 'subStyle',
         selections: [
           {
-            perk: participant.stats.perk4,
-            var1: participant.stats.perk4Var1,
-            var2: participant.stats.perk4Var2,
-            var3: participant.stats.perk4Var3
+            perk: stats.perk4 || 0,
+            var1: stats.perk4Var1 || 0,
+            var2: stats.perk4Var2 || 0,
+            var3: stats.perk4Var3 || 0
           },
           {
-            perk: participant.stats.perk5,
-            var1: participant.stats.perk5Var1,
-            var2: participant.stats.perk5Var2,
-            var3: participant.stats.perk5Var3
+            perk: stats.perk5 || 0,
+            var1: stats.perk5Var1 || 0,
+            var2: stats.perk5Var2 || 0,
+            var3: stats.perk5Var3 || 0
           }
         ],
-        style: participant.stats.perkSubStyle
+        style: stats.perkSubStyle || 0
       }
     ]
   }
@@ -175,40 +176,43 @@ function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
 
 export function toParticipants(
   summary: LcuOrSgpGameSummary,
-  basicInfo: MatchBasicInfo
+  basicInfo?: MatchBasicInfo
 ): MatchParticipant[] {
+  if (!summary) return []
+  const safeBasicInfo = basicInfo || toBasicInfo(summary)
   const { source, data } = summary
 
   if (source === 'sgp') {
-    const totalKills = data.json.participants.reduce(
+    const participantsList = data?.json?.participants || []
+    const totalKills = participantsList.reduce(
       (acc, p) => {
-        const teamIdentifier = basicInfo.isCherrySubteam
-          ? `CHERRY-${p.playerSubteamId}`
-          : `TEAM-${p.teamId}`
+        const teamIdentifier = safeBasicInfo.isCherrySubteam
+          ? `CHERRY-${p.playerSubteamId || 0}`
+          : `TEAM-${p.teamId || 0}`
 
-        acc[teamIdentifier] = (acc[teamIdentifier] || 0) + p.kills
+        acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (p.kills || 0)
         return acc
       },
       {} as Record<string, number>
     )
 
-    const participants = data.json.participants.map<MatchParticipant>((p) => {
-      const teamIdentifier = basicInfo.isCherrySubteam
-        ? `CHERRY-${p.playerSubteamId}`
-        : `TEAM-${p.teamId}`
+    const participants = participantsList.map<MatchParticipant>((p) => {
+      const teamIdentifier = safeBasicInfo.isCherrySubteam
+        ? `CHERRY-${p.playerSubteamId || 0}`
+        : `TEAM-${p.teamId || 0}`
 
-      const { isSurrender, result } = computeWinResult(basicInfo.endOfGameResult, p)
+      const { isSurrender, result } = computeWinResult(safeBasicInfo.endOfGameResult, p)
 
       return {
-        puuid: p.puuid,
-        participantId: p.participantId,
-        gameName: p.riotIdGameName || p.summonerName,
-        tagLine: p.riotIdTagline,
-        profileIconId: p.profileIcon,
-        championId: p.championId,
-        position: p.teamPosition,
-        teamId: p.teamId,
-        playerSubteamId: p.playerSubteamId,
+        puuid: p.puuid || '',
+        participantId: p.participantId || 0,
+        gameName: p.riotIdGameName || p.summonerName || '',
+        tagLine: p.riotIdTagline || '',
+        profileIconId: p.profileIcon || 0,
+        championId: p.championId || 0,
+        position: p.teamPosition || null,
+        teamId: p.teamId || 0,
+        playerSubteamId: p.playerSubteamId || 0,
         teamIdentifier,
         items: [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6],
         roleBoundItem: p.roleBoundItem,
@@ -222,35 +226,38 @@ export function toParticipants(
         ],
         spells: [p.spell1Id, p.spell2Id],
         perks: p.perks,
-        level: p.champLevel,
-        kills: p.kills,
-        deaths: p.deaths,
-        assists: p.assists,
-        kda: (p.kills + p.assists) / noZero(p.deaths),
-        killParticipation: (p.kills + p.assists) / noZero(totalKills[teamIdentifier]),
-        totalDamageDealtToChampions: p.totalDamageDealtToChampions,
-        damageGoldEfficiency: p.totalDamageDealtToChampions / noZero(p.goldEarned),
-        physicalDamageDealtToChampions: p.physicalDamageDealtToChampions,
-        magicDamageDealtToChampions: p.magicDamageDealtToChampions,
-        trueDamageDealtToChampions: p.trueDamageDealtToChampions,
-        totalDamageTaken: p.totalDamageTaken,
-        physicalDamageTaken: p.physicalDamageTaken,
-        magicDamageTaken: p.magicDamageTaken,
-        trueDamageTaken: p.trueDamageTaken,
-        goldEarned: p.goldEarned,
-        goldSpent: p.goldSpent,
-        neutralMinionsKilled: p.neutralMinionsKilled,
-        totalMinionsKilled: p.totalMinionsKilled,
-        cs: p.neutralMinionsKilled + p.totalMinionsKilled,
-        win: p.win,
+        level: p.champLevel || 1,
+        kills: p.kills || 0,
+        deaths: p.deaths || 0,
+        assists: p.assists || 0,
+        kda: ((p.kills || 0) + (p.assists || 0)) / noZero(p.deaths || 0),
+        killParticipation:
+          ((p.kills || 0) + (p.assists || 0)) /
+          noZero(totalKills[teamIdentifier] || 0),
+        totalDamageDealtToChampions: p.totalDamageDealtToChampions || 0,
+        damageGoldEfficiency:
+          (p.totalDamageDealtToChampions || 0) / noZero(p.goldEarned || 0),
+        physicalDamageDealtToChampions: p.physicalDamageDealtToChampions || 0,
+        magicDamageDealtToChampions: p.magicDamageDealtToChampions || 0,
+        trueDamageDealtToChampions: p.trueDamageDealtToChampions || 0,
+        totalDamageTaken: p.totalDamageTaken || 0,
+        physicalDamageTaken: p.physicalDamageTaken || 0,
+        magicDamageTaken: p.magicDamageTaken || 0,
+        trueDamageTaken: p.trueDamageTaken || 0,
+        goldEarned: p.goldEarned || 0,
+        goldSpent: p.goldSpent || 0,
+        neutralMinionsKilled: p.neutralMinionsKilled || 0,
+        totalMinionsKilled: p.totalMinionsKilled || 0,
+        cs: (p.neutralMinionsKilled || 0) + (p.totalMinionsKilled || 0),
+        win: p.win ?? false,
         isSurrender,
         winResult: result,
-        subteamPlacement: p.subteamPlacement,
-        gameEndedInEarlySurrender: p.gameEndedInEarlySurrender,
-        gameEndedInSurrender: p.gameEndedInSurrender,
-        teamEarlySurrendered: p.teamEarlySurrendered,
-        totalDamageToTowers: p.damageDealtToTurrets,
-        totalHeal: p.totalHeal,
+        subteamPlacement: p.subteamPlacement || 0,
+        gameEndedInEarlySurrender: p.gameEndedInEarlySurrender ?? false,
+        gameEndedInSurrender: p.gameEndedInSurrender ?? false,
+        teamEarlySurrendered: p.teamEarlySurrendered ?? false,
+        totalDamageToTowers: p.damageDealtToTurrets || 0,
+        totalHeal: p.totalHeal || 0,
         visionScore: p.visionScore ?? 0,
         timeCCingOthers: p.timeCCingOthers,
         soloKills: p.challenges?.soloKills ?? null,
@@ -289,96 +296,102 @@ export function toParticipants(
     return participants
   }
 
-  const totalKills = data.participants.reduce(
+  const totalKills = (data.participants || []).reduce(
     (acc, p) => {
-      const teamIdentifier = basicInfo.isCherrySubteam
-        ? `CHERRY-${p.stats.playerSubteamId}`
-        : `TEAM-${p.teamId}`
-      acc[teamIdentifier] = (acc[teamIdentifier] || 0) + p.stats.kills
+      const stats = p.stats || ({} as any)
+      const teamIdentifier = safeBasicInfo.isCherrySubteam
+        ? `CHERRY-${stats.playerSubteamId || 0}`
+        : `TEAM-${p.teamId || 0}`
+      acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (stats.kills || 0)
       return acc
     },
     {} as Record<string, number>
   )
 
-  const participants = data.participants
+  const participants = (data.participants || [])
     .map<MatchParticipant | null>((participant) => {
-      const identity = data.participantIdentities.find(
+      const identity = (data.participantIdentities || []).find(
         (i) => i.participantId === participant.participantId
       )
-      if (!identity) return null
+      const player = identity?.player || (participant as any).player || (participant as any)
+      const puuid = player?.puuid || (participant as any).puuid || ''
+      if (!identity && !puuid && !player?.gameName && !player?.summonerName) {
+        return null
+      }
 
-      const teamIdentifier = basicInfo.isCherrySubteam
-        ? `CHERRY-${participant.stats.playerSubteamId}`
-        : `TEAM-${participant.teamId}`
+      const stats = participant.stats || ({} as any)
+      const teamIdentifier = safeBasicInfo.isCherrySubteam
+        ? `CHERRY-${stats.playerSubteamId || 0}`
+        : `TEAM-${participant.teamId || 0}`
 
-      const { isSurrender, result } = computeWinResult(basicInfo.endOfGameResult, participant.stats)
+      const { isSurrender, result } = computeWinResult(safeBasicInfo.endOfGameResult, stats)
 
       return {
-        puuid: identity.player.puuid,
+        puuid,
         participantId: participant.participantId,
-        gameName: identity.player.gameName || identity.player.summonerName,
-        tagLine: identity.player.tagLine,
-        profileIconId: identity.player.profileIcon,
-        championId: participant.championId,
-        position: null,
-        teamId: participant.teamId,
-        playerSubteamId: participant.stats.playerSubteamId,
+        gameName: player?.gameName || player?.summonerName || (participant as any).gameName || (participant as any).summonerName || '',
+        tagLine: player?.tagLine || (participant as any).tagLine || '',
+        profileIconId: player?.profileIcon || player?.profileIconId || (participant as any).profileIcon || 0,
+        championId: participant.championId || 0,
+        position: (participant as any).stats?.teamPosition || (participant as any).stats?.individualPosition || participant.timeline?.lane || null,
+        teamId: participant.teamId || 0,
+        playerSubteamId: stats.playerSubteamId || 0,
         teamIdentifier,
         items: [
-          participant.stats.item0,
-          participant.stats.item1,
-          participant.stats.item2,
-          participant.stats.item3,
-          participant.stats.item4,
-          participant.stats.item5,
-          participant.stats.item6
+          stats.item0 || 0,
+          stats.item1 || 0,
+          stats.item2 || 0,
+          stats.item3 || 0,
+          stats.item4 || 0,
+          stats.item5 || 0,
+          stats.item6 || 0
         ],
-        roleBoundItem: participant.stats.roleBoundItem,
+        roleBoundItem: stats.roleBoundItem || 0,
         augments: [
-          participant.stats.playerAugment1,
-          participant.stats.playerAugment2,
-          participant.stats.playerAugment3,
-          participant.stats.playerAugment4,
-          participant.stats.playerAugment5,
-          participant.stats.playerAugment6
+          stats.playerAugment1 || 0,
+          stats.playerAugment2 || 0,
+          stats.playerAugment3 || 0,
+          stats.playerAugment4 || 0,
+          stats.playerAugment5 || 0,
+          stats.playerAugment6 || 0
         ],
-        spells: [participant.spell1Id, participant.spell2Id],
+        spells: [participant.spell1Id || 0, participant.spell2Id || 0],
         perks: mapLcuDataToPerks(participant),
-        level: participant.stats.champLevel,
-        kills: participant.stats.kills,
-        deaths: participant.stats.deaths,
-        assists: participant.stats.assists,
+        level: stats.champLevel || 1,
+        kills: stats.kills || 0,
+        deaths: stats.deaths || 0,
+        assists: stats.assists || 0,
         kda:
-          (participant.stats.kills + participant.stats.assists) / noZero(participant.stats.deaths),
+          ((stats.kills || 0) + (stats.assists || 0)) / noZero(stats.deaths || 0),
         killParticipation:
-          (participant.stats.kills + participant.stats.assists) /
-          noZero(totalKills[teamIdentifier]),
-        totalDamageDealtToChampions: participant.stats.totalDamageDealtToChampions,
+          ((stats.kills || 0) + (stats.assists || 0)) /
+          noZero(totalKills[teamIdentifier] || 0),
+        totalDamageDealtToChampions: stats.totalDamageDealtToChampions || 0,
         damageGoldEfficiency:
-          participant.stats.totalDamageDealtToChampions / noZero(participant.stats.goldEarned),
-        physicalDamageDealtToChampions: participant.stats.physicalDamageDealtToChampions,
-        magicDamageDealtToChampions: participant.stats.magicDamageDealtToChampions,
-        trueDamageDealtToChampions: participant.stats.trueDamageDealtToChampions,
-        totalDamageTaken: participant.stats.totalDamageTaken,
-        physicalDamageTaken: participant.stats.physicalDamageTaken,
-        magicDamageTaken: participant.stats.magicalDamageTaken,
-        trueDamageTaken: participant.stats.trueDamageTaken,
-        goldEarned: participant.stats.goldEarned,
-        goldSpent: participant.stats.goldSpent,
-        neutralMinionsKilled: participant.stats.neutralMinionsKilled,
-        totalMinionsKilled: participant.stats.totalMinionsKilled,
-        cs: participant.stats.neutralMinionsKilled + participant.stats.totalMinionsKilled,
-        win: participant.stats.win,
+          (stats.totalDamageDealtToChampions || 0) / noZero(stats.goldEarned || 0),
+        physicalDamageDealtToChampions: stats.physicalDamageDealtToChampions || 0,
+        magicDamageDealtToChampions: stats.magicDamageDealtToChampions || 0,
+        trueDamageDealtToChampions: stats.trueDamageDealtToChampions || 0,
+        totalDamageTaken: stats.totalDamageTaken || 0,
+        physicalDamageTaken: stats.physicalDamageTaken || 0,
+        magicDamageTaken: stats.magicalDamageTaken || 0,
+        trueDamageTaken: stats.trueDamageTaken || 0,
+        goldEarned: stats.goldEarned || 0,
+        goldSpent: stats.goldSpent || 0,
+        neutralMinionsKilled: stats.neutralMinionsKilled || 0,
+        totalMinionsKilled: stats.totalMinionsKilled || 0,
+        cs: (stats.neutralMinionsKilled || 0) + (stats.totalMinionsKilled || 0),
+        win: stats.win ?? false,
         isSurrender,
         winResult: result,
-        subteamPlacement: participant.stats.subteamPlacement,
-        gameEndedInEarlySurrender: participant.stats.gameEndedInEarlySurrender,
-        gameEndedInSurrender: participant.stats.gameEndedInSurrender,
-        teamEarlySurrendered: participant.stats.teamEarlySurrendered,
-        totalDamageToTowers: participant.stats.damageDealtToTurrets,
-        totalHeal: participant.stats.totalHeal,
-        visionScore: participant.stats.visionScore ?? 0,
-        timeCCingOthers: participant.stats.timeCCingOthers,
+        subteamPlacement: stats.subteamPlacement || 0,
+        gameEndedInEarlySurrender: stats.gameEndedInEarlySurrender ?? false,
+        gameEndedInSurrender: stats.gameEndedInSurrender ?? false,
+        teamEarlySurrendered: stats.teamEarlySurrendered ?? false,
+        totalDamageToTowers: stats.damageDealtToTurrets || 0,
+        totalHeal: stats.totalHeal || 0,
+        visionScore: stats.visionScore ?? 0,
+        timeCCingOthers: stats.timeCCingOthers || 0,
 
         effectiveHealAndShielding: null, // lcu has no effective heal and shielding record
         totalDamageShieldedOnTeammates: null, // lcu has no total damage shielded on teammates record
@@ -390,10 +403,10 @@ export function toParticipants(
         earliestDragonTakedown: null, // lcu has no earliest dragon takedown record
         maxCsAdvantageOnLaneOpponent: null, // lcu has no max cs advantage on lane opponent record
 
-        doubleKills: participant.stats.doubleKills,
-        tripleKills: participant.stats.tripleKills,
-        quadraKills: participant.stats.quadraKills,
-        pentaKills: participant.stats.pentaKills
+        doubleKills: stats.doubleKills || 0,
+        tripleKills: stats.tripleKills || 0,
+        quadraKills: stats.quadraKills || 0,
+        pentaKills: stats.pentaKills || 0
       }
     })
     .filter(isNotNull)

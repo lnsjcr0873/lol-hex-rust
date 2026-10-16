@@ -9,7 +9,8 @@
           ? 'bg-blue-950/40 border-blue-600/30 text-blue-200 hover:border-blue-500/60'
           : 'bg-rose-950/40 border-rose-600/30 text-rose-200 hover:border-rose-500/60'
       ]"
-      @click="inspectPlayer(player.puuid)"
+      @click="handleMatchClick(match)"
+      :title="match.gameId ? `点击弹窗预览本场 (${match.gameId}) 详情` : '查看该召唤师战绩'"
     >
       <!-- Left: Champion Icon & Queue -->
       <div class="flex items-center space-x-1.5 min-w-0">
@@ -52,26 +53,45 @@ const props = defineProps<{
   player: EnhancedPlayerCard
 }>()
 
-const { inspectPlayer } = useOngoingGamePanel()
+const { inspectPlayer, previewGame } = useOngoingGamePanel()
 
 interface MiniMatch {
+  gameId?: number
   championId: number
   isWin: boolean
   queueName: string
   kda: string
 }
 
-const recentMatches = computed<MiniMatch[]>(() => {
-  const matches = props.player.recent_matches || ['win', 'loss', 'win', 'win', 'loss']
-  const champId = props.player.champion_id || 266
+function handleMatchClick(match: MiniMatch) {
+  if (match.gameId && previewGame) {
+    previewGame(match.gameId, props.player.puuid)
+  } else {
+    inspectPlayer(props.player.puuid)
+  }
+}
 
-  return matches.slice(0, 4).map((m, idx) => {
+const recentMatches = computed<MiniMatch[]>(() => {
+  if (props.player.matches && props.player.matches.length > 0) {
+    return props.player.matches.slice(0, 4).map((m: any) => ({
+      gameId: m.game_id || m.gameId,
+      championId: m.champion_id || props.player.champion_id || 0,
+      isWin: Boolean(m.win ?? m.is_win),
+      queueName: m.mode_cn || (m.queue_id === 420 ? '单双排' : m.queue_id === 440 ? '灵活排位' : m.queue_id === 450 ? '大乱斗' : '匹配模式'),
+      kda: m.kda_str || `${m.kills ?? 0}/${m.deaths ?? 0}/${m.assists ?? 0}`
+    }))
+  }
+
+  const matches = props.player.recent_matches || []
+  const champId = props.player.champion_id || 0
+
+  return matches.slice(0, 4).map((m) => {
     const isWin = m === 'win'
     return {
       championId: champId,
       isWin,
-      queueName: '单双排',
-      kda: isWin ? `${6 + idx} / ${2 + idx} / ${8 + idx}` : `${2 + idx} / ${6 + idx} / ${4 + idx}`
+      queueName: '排位赛',
+      kda: isWin ? '胜' : '负'
     }
   })
 })

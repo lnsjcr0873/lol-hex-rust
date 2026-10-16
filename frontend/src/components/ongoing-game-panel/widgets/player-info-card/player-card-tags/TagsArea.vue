@@ -12,16 +12,16 @@
             class="px-1.5 py-0.5 rounded text-[10px] font-medium leading-none cursor-pointer transition-transform hover:scale-105 inline-flex items-center gap-1 shadow-sm"
             :class="tag.tagClass"
           >
-            <span>{{ getTagEmoji(tag.id) }}</span>
-            <span>{{ tag.label }}</span>
+            <span>{{ getTagEmoji(tag) }}</span>
+            <span>{{ cleanTagLabel(tag.label) }}</span>
           </span>
         </template>
 
         <!-- Popover Content for Tactical Tag -->
         <div class="max-w-56 text-xs text-slate-200 p-1">
           <div class="font-bold text-slate-100 flex items-center gap-1.5 mb-1">
-            <span>{{ getTagEmoji(tag.id) }}</span>
-            <span>{{ tag.label }}</span>
+            <span>{{ getTagEmoji(tag) }}</span>
+            <span>{{ cleanTagLabel(tag.label) }}</span>
           </div>
           <p class="text-slate-300 leading-relaxed text-[11px]">
             {{ tag.description || '战术画像判定指标' }}
@@ -34,7 +34,7 @@
           </div>
 
           <div v-else-if="tag.id === 'easy-gank' && tag.popoverData" class="mt-2 pt-1.5 border-t border-slate-700/60 text-[10px] text-slate-300">
-            前 15 分钟敌方打野参与阵亡: {{ tag.popoverData.times?.toFixed(1) }} 次/场
+            前 15 分钟敌方打野参与阵亡: {{ Number.isFinite(tag.popoverData.times) ? tag.popoverData.times.toFixed(1) : '0.0' }} 次/场
           </div>
 
           <div v-else-if="tag.id === 'high-win-rate' && tag.popoverData" class="mt-2 pt-1.5 border-t border-slate-700/60 text-[10px] text-slate-300 font-mono">
@@ -48,8 +48,8 @@
         class="px-1.5 py-0.5 rounded text-[10px] font-medium leading-none inline-flex items-center gap-1 shadow-sm"
         :class="tag.tagClass"
       >
-        <span>{{ getTagEmoji(tag.id) }}</span>
-        <span>{{ tag.label }}</span>
+        <span>{{ getTagEmoji(tag) }}</span>
+        <span>{{ cleanTagLabel(tag.label) }}</span>
       </span>
     </template>
   </div>
@@ -93,7 +93,26 @@ const tagEmojiMap: Record<string, string> = {
   'akari-score': '🌟'
 }
 
-const getTagEmoji = (id: string) => tagEmojiMap[id] || '🏷️'
+const cleanTagLabel = (label: string) => {
+  return label.replace(/^[\p{Emoji}\u200d\uFE0F\s]+/u, '').trim()
+}
+
+const getTagEmoji = (tag: EvaluatedTag) => {
+  if (tagEmojiMap[tag.id]) {
+    return tagEmojiMap[tag.id]
+  }
+  const match = tag.label.match(/^([\p{Emoji}\u200d\uFE0F]+)/u)
+  if (match) {
+    return match[1]
+  }
+  if (tag.label.includes('连胜')) return '🔥'
+  if (tag.label.includes('连败')) return '❄️'
+  if (tag.label.includes('绝活')) return '👑'
+  if (tag.label.includes('通天代')) return '⚡'
+  if (tag.label.includes('车队')) return '🚗'
+  if (tag.label.includes('试英雄')) return '⚠️'
+  return '🏷️'
+}
 
 const hasPopover = (tag: EvaluatedTag) => {
   return Boolean(tag.description || tag.popoverData)
@@ -124,7 +143,8 @@ const tags = computed<EvaluatedTag[]>(() => {
   const result: EvaluatedTag[] = [...evaluated]
   if (props.player.badges && props.player.badges.length > 0) {
     for (const badge of props.player.badges) {
-      if (!result.some((r) => r.label.includes(badge.label) || badge.label.includes(r.label))) {
+      const cleanBadge = cleanTagLabel(badge.label)
+      if (!result.some((r) => cleanTagLabel(r.label).includes(cleanBadge) || cleanBadge.includes(cleanTagLabel(r.label)))) {
         result.push({
           id: badge.id,
           label: badge.label,
@@ -136,8 +156,41 @@ const tags = computed<EvaluatedTag[]>(() => {
     }
   }
 
+  // Mutual exclusion filtering
+  const hasWinStreak = result.some((t) => t.id === 'winning-streak' || t.label.includes('连胜'))
+  const hasLossStreak = result.some((t) => t.id === 'losing-streak' || t.label.includes('连败'))
+  const hasSmurf = result.some((t) => t.id === 'great-performance' || t.label.includes('通天代'))
+  const hasTestingChamp = result.some((t) => t.label.includes('试英雄'))
+  const winRate = props.player.recent_win_rate ?? 50
+
+  let filtered = result.filter((t) => {
+    // If both streak tags exist, keep the one matching recent winrate or streak type
+    if (hasWinStreak && hasLossStreak) {
+      if (winRate < 50 && (t.id === 'winning-streak' || t.label.includes('连胜'))) return false
+      if (winRate >= 50 && (t.id === 'losing-streak' || t.label.includes('连败'))) return false
+    }
+    // If smurf and testing-champ collide, testing-champ invalidates smurf
+    if (hasSmurf && hasTestingChamp) {
+      if (t.id === 'great-performance' || t.label.includes('通天代')) return false
+    }
+    // Low winrate cannot be a smurf
+    if (winRate < 55 && (t.id === 'great-performance' || t.label.includes('通天代'))) {
+      return false
+    }
+    return true
+  })
+
+  // Deduplicate tags by cleaned label
+  const seenLabels = new Set<string>()
+  filtered = filtered.filter((t) => {
+    const key = cleanTagLabel(t.label)
+    if (seenLabels.has(key)) return false
+    seenLabels.add(key)
+    return true
+  })
+
   // Cap to top 6 tags to keep card height clean and readable
-  return result.slice(0, 6)
+  return filtered.slice(0, 6)
 })
 
 function getBadgeColorClass(color?: string): string {

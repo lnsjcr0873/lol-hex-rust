@@ -3,12 +3,12 @@
     <!-- Top Metadata Bar -->
     <div class="px-3 py-1.5 bg-slate-900/90 rounded-lg border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between select-none">
       <div class="flex items-center space-x-3">
-        <span>对局 ID: <strong class="text-slate-200 font-mono">{{ basicInfo.gameId }}</strong> ({{ basicInfo.dataSource.toUpperCase() }})</span>
-        <span>版本: <span class="font-mono text-slate-300">{{ basicInfo.gameVersion }}</span></span>
-        <span>模式: <span class="text-[#0ac8b9]">{{ basicInfo.gameMode }}</span></span>
+        <span>对局 ID: <strong class="text-slate-200 font-mono">{{ basicInfo?.gameId || 0 }}</strong> ({{ (basicInfo?.dataSource || 'lcu').toUpperCase() }})</span>
+        <span>版本: <span class="font-mono text-slate-300">{{ basicInfo?.gameVersion || '14.x' }}</span></span>
+        <span>模式: <span class="text-[#0ac8b9]">{{ basicInfo?.gameMode || 'MATCH' }}</span></span>
       </div>
       <div>
-        <span>时长: <strong class="text-slate-200 font-mono">{{ formatDuration(basicInfo.gameDuration) }}</strong></span>
+        <span>时长: <strong class="text-slate-200 font-mono">{{ formatDuration(basicInfo?.gameDuration || 0) }}</strong></span>
       </div>
     </div>
 
@@ -51,10 +51,10 @@
                   :size="26"
                   round
                   class="border-2"
-                  :style="{ borderColor: getTeamColor(p.identity.teamIdentifier) }"
+                  :style="{ borderColor: getTeamColor(p.identity?.teamIdentifier) }"
                 />
                 <span class="text-[10px] truncate max-w-20 font-semibold text-slate-200">
-                  {{ p.identity.gameName || `P${p.participantId}` }}
+                  {{ p.identity?.gameName || `P${p.participantId}` }}
                 </span>
               </div>
             </th>
@@ -146,30 +146,38 @@ function formatCellValue(val: any, renderType?: any): string {
     return val ? '✔' : '✖'
   }
   if (renderType === 'akari-score') {
-    if (typeof val === 'object' && val?.total !== undefined) {
-      return val.total.toFixed(2)
-    }
-    return typeof val === 'number' ? val.toFixed(2) : String(val)
+    const num = (val && typeof val === 'object' && val.total !== undefined) ? Number(val.total) : Number(val)
+    return Number.isFinite(num) ? num.toFixed(2) : '0.00'
   }
   if (renderType === 'percentage') {
-    return typeof val === 'number' ? `${val.toFixed(1)}%` : `${val}%`
+    const num = Number(val)
+    return Number.isFinite(num) ? `${num.toFixed(1)}%` : '0.0%'
   }
   if (renderType === 'compat') {
-    if (typeof val === 'number') {
-      return val >= 1000 ? `${(val / 1000).toFixed(1)}k` : val.toString()
+    const num = Number(val)
+    if (Number.isFinite(num)) {
+      return num >= 1000 ? `${(num / 1000).toFixed(1)}k` : num.toString()
     }
     return String(val)
   }
+  if (renderType === 'integer') {
+    const num = Number(val)
+    return Number.isFinite(num) ? Math.round(num).toLocaleString() : '-'
+  }
   if (typeof val === 'number') {
-    return val.toLocaleString()
+    return Number.isFinite(val) ? val.toLocaleString() : '-'
   }
   return String(val)
 }
 
 function getMetricComparison(key: string) {
-  return rawStats.value.map((p: any) => ({
-    participantId: p.participantId,
-    value: typeof p[key] === 'number' ? p[key] : (p[key]?.total ?? 0)
-  }))
+  return rawStats.value.map((p: any) => {
+    const raw = typeof p[key] === 'number' ? p[key] : (p[key]?.total ?? 0)
+    const val = Number(raw)
+    return {
+      participantId: p.participantId,
+      value: Number.isFinite(val) ? val : 0
+    }
+  })
 }
 </script>

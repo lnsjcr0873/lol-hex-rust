@@ -6,12 +6,15 @@ import {
   AutomationConfig,
   MatchTimelineData
 } from './types';
+import type { MatchHistory, GameTimeline } from '@shared/types/league-client/match-history';
 import { 
   mockOngoingMatch, 
   mockSummonerProfile, 
   mockMatchHistory, 
   mockMatchDetail, 
-  mockAutomationConfig 
+  mockAutomationConfig,
+  getMockRawMatchHistory,
+  getMockRawMatchTimeline
 } from './mockData';
 
 // Safe check whether we are running inside Tauri
@@ -94,12 +97,99 @@ export async function getOngoingMatch(forceMock?: boolean): Promise<OngoingMatch
   );
 }
 
+export const emptySummonerProfile: SummonerProfile = {
+  puuid: '',
+  game_name: '未连接客户端',
+  tag_line: '',
+  profile_icon_id: 29,
+  summoner_level: 0,
+  tier_solo: 'UNRANKED',
+  division_solo: '',
+  lp_solo: 0,
+  wins_solo: 0,
+  losses_solo: 0,
+  win_rate_solo: 0,
+  tier_flex: 'UNRANKED',
+  division_flex: '',
+  lp_flex: 0,
+  wins_flex: 0,
+  losses_flex: 0,
+  win_rate_flex: 0,
+  is_connected: false,
+  message: '客户端未连接'
+};
+
 export async function getSummonerProfile(puuid?: string): Promise<SummonerProfile> {
-  return safeInvoke<SummonerProfile>('get_summoner_profile', { puuid }, mockSummonerProfile);
+  return safeInvoke<SummonerProfile>('get_summoner_profile', { puuid }, emptySummonerProfile);
 }
 
-export async function getMatchHistory(puuid?: string, queueId?: number): Promise<MatchHistoryItem[]> {
-  return safeInvoke<MatchHistoryItem[]>('get_match_history', { puuid, queueId }, []);
+export async function getMatchHistory(
+  puuid?: string,
+  queueId?: number,
+  begIndex?: number,
+  endIndex?: number,
+  page?: number,
+  pageSize?: number
+): Promise<MatchHistoryItem[]> {
+  return safeInvoke<MatchHistoryItem[]>(
+    'get_match_history',
+    {
+      puuid,
+      queueId: queueId ?? null,
+      begIndex,
+      endIndex,
+      page,
+      pageSize,
+      queue_id: queueId ?? null,
+      beg_index: begIndex,
+      end_index: endIndex,
+      page_size: pageSize
+    },
+    []
+  );
+}
+
+export async function getRawMatchHistory(
+  puuid?: string,
+  queueId?: number,
+  begIndex?: number,
+  endIndex?: number
+): Promise<MatchHistory> {
+  return safeInvoke<MatchHistory>(
+    'get_raw_match_history',
+    {
+      puuid,
+      queueId: queueId ?? null,
+      queue_id: queueId ?? null,
+      begIndex,
+      beg_index: begIndex,
+      endIndex,
+      end_index: endIndex
+    },
+    getMockRawMatchHistory(queueId, begIndex, endIndex)
+  );
+}
+
+export async function getRawMatchTimeline(gameId: number): Promise<GameTimeline> {
+  return safeInvoke<GameTimeline>(
+    'get_raw_match_timeline',
+    {
+      gameId,
+      game_id: gameId
+    },
+    getMockRawMatchTimeline(gameId)
+  );
+}
+
+export async function getRawMatchDetail(gameId: number): Promise<any> {
+  return safeInvoke<any>(
+    'get_raw_match_detail',
+    {
+      gameId,
+      game_id: gameId
+    },
+    null
+  );
 }
 
 export async function getMatchDetail(gameId: number): Promise<MatchDetailFull | null> {
@@ -109,6 +199,8 @@ export async function getMatchDetail(gameId: number): Promise<MatchDetailFull | 
 export async function getMatchTimeline(gameId: number): Promise<MatchTimelineData | null> {
   return safeInvoke<MatchTimelineData | null>('get_match_timeline', { gameId }, null);
 }
+
+export { getMockRawMatchHistory, getMockRawMatchTimeline };
 
 export function getMockSummonerProfile(): SummonerProfile {
   return mockSummonerProfile;
@@ -123,7 +215,7 @@ export function getMockMatchDetail(): MatchDetailFull {
 }
 
 export async function sendChatRecords(roomId: string, format: 'concise' | 'detailed'): Promise<{ success: boolean; message: string }> {
-  return safeInvoke('send_chat_records', { roomId, format }, { success: true, message: '战绩已广播至选人聊天室' });
+  return safeInvoke('send_chat_records', { roomId, format }, { success: false, message: '客户端未连接，无法发送战绩' });
 }
 
 export async function getAutomationConfig(): Promise<AutomationConfig> {
@@ -134,6 +226,42 @@ export async function updateAutomationConfig(config: AutomationConfig): Promise<
   return safeInvoke('update_automation_config', { config }, { success: true });
 }
 
-export async function applyRunesAndSpells(championId: number): Promise<{ success: boolean; message: string }> {
-  return safeInvoke('apply_runes_and_spells', { championId }, { success: true, message: '推荐符文与召唤师技能已自动应用' });
+export async function getChampionMastery(puuid?: string): Promise<any[]> {
+  const res = await safeInvoke<any[]>('get_champion_mastery', { puuid: puuid || '' }, []);
+  if (Array.isArray(res) && res.length > 0) {
+    return res;
+  }
+  // If demo puuid or empty result while running in demo mode
+  if (puuid && (puuid.startsWith('mock_') || puuid.includes('demo'))) {
+    const { getMockChampionMastery } = await import('./mockData');
+    return getMockChampionMastery();
+  }
+  return res || [];
 }
+
+export async function searchSummoner(name: string): Promise<any> {
+  return safeInvoke('search_summoner', { name }, null);
+}
+
+export async function applyRunesAndSpells(championId: number): Promise<{ success: boolean; message: string }> {
+  return safeInvoke('apply_runes_and_spells', { championId }, { success: false, message: '客户端未连接，无法配置符文' });
+}
+
+export async function toggleOngoingOverlay(): Promise<boolean> {
+  return safeInvoke<boolean>('toggle_ongoing_overlay', undefined, false);
+}
+
+export async function setOngoingOverlayVisible(visible: boolean): Promise<void> {
+  return safeInvoke<void>('set_ongoing_overlay_visible', { visible }, null as any);
+}
+
+export async function setOngoingOverlayAlwaysOnTop(alwaysOnTop: boolean): Promise<void> {
+  return safeInvoke<void>('set_ongoing_overlay_always_on_top', { alwaysOnTop }, null as any);
+}
+
+export async function isOngoingOverlayVisible(): Promise<boolean> {
+  return safeInvoke<boolean>('is_ongoing_overlay_visible', undefined, !isTauri);
+}
+
+export { getMockChampionMastery } from './mockData';
+

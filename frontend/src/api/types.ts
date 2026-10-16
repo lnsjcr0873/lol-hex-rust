@@ -52,10 +52,21 @@ export interface PlayerCard {
   recent_games_count: number;
   champ_recent_games: number;
   champ_recent_win_rate: number;
+  top_champs?: TopChampItem[];
   recent_matches: ('win' | 'loss')[];
+  matches?: any[];
   badges: TacticalBadge[];
   premade_party?: PremadeParty;
   radar: RadarStat;
+}
+
+export interface TopChampItem {
+  champion_id: number;
+  champion_name: string;
+  games: number;
+  win_rate: number;
+  win_rate_pct: number;
+  kda: number;
 }
 
 export interface OngoingMatchData {
@@ -75,6 +86,9 @@ export interface OngoingMatchData {
 
 export interface SummonerProfile {
   is_connected?: boolean;
+  is_mock?: boolean;
+  privacy?: string;
+  message?: string;
   puuid: string;
   game_name: string;
   tag_line: string;
@@ -92,8 +106,8 @@ export interface SummonerProfile {
   wins_flex: number;
   losses_flex: number;
   win_rate_flex: number;
-  recent_radar: RadarStat;
-  recent_summary: {
+  recent_radar?: RadarStat;
+  recent_summary?: {
     total_games: number;
     win_rate: number;
     avg_kda: string;
@@ -117,6 +131,8 @@ export interface MatchHistoryItem {
   queue_id: number;
   queue_name: string;
   is_win: boolean;
+  team_id?: number;
+  is_blue?: boolean;
   champion_id: number;
   champion_name: string;
   champion_icon: string;
@@ -133,13 +149,33 @@ export interface MatchHistoryItem {
   damage_taken: number;
   gold_earned: number;
   minions_killed: number;
-  participants_preview: {
-    champion_id: number;
-    champion_name: string;
-    champion_icon: string;
-    game_name: string;
-    is_win: boolean;
-  }[];
+  spell1_id?: number;
+  spell2_id?: number;
+  physical_damage?: number;
+  magic_damage?: number;
+  true_damage?: number;
+  primary_rune?: number;
+  secondary_rune?: number;
+  participants_preview: ParticipantPreviewItem[];
+}
+
+export interface ParticipantPreviewItem {
+  participant_id?: number;
+  puuid?: string;
+  summoner_name?: string;
+  game_name?: string;
+  tag_line?: string;
+  team_id?: number;
+  is_blue?: boolean;
+  champion_id: number;
+  champion_name: string;
+  champion_icon: string;
+  is_win: boolean;
+  kills?: number;
+  deaths?: number;
+  assists?: number;
+  spell1_id?: number;
+  spell2_id?: number;
 }
 
 export interface MatchDetailParticipant {

@@ -2,7 +2,7 @@ import { Team } from '@shared/types/league-client/match-history'
 
 import { noZero } from '../utils'
 import { LcuOrSgpGameSummary } from '../wrapper'
-import { MatchBasicInfo } from './match-basic'
+import { toBasicInfo, type MatchBasicInfo } from './match-basic'
 import { MatchParticipant } from './participants'
 import { WinResult, computeWinResult } from './win-result'
 
@@ -147,12 +147,13 @@ function mapLcuToObjectives(team: Team): MatchTeamInfo {
 }
 
 function getTeamInfo(summary: LcuOrSgpGameSummary): MatchTeamInfo[] {
+  if (!summary || !summary.data) return []
   if (summary.source === 'sgp') {
-    const teams = summary.data.json.teams
+    const teams = summary.data.json?.teams || []
 
     return teams.map((t) => {
       return {
-        bans: t.bans,
+        bans: t.bans || [],
         win: t.win,
         teamId: t.teamId,
         objectives: t.objectives
@@ -160,18 +161,20 @@ function getTeamInfo(summary: LcuOrSgpGameSummary): MatchTeamInfo[] {
     })
   }
 
-  return summary.data.teams.map(mapLcuToObjectives)
+  return (summary.data.teams || []).map(mapLcuToObjectives)
 }
 
 export function toTeams(
   summary: LcuOrSgpGameSummary,
-  basicInfo: MatchBasicInfo,
-  participants: MatchParticipant[]
+  basicInfo?: MatchBasicInfo,
+  participants?: MatchParticipant[]
 ): TeamsAdapterResult {
   const teamsInfo = getTeamInfo(summary)
+  const safeBasicInfo = basicInfo || toBasicInfo(summary)
+  const safeParticipants = Array.isArray(participants) ? participants : []
 
   // 按 teamIdentifier 分组
-  const grouped = participants.reduce(
+  const grouped = safeParticipants.reduce(
     (acc, p) => {
       acc[p.teamIdentifier] = acc[p.teamIdentifier] || []
       acc[p.teamIdentifier].push(p)
@@ -186,12 +189,23 @@ export function toTeams(
     return acc
   }, {})
 
+function safeMax(numbers: (number | null | undefined)[]): number {
+  const valid = numbers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+  return valid.length > 0 ? Math.max(...valid) : 0
+}
+
   // 计算每个团队的统计数据
-  const teamStatsArr: MatchTeamStats[] = Object.entries(grouped).map(
-    ([teamIdentifier, teamParticipants]) => {
+  const teamStatsArr: MatchTeamStats[] = Object.entries(grouped)
+    .filter(([_, teamParticipants]) => teamParticipants && teamParticipants.length > 0)
+    .map(([teamIdentifier, teamParticipants]) => {
+      const firstParticipant = teamParticipants[0]
       const { isSurrender, result } = computeWinResult(
-        basicInfo.endOfGameResult,
-        teamParticipants[0]
+        safeBasicInfo.endOfGameResult,
+        firstParticipant
+      )
+
+      const hasShieldStats = teamParticipants.some(
+        (p) => typeof p.totalDamageShieldedOnTeammates === 'number' && Number.isFinite(p.totalDamageShieldedOnTeammates)
       )
 
       return {
@@ -199,85 +213,84 @@ export function toTeams(
         teamInfo: primitiveTeamInfoMap[teamIdentifier] ?? (null as MatchTeamInfo | null),
         winResult: result,
         isSurrender,
-        win: teamParticipants[0].win,
-        subteamPlacement: teamParticipants[0].subteamPlacement,
-        maxDamageDealtToChampions: Math.max(
-          ...teamParticipants.map((p) => p.totalDamageDealtToChampions)
+        win: firstParticipant.win,
+        subteamPlacement: firstParticipant.subteamPlacement,
+        maxDamageDealtToChampions: safeMax(
+          teamParticipants.map((p) => p.totalDamageDealtToChampions)
         ),
         totalDamageDealtToChampions: teamParticipants.reduce(
-          (acc, p) => acc + p.totalDamageDealtToChampions,
+          (acc, p) => acc + (p.totalDamageDealtToChampions || 0),
           0
         ),
-        maxDamageTaken: Math.max(...teamParticipants.map((p) => p.totalDamageTaken)),
-        totalDamageTaken: teamParticipants.reduce((acc, p) => acc + p.totalDamageTaken, 0),
-        maxGoldEarned: Math.max(...teamParticipants.map((p) => p.goldEarned)),
-        totalGoldEarned: teamParticipants.reduce((acc, p) => acc + p.goldEarned, 0),
-        maxKills: Math.max(...teamParticipants.map((p) => p.kills)),
-        totalKills: teamParticipants.reduce((acc, p) => acc + p.kills, 0),
-        totalDeaths: teamParticipants.reduce((acc, p) => acc + p.deaths, 0),
-        totalAssists: teamParticipants.reduce((acc, p) => acc + p.assists, 0),
-        maxCs: Math.max(...teamParticipants.map((p) => p.cs)),
-        totalCs: teamParticipants.reduce((acc, p) => acc + p.cs, 0),
-        maxDamageToTowers: Math.max(...teamParticipants.map((p) => p.totalDamageToTowers)),
-        totalDamageToTowers: teamParticipants.reduce((acc, p) => acc + p.totalDamageToTowers, 0),
-        maxHeal: Math.max(...teamParticipants.map((p) => p.totalHeal)),
-        totalHeal: teamParticipants.reduce((acc, p) => acc + p.totalHeal, 0),
-        maxKda: Math.max(...teamParticipants.map((p) => p.kda)),
-        totalKda: teamParticipants.reduce((acc, p) => acc + p.kda, 0),
-        maxKillParticipation: Math.max(...teamParticipants.map((p) => p.killParticipation)),
-        totalKillParticipation: teamParticipants.reduce((acc, p) => acc + p.killParticipation, 0),
-        maxTimeCCingOthers: Math.max(...teamParticipants.map((p) => p.timeCCingOthers)),
-        maxDamageGoldEfficiency: Math.max(
-          ...teamParticipants.map((p) => p.totalDamageDealtToChampions / noZero(p.goldEarned))
+        maxDamageTaken: safeMax(teamParticipants.map((p) => p.totalDamageTaken)),
+        totalDamageTaken: teamParticipants.reduce((acc, p) => acc + (p.totalDamageTaken || 0), 0),
+        maxGoldEarned: safeMax(teamParticipants.map((p) => p.goldEarned)),
+        totalGoldEarned: teamParticipants.reduce((acc, p) => acc + (p.goldEarned || 0), 0),
+        maxKills: safeMax(teamParticipants.map((p) => p.kills)),
+        totalKills: teamParticipants.reduce((acc, p) => acc + (p.kills || 0), 0),
+        totalDeaths: teamParticipants.reduce((acc, p) => acc + (p.deaths || 0), 0),
+        totalAssists: teamParticipants.reduce((acc, p) => acc + (p.assists || 0), 0),
+        maxCs: safeMax(teamParticipants.map((p) => p.cs)),
+        totalCs: teamParticipants.reduce((acc, p) => acc + (p.cs || 0), 0),
+        maxDamageToTowers: safeMax(teamParticipants.map((p) => p.totalDamageToTowers)),
+        totalDamageToTowers: teamParticipants.reduce((acc, p) => acc + (p.totalDamageToTowers || 0), 0),
+        maxHeal: safeMax(teamParticipants.map((p) => p.totalHeal)),
+        totalHeal: teamParticipants.reduce((acc, p) => acc + (p.totalHeal || 0), 0),
+        maxKda: safeMax(teamParticipants.map((p) => p.kda)),
+        totalKda: teamParticipants.reduce((acc, p) => acc + (p.kda || 0), 0),
+        maxKillParticipation: safeMax(teamParticipants.map((p) => p.killParticipation)),
+        totalKillParticipation: teamParticipants.reduce((acc, p) => acc + (p.killParticipation || 0), 0),
+        maxTimeCCingOthers: safeMax(teamParticipants.map((p) => p.timeCCingOthers)),
+        maxDamageGoldEfficiency: safeMax(
+          teamParticipants.map((p) => (p.totalDamageDealtToChampions || 0) / noZero(p.goldEarned || 0))
         ),
-        maxDamageShieldedOnTeammates:
-          teamParticipants[0]?.totalDamageShieldedOnTeammates !== null
-            ? Math.max(...teamParticipants.map((p) => p.totalDamageShieldedOnTeammates ?? 0))
-            : null,
-        totalDamageShieldedOnTeammates:
-          teamParticipants[0]?.totalDamageShieldedOnTeammates !== null
-            ? teamParticipants.reduce((acc, p) => acc + (p.totalDamageShieldedOnTeammates ?? 0), 0)
-            : null
+        maxDamageShieldedOnTeammates: hasShieldStats
+          ? safeMax(teamParticipants.map((p) => p.totalDamageShieldedOnTeammates))
+          : null,
+        totalDamageShieldedOnTeammates: hasShieldStats
+          ? teamParticipants.reduce((acc, p) => acc + (p.totalDamageShieldedOnTeammates ?? 0), 0)
+          : null
       }
-    }
+    })
+
+  const hasAllTeamShieldStats = teamStatsArr.some(
+    (t) => typeof t.maxDamageShieldedOnTeammates === 'number' && Number.isFinite(t.maxDamageShieldedOnTeammates)
   )
 
   const allTeamStats: AggregateTeamStats = {
     teamIdentifier: 'TEAM-ALL',
     bans: Object.values(primitiveTeamInfoMap).flatMap((team) => team.bans),
-    maxDamageDealtToChampions: Math.max(...teamStatsArr.map((t) => t.maxDamageDealtToChampions)),
+    maxDamageDealtToChampions: safeMax(teamStatsArr.map((t) => t.maxDamageDealtToChampions)),
     totalDamageDealtToChampions: teamStatsArr.reduce(
       (acc, t) => acc + t.totalDamageDealtToChampions,
       0
     ),
-    maxDamageTaken: Math.max(...teamStatsArr.map((t) => t.maxDamageTaken)),
+    maxDamageTaken: safeMax(teamStatsArr.map((t) => t.maxDamageTaken)),
     totalDamageTaken: teamStatsArr.reduce((acc, t) => acc + t.totalDamageTaken, 0),
-    maxGoldEarned: Math.max(...teamStatsArr.map((t) => t.maxGoldEarned)),
+    maxGoldEarned: safeMax(teamStatsArr.map((t) => t.maxGoldEarned)),
     totalGoldEarned: teamStatsArr.reduce((acc, t) => acc + t.totalGoldEarned, 0),
-    maxKills: Math.max(...teamStatsArr.map((t) => t.maxKills)),
+    maxKills: safeMax(teamStatsArr.map((t) => t.maxKills)),
     totalKills: teamStatsArr.reduce((acc, t) => acc + t.totalKills, 0),
     totalDeaths: teamStatsArr.reduce((acc, t) => acc + t.totalDeaths, 0),
     totalAssists: teamStatsArr.reduce((acc, t) => acc + t.totalAssists, 0),
-    maxCs: Math.max(...teamStatsArr.map((t) => t.maxCs)),
+    maxCs: safeMax(teamStatsArr.map((t) => t.maxCs)),
     totalCs: teamStatsArr.reduce((acc, t) => acc + t.totalCs, 0),
-    maxDamageToTowers: Math.max(...teamStatsArr.map((t) => t.maxDamageToTowers)),
+    maxDamageToTowers: safeMax(teamStatsArr.map((t) => t.maxDamageToTowers)),
     totalDamageToTowers: teamStatsArr.reduce((acc, t) => acc + t.totalDamageToTowers, 0),
-    maxHeal: Math.max(...teamStatsArr.map((t) => t.maxHeal)),
+    maxHeal: safeMax(teamStatsArr.map((t) => t.maxHeal)),
     totalHeal: teamStatsArr.reduce((acc, t) => acc + t.totalHeal, 0),
-    maxKda: Math.max(...teamStatsArr.map((t) => t.maxKda)),
+    maxKda: safeMax(teamStatsArr.map((t) => t.maxKda)),
     totalKda: teamStatsArr.reduce((acc, t) => acc + t.totalKda, 0),
-    maxKillParticipation: Math.max(...teamStatsArr.map((t) => t.maxKillParticipation)),
+    maxKillParticipation: safeMax(teamStatsArr.map((t) => t.maxKillParticipation)),
     totalKillParticipation: teamStatsArr.reduce((acc, t) => acc + t.totalKillParticipation, 0),
-    maxTimeCCingOthers: Math.max(...teamStatsArr.map((t) => t.maxTimeCCingOthers)),
-    maxDamageGoldEfficiency: Math.max(...teamStatsArr.map((t) => t.maxDamageGoldEfficiency)),
-    maxDamageShieldedOnTeammates:
-      teamStatsArr[0]?.maxDamageShieldedOnTeammates !== null
-        ? Math.max(...teamStatsArr.map((t) => t.maxDamageShieldedOnTeammates ?? 0))
-        : null,
-    totalDamageShieldedOnTeammates:
-      teamStatsArr[0]?.totalDamageShieldedOnTeammates !== null
-        ? teamStatsArr.reduce((acc, t) => acc + (t.totalDamageShieldedOnTeammates ?? 0), 0)
-        : null
+    maxTimeCCingOthers: safeMax(teamStatsArr.map((t) => t.maxTimeCCingOthers)),
+    maxDamageGoldEfficiency: safeMax(teamStatsArr.map((t) => t.maxDamageGoldEfficiency)),
+    maxDamageShieldedOnTeammates: hasAllTeamShieldStats
+      ? safeMax(teamStatsArr.map((t) => t.maxDamageShieldedOnTeammates))
+      : null,
+    totalDamageShieldedOnTeammates: hasAllTeamShieldStats
+      ? teamStatsArr.reduce((acc, t) => acc + (t.totalDamageShieldedOnTeammates ?? 0), 0)
+      : null
   }
 
   // 转换为 Map 结构便于查询

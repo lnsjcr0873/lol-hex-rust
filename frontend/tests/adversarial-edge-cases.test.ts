@@ -440,6 +440,23 @@ try {
   results.push({ name: '3.4 IQR with Empty Array', status: 'FAIL', message: e.message })
 }
 
+// 3.5 NaN and undefined values
+try {
+  const noisyData = [
+    { puuid: 'p1', kda: 1.0 },
+    { puuid: 'p2', kda: NaN },
+    { puuid: 'p3', kda: undefined as any },
+    { puuid: 'p4', kda: 2.5 },
+    { puuid: 'p5', kda: 3.0 },
+    { puuid: 'p6', kda: 15.0 },
+  ]
+  const noisyRes = findOutliersByIqr(noisyData, (i) => i.kda)
+  assert(Array.isArray(noisyRes.below) && Array.isArray(noisyRes.over), 'Returns valid arrays')
+  results.push({ name: '3.5 IQR with NaN/Undefined Values', status: 'PASS', message: 'safeGetter prevents sorting crashes on non-finite values' })
+} catch (e: any) {
+  results.push({ name: '3.5 IQR with NaN/Undefined Values', status: 'FAIL', message: e.message })
+}
+
 
 // ============================================================================
 // CHALLENGE 4: Offline / Disconnected / Mock Mode Toggling
@@ -547,6 +564,35 @@ try {
   })
 } catch (e: any) {
   results.push({ name: '4.3 handleLoadDetails Error / Null Timeline Fallback', status: 'FAIL', message: e.message })
+}
+
+// 4.4 Cherry Arena winning team count and placement boundary conditions
+try {
+  const { getCherryWinningTeamCount, isCherryPlacementWin } = await import(
+    '../src/shared/data-adapter/match-history/cherry'
+  )
+
+  assert(getCherryWinningTeamCount(8) === 4, '8 teams -> top 4 win')
+  assert(getCherryWinningTeamCount(4) === 2, '4 teams -> top 2 win')
+  assert(getCherryWinningTeamCount(2) === 1, '2 teams -> top 1 win')
+  assert(getCherryWinningTeamCount(1) === 1, '1 team -> top 1 win (not 0)')
+  assert(getCherryWinningTeamCount(0) === 0, '0 teams -> 0 winning teams')
+  assert(getCherryWinningTeamCount(-5) === 0, 'negative teams -> 0 winning teams')
+
+  assert(isCherryPlacementWin(1, 8), '1st place in 8-team is win')
+  assert(isCherryPlacementWin(4, 8), '4th place in 8-team is win')
+  assert(!isCherryPlacementWin(5, 8), '5th place in 8-team is loss')
+  assert(isCherryPlacementWin(1, 1), '1st place in single-team lobby is win')
+  assert(!isCherryPlacementWin(0, 4), '0th placement is never win')
+  assert(!isCherryPlacementWin(1, 0), '1st place in 0-team lobby is not win')
+
+  results.push({
+    name: '4.4 Cherry Arena Boundary Conditions',
+    status: 'PASS',
+    message: 'Proper clamping and safeguards for Arena 2v2v2v2 edge cases'
+  })
+} catch (e: any) {
+  results.push({ name: '4.4 Cherry Arena Boundary Conditions', status: 'FAIL', message: e.message })
 }
 
 // ============================================================================

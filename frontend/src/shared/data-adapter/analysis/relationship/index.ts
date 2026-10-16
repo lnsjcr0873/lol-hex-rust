@@ -51,15 +51,22 @@ export function analyzeRelationship(games: LcuOrSgpGameSummary[], puuid: string)
           targetTagLine: participant.tagLine,
           games: []
         }
+      } else {
+        if (participant.gameName) relationship[participant.puuid].targetGameName = participant.gameName
+        if (participant.tagLine) relationship[participant.puuid].targetTagLine = participant.tagLine
+        if (participant.profileIconId) relationship[participant.puuid].targetProfileIconId = participant.profileIconId
       }
 
-      relationship[participant.puuid].games.push({
-        gameId: basic.gameId,
-        win: participant.win,
-        isOpponent: participant.teamIdentifier !== self.teamIdentifier,
-        selfChampionId: self.championId,
-        targetChampionId: participant.championId
-      })
+      const alreadyHasGame = relationship[participant.puuid].games.some((g) => g.gameId === basic.gameId)
+      if (!alreadyHasGame) {
+        relationship[participant.puuid].games.push({
+          gameId: basic.gameId,
+          win: participant.win,
+          isOpponent: participant.teamIdentifier !== self.teamIdentifier,
+          selfChampionId: self.championId,
+          targetChampionId: participant.championId
+        })
+      }
     }
   }
 

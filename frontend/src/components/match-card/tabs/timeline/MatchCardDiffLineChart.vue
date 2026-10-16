@@ -1,5 +1,11 @@
 <template>
-  <div class="flex h-[520px] w-full gap-4">
+  <div v-if="!hasRawFrames" class="flex h-[520px] w-full items-center justify-center bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-500 select-none">
+    <div class="text-center space-y-2">
+      <div class="text-sm font-semibold text-slate-400">暂无该对局时间轴走势数据</div>
+      <div class="text-slate-500">当前对局未记录逐帧数据 (LCU 未提供逐分钟时间线)</div>
+    </div>
+  </div>
+  <div v-else class="flex h-[520px] w-full gap-4">
     <!-- Left: Line Chart Canvas -->
     <div class="flex-1 min-h-0 bg-slate-950/80 rounded-xl border border-slate-800 p-3">
       <Line :data="chartData" :options="chartOptions" />
@@ -72,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -97,85 +103,81 @@ const selectedMetric = ref<MetricType>('gold')
 const showBlueTeamAvg = ref(true)
 const showRedTeamAvg = ref(true)
 
-const selectedPlayers = ref<number[]>(participants.value.map((p) => p.participantId))
+const selectedPlayers = ref<number[]>((participants.value || []).map((p) => p.participantId))
 
-const allSelected = computed(() => selectedPlayers.value.length === participants.value.length)
+watch(
+  () => participants.value,
+  (newParts) => {
+    if (newParts && newParts.length > 0) {
+      selectedPlayers.value = newParts.map((p) => p.participantId)
+    }
+  },
+  { immediate: true }
+)
+
+const allSelected = computed(() => selectedPlayers.value.length === (participants.value || []).length)
 
 function toggleAllPlayers() {
   if (allSelected.value) {
     selectedPlayers.value = []
   } else {
-    selectedPlayers.value = participants.value.map((p) => p.participantId)
+    selectedPlayers.value = (participants.value || []).map((p) => p.participantId)
   }
 }
 
 // Generate labels (minutes 0, 1, 2, ... N)
-const totalMinutes = computed(() => Math.max(Math.floor(basicInfo.value.gameDuration / 60), 15))
+const totalMinutes = computed(() => Math.max(Math.floor((basicInfo.value?.gameDuration || 0) / 60), 15))
 
 const timeLabels = computed(() => {
-  const count = frames.value.length > 0 ? frames.value.length : totalMinutes.value + 1
+  const count = (frames.value || []).length > 0 ? frames.value.length : totalMinutes.value + 1
   return Array.from({ length: count }, (_, i) => `${i}分`)
 })
+
+const hasRawFrames = computed(() => {
+  const f = frames.value || []
+  return f.length > 0 && !!f[0]?.participantFrames
+})
+
+function getParticipantMetricValue(pf: any, metric: MetricType): number {
+  if (!pf) return 0
+  let val = 0
+  switch (metric) {
+    case 'gold':
+      val = pf.totalGold || pf.currentGold || 0
+      break
+    case 'cs':
+      val = (pf.minionsKilled || 0) + (pf.jungleMinionsKilled || 0)
+      break
+    case 'exp':
+      val = pf.xp || 0
+      break
+    case 'damageDealt':
+      val = pf.damageStats?.totalDamageDoneToChampions || 0
+      break
+    case 'damageTaken':
+      val = pf.damageStats?.totalDamageTaken || 0
+      break
+    default:
+      val = 0
+  }
+  return typeof val === 'number' && Number.isFinite(val) ? val : 0
+}
 
 const chartData = computed(() => {
   const datasets: any[] = []
 
-  // Extract or simulate frames for each participant
-  const hasRawFrames = frames.value.length > 0 && frames.value[0]?.participantFrames
+  if (!hasRawFrames.value) {
+    return { labels: [], datasets: [] }
+  }
 
   // 1. Players lines
-  participants.value.forEach((p, idx) => {
+  (participants.value || []).forEach((p, idx) => {
     if (!selectedPlayers.value.includes(p.participantId)) return
 
-    let dataPoints: number[] = []
-
-    if (hasRawFrames) {
-      dataPoints = frames.value.map((f: any) => {
-        const pf = f.participantFrames?.[p.participantId] || f.participantFrames?.[String(p.participantId)]
-        if (!pf) return 0
-        switch (selectedMetric.value) {
-          case 'gold':
-            return pf.totalGold || pf.currentGold || 0
-          case 'cs':
-            return (pf.minionsKilled || 0) + (pf.jungleMinionsKilled || 0)
-          case 'exp':
-            return pf.xp || 0
-          case 'damageDealt':
-            return pf.damageStats?.totalDamageDoneToChampions || pf.totalGold || 0
-          case 'damageTaken':
-            return pf.damageStats?.totalDamageTaken || pf.totalGold || 0
-          default:
-            return 0
-        }
-      })
-    } else {
-      // Smooth curve based on final match stats
-      const steps = totalMinutes.value + 1
-      let finalVal = 0
-      switch (selectedMetric.value) {
-        case 'gold':
-          finalVal = p.goldEarned || 12000
-          break
-        case 'cs':
-          finalVal = p.cs || 180
-          break
-        case 'exp':
-          finalVal = p.championLevel * 1200
-          break
-        case 'damageDealt':
-          finalVal = p.totalDamageDealtToChampions || 20000
-          break
-        case 'damageTaken':
-          finalVal = p.totalDamageTaken || 18000
-          break
-      }
-
-      dataPoints = Array.from({ length: steps }, (_, m) => {
-        const progress = m / (steps - 1)
-        // Natural LoL progression curve
-        return Math.round(finalVal * Math.pow(progress, 1.3))
-      })
-    }
+    const dataPoints: number[] = (frames.value || []).map((f: any) => {
+      const pf = f?.participantFrames?.[p.participantId] || f?.participantFrames?.[String(p.participantId)]
+      return getParticipantMetricValue(pf, selectedMetric.value)
+    })
 
     datasets.push({
       label: p.gameName || `P${p.participantId}`,
@@ -190,13 +192,23 @@ const chartData = computed(() => {
   })
 
   // 2. Team averages
+  const isBlueTeam = (id?: string | number) => String(id) === '100' || id === 'blue' || id === 'TEAM-100'
+  const isRedTeam = (id?: string | number) => String(id) === '200' || id === 'red' || id === 'TEAM-200'
+
   if (showBlueTeamAvg.value) {
-    const isBlueTeam = (id?: string) => id === '100' || id === 'blue' || id === 'TEAM-100'
-    const bluePlayers = datasets.filter((_, i) => isBlueTeam(participants.value[i]?.teamIdentifier))
-    if (bluePlayers.length > 0) {
-      const avgData = timeLabels.value.map((_, minuteIdx) => {
-        const sum = bluePlayers.reduce((acc, d) => acc + (d.data[minuteIdx] || 0), 0)
-        return Math.round(sum / bluePlayers.length)
+    const blueParticipants = (participants.value || []).filter((p) => isBlueTeam(p.teamIdentifier || (p as any).teamId))
+    if (blueParticipants.length > 0) {
+      const avgData = (frames.value || []).map((f: any) => {
+        let sum = 0
+        let count = 0
+        blueParticipants.forEach((p) => {
+          const pf = f?.participantFrames?.[p.participantId] || f?.participantFrames?.[String(p.participantId)]
+          if (pf) {
+            sum += getParticipantMetricValue(pf, selectedMetric.value)
+            count++
+          }
+        })
+        return count > 0 ? Math.round(sum / count) : 0
       })
       datasets.push({
         label: '蓝方队伍均值',
@@ -211,12 +223,19 @@ const chartData = computed(() => {
   }
 
   if (showRedTeamAvg.value) {
-    const isRedTeam = (id?: string) => id === '200' || id === 'red' || id === 'TEAM-200'
-    const redPlayers = datasets.filter((_, i) => isRedTeam(participants.value[i]?.teamIdentifier))
-    if (redPlayers.length > 0) {
-      const avgData = timeLabels.value.map((_, minuteIdx) => {
-        const sum = redPlayers.reduce((acc, d) => acc + (d.data[minuteIdx] || 0), 0)
-        return Math.round(sum / redPlayers.length)
+    const redParticipants = (participants.value || []).filter((p) => isRedTeam(p.teamIdentifier || (p as any).teamId))
+    if (redParticipants.length > 0) {
+      const avgData = (frames.value || []).map((f: any) => {
+        let sum = 0
+        let count = 0
+        redParticipants.forEach((p) => {
+          const pf = f?.participantFrames?.[p.participantId] || f?.participantFrames?.[String(p.participantId)]
+          if (pf) {
+            sum += getParticipantMetricValue(pf, selectedMetric.value)
+            count++
+          }
+        })
+        return count > 0 ? Math.round(sum / count) : 0
       })
       datasets.push({
         label: '红方队伍均值',

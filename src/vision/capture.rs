@@ -8,15 +8,24 @@ pub struct ViewportRect {
 
 pub struct ScreenCapture;
 
-static LEAGUE_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-pub fn get_league_pid() -> u32 {
-    LEAGUE_PID.load(std::sync::atomic::Ordering::Relaxed)
-}
+static LEAGUE_CLIENT_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LEAGUE_GAME_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 impl ScreenCapture {
+    pub fn get_league_client_pid() -> u32 {
+        LEAGUE_CLIENT_PID.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn get_league_game_pid() -> u32 {
+        LEAGUE_GAME_PID.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[allow(dead_code)]
     pub fn get_league_pid() -> u32 {
-        get_league_pid()
+        let gpid = Self::get_league_game_pid();
+        if gpid != 0 {
+            gpid
+        } else {
+            Self::get_league_client_pid()
+        }
     }
     pub fn get_effective_viewport() -> ViewportRect {
         #[cfg(windows)]
@@ -129,7 +138,7 @@ impl ScreenCapture {
             }
             let w = cr.right - cr.left;
             let h = cr.bottom - cr.top;
-            if w < 600 || h < 400 || pt.x < -10000 {
+            if w < 600 || h < 400 || pt.x < -10000 || pt.y < -10000 {
                 return None;
             }
             Some(ViewportRect {
@@ -148,7 +157,7 @@ impl ScreenCapture {
                 if let Some(rect) = hwnd_to_client_rect(rclient_hwnd) {
                     let mut pid = 0u32;
                     GetWindowThreadProcessId(rclient_hwnd, Some(&mut pid));
-                    LEAGUE_PID.store(pid, std::sync::atomic::Ordering::Relaxed);
+                    LEAGUE_CLIENT_PID.store(pid, std::sync::atomic::Ordering::Relaxed);
                     return Some(rect);
                 }
             }
@@ -202,39 +211,17 @@ impl ScreenCapture {
         }
 
         if let Some(m) = matches.into_iter().next() {
-            LEAGUE_PID.store(m.pid, std::sync::atomic::Ordering::Relaxed);
+            LEAGUE_CLIENT_PID.store(m.pid, std::sync::atomic::Ordering::Relaxed);
             return Some(m.rect);
         }
 
+        LEAGUE_CLIENT_PID.store(0, std::sync::atomic::Ordering::Relaxed);
         None
     }
 
     #[cfg(windows)]
     pub fn is_lol_client_active() -> bool {
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetClassNameW};
-        unsafe {
-            let fg = GetForegroundWindow();
-            if fg.0.is_null() {
-                return false;
-            }
-            let mut title_buf = [0u16; 256];
-            let len = GetWindowTextW(fg, &mut title_buf);
-            let title = String::from_utf16_lossy(&title_buf[..len as usize]).to_lowercase();
-            // If title contains "(tm)", it is the actual game client or loading screen, NOT the LCU client!
-            if title.contains("tm") {
-                return false;
-            }
-            let mut class_buf = [0u16; 256];
-            let clen = GetClassNameW(fg, &mut class_buf);
-            let class_name = String::from_utf16_lossy(&class_buf[..clen as usize]).to_lowercase();
-            if class_name.contains("rclient") {
-                return true;
-            }
-            if title.contains("league of legends") || title.contains("英雄联盟") {
-                return true;
-            }
-            false
-        }
+        crate::overlay::WindowTracker::is_league_active()
     }
 
     #[cfg(not(windows))]
@@ -269,7 +256,7 @@ impl ScreenCapture {
             }
             let w = cr.right - cr.left;
             let h = cr.bottom - cr.top;
-            if w < 600 || h < 400 || pt.x < -10000 {
+            if w < 600 || h < 400 || pt.x < -10000 || pt.y < -10000 {
                 return None;
             }
             Some(ViewportRect {
@@ -288,7 +275,7 @@ impl ScreenCapture {
                 if let Some(rect) = hwnd_to_game_rect(game_hwnd) {
                     let mut pid = 0u32;
                     GetWindowThreadProcessId(game_hwnd, Some(&mut pid));
-                    LEAGUE_PID.store(pid, std::sync::atomic::Ordering::Relaxed);
+                    LEAGUE_GAME_PID.store(pid, std::sync::atomic::Ordering::Relaxed);
                     return Some(rect);
                 }
             }
@@ -340,10 +327,11 @@ impl ScreenCapture {
         }
 
         if let Some(m) = matches.into_iter().next() {
-            LEAGUE_PID.store(m.pid, std::sync::atomic::Ordering::Relaxed);
+            LEAGUE_GAME_PID.store(m.pid, std::sync::atomic::Ordering::Relaxed);
             return Some(m.rect);
         }
 
+        LEAGUE_GAME_PID.store(0, std::sync::atomic::Ordering::Relaxed);
         None
     }
 
@@ -437,7 +425,7 @@ impl ScreenCapture {
             BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         };
 
-        if rect.width <= 0 || rect.height <= 0 {
+        if rect.width <= 0 || rect.height <= 0 || rect.width > 8192 || rect.height > 8192 {
             return None;
         }
 
@@ -501,6 +489,9 @@ impl ScreenCapture {
             let image_bytes = row_stride * (out_h as usize);
             let mut pixels: Vec<u8> = vec![0u8; image_bytes];
 
+            // Win32 API contract: The bitmap identified by hbmp must NOT be selected into a DC when calling GetDIBits
+            let _ = SelectObject(hdc_mem, old_bmp);
+
             let lines_copied = GetDIBits(
                 hdc_mem,
                 hbmp,
@@ -511,7 +502,6 @@ impl ScreenCapture {
                 DIB_RGB_COLORS,
             );
 
-            let _ = SelectObject(hdc_mem, old_bmp);
             let _ = DeleteObject(hbmp);
             let _ = DeleteDC(hdc_mem);
             let _ = ReleaseDC(HWND::default(), hdc_screen);
@@ -556,8 +546,11 @@ impl ScreenCapture {
             return true;
         }
         let pixel_data = &bmp_bytes[54..];
-        // Sample every 16th byte; if all sampled bytes <= 12, it is treated as pure black screen
-        let has_light = pixel_data.iter().step_by(16).any(|&b| b > 12);
+        // In 32-bit BGRA BMP, test all 3 color channels (Blue, Green, Red) every 4th pixel (every 16 bytes)
+        // to prevent false positives when images contain vibrant red/gold/yellow elements with low blue.
+        let has_light = pixel_data.chunks_exact(4).step_by(4).any(|px| {
+            px[0] > 12 || px[1] > 12 || px[2] > 12
+        });
         !has_light
     }
 
@@ -569,11 +562,13 @@ impl ScreenCapture {
         if bmp_bytes.len() <= 54 {
             return false;
         }
-        let out_w = i32::from_le_bytes([bmp_bytes[18], bmp_bytes[19], bmp_bytes[20], bmp_bytes[21]]) as usize;
-        let out_h = (i32::from_le_bytes([bmp_bytes[22], bmp_bytes[23], bmp_bytes[24], bmp_bytes[25]]) as i32).abs() as usize;
-        if out_w < 60 || out_h < 10 {
+        let raw_w = i32::from_le_bytes([bmp_bytes[18], bmp_bytes[19], bmp_bytes[20], bmp_bytes[21]]);
+        let raw_h = i32::from_le_bytes([bmp_bytes[22], bmp_bytes[23], bmp_bytes[24], bmp_bytes[25]]);
+        if raw_w < 60 || raw_w > 10000 || raw_h.unsigned_abs() < 10 || raw_h.unsigned_abs() > 10000 {
             return false;
         }
+        let out_w = raw_w as usize;
+        let out_h = raw_h.unsigned_abs() as usize;
 
         let pixel_data = &bmp_bytes[54..];
         let bytes_per_pixel = 4;
@@ -645,6 +640,71 @@ impl ScreenCapture {
     #[cfg(not(windows))]
     pub fn capture_rect_with_pad_as_bmp(_rect: &ViewportRect, _pad: i32) -> Option<Vec<u8>> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_bmp_mostly_black_truly_black() {
+        let mut bmp = vec![0u8; 54 + 64];
+        assert!(ScreenCapture::is_bmp_mostly_black(&bmp));
+
+        // Slightly dim noise (<= 12) should still be treated as black
+        for byte in &mut bmp[54..] {
+            *byte = 8;
+        }
+        assert!(ScreenCapture::is_bmp_mostly_black(&bmp));
+    }
+
+    #[test]
+    fn test_is_bmp_mostly_black_with_gold_red_elements() {
+        // Construct a 4x4 32-bit BMP where background is dark (0) but has gold/red text
+        // (Blue = 0, Green = 180, Red = 255)
+        let mut bmp = vec![0u8; 54 + 64]; // 16 pixels * 4 bytes
+        // Pixel 0 is pure red/gold
+        bmp[54 + 0] = 0;   // Blue
+        bmp[54 + 1] = 180; // Green
+        bmp[54 + 2] = 255; // Red
+        bmp[54 + 3] = 0;   // Alpha
+
+        // Should NOT be detected as mostly black because Green and Red are high
+        assert!(!ScreenCapture::is_bmp_mostly_black(&bmp));
+    }
+
+    #[test]
+    fn test_is_title_band_card_bg_i32_min_overflow_safe() {
+        let mut dummy = vec![0u8; 60];
+        // Set raw_w = 100, raw_h = i32::MIN
+        let w_bytes = 100i32.to_le_bytes();
+        let h_bytes = i32::MIN.to_le_bytes();
+        dummy[18..22].copy_from_slice(&w_bytes);
+        dummy[22..26].copy_from_slice(&h_bytes);
+
+        // Must not panic with attempt to negate with overflow
+        assert!(!ScreenCapture::is_title_band_card_bg(&dummy));
+    }
+
+    #[test]
+    fn test_league_client_and_game_pid_separation() {
+        LEAGUE_CLIENT_PID.store(1111, std::sync::atomic::Ordering::Relaxed);
+        LEAGUE_GAME_PID.store(0, std::sync::atomic::Ordering::Relaxed);
+
+        assert_eq!(ScreenCapture::get_league_client_pid(), 1111);
+        assert_eq!(ScreenCapture::get_league_game_pid(), 0);
+        assert_eq!(ScreenCapture::get_league_pid(), 1111);
+
+        LEAGUE_GAME_PID.store(2222, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(ScreenCapture::get_league_game_pid(), 2222);
+        // Prioritizes in-game PID when game is running
+        assert_eq!(ScreenCapture::get_league_pid(), 2222);
+
+        // Clean up
+        LEAGUE_CLIENT_PID.store(0, std::sync::atomic::Ordering::Relaxed);
+        LEAGUE_GAME_PID.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(ScreenCapture::get_league_pid(), 0);
     }
 }
 

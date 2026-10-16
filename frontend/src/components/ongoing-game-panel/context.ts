@@ -8,6 +8,7 @@ export interface OngoingGamePanelContext {
   premadeTeamIdMap: Ref<Record<string, string>>
   selectPlayer: (player: EnhancedPlayerCard) => void
   inspectPlayer: (puuid: string) => void
+  previewGame?: (gameId: number, puuid?: string) => void
 }
 
 export const OngoingGamePanelKey: InjectionKey<OngoingGamePanelContext> = Symbol('OngoingGamePanelKey')

@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 use std::sync::OnceLock;
 
 pub mod config;
@@ -6,6 +8,7 @@ pub mod data;
 pub mod engine;
 pub mod lcu;
 pub mod overlay;
+pub mod sgp;
 pub mod vision;
 pub mod web;
 

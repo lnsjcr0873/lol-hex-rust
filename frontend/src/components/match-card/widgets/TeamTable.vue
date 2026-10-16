@@ -18,36 +18,36 @@
         </span>
 
         <span class="font-mono font-bold text-amber-300">
-          {{ (team.totalGoldEarned / 1000).toFixed(1) }}k 金
+          {{ formatGold(team.totalGoldEarned) }}k 金
         </span>
 
         <!-- Objective Icons -->
-        <div v-if="team.teamInfo" class="flex items-center space-x-2 text-slate-400 pl-2 border-l border-slate-700/60">
-          <div class="flex items-center space-x-1" title="防御塔">
+        <div v-if="team.teamInfo?.objectives" class="flex items-center space-x-2 text-slate-400 pl-2 border-l border-slate-700/60">
+          <div v-if="team.teamInfo.objectives.tower" class="flex items-center space-x-1" title="防御塔">
             <Tower class="w-3.5 h-3.5 text-amber-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.tower.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.tower.kills ?? 0 }}</span>
           </div>
-          <div class="flex items-center space-x-1" title="水晶">
+          <div v-if="team.teamInfo.objectives.inhibitor" class="flex items-center space-x-1" title="水晶">
             <Inhibitor class="w-3.5 h-3.5 text-purple-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.inhibitor.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.inhibitor.kills ?? 0 }}</span>
           </div>
-          <div class="flex items-center space-x-1" title="巨龙">
+          <div v-if="team.teamInfo.objectives.dragon" class="flex items-center space-x-1" title="巨龙">
             <Dragon class="w-3.5 h-3.5 text-orange-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.dragon.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.dragon.kills ?? 0 }}</span>
           </div>
-          <div class="flex items-center space-x-1" title="男爵">
+          <div v-if="team.teamInfo.objectives.baron" class="flex items-center space-x-1" title="男爵">
             <Baron class="w-3.5 h-3.5 text-rose-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.baron.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.baron.kills ?? 0 }}</span>
           </div>
           <div v-if="team.teamInfo.objectives.horde" class="flex items-center space-x-1" title="虚空巢虫">
             <VoidGrub class="w-3.5 h-3.5 text-indigo-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.horde.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.horde.kills ?? 0 }}</span>
           </div>
           <div v-if="team.teamInfo.objectives.riftHerald" class="flex items-center space-x-1" title="峡谷先锋">
             <RiftHerald class="w-3.5 h-3.5 text-sky-400" />
-            <span class="font-mono">{{ team.teamInfo.objectives.riftHerald.kills }}</span>
+            <span class="font-mono">{{ team.teamInfo.objectives.riftHerald.kills ?? 0 }}</span>
           </div>
-          <div v-if="team.teamInfo.objectives.atakhan && team.teamInfo.objectives.atakhan.kills > 0" class="flex items-center space-x-1" title="阿塔坎">
+          <div v-if="team.teamInfo.objectives.atakhan && (team.teamInfo.objectives.atakhan.kills ?? 0) > 0" class="flex items-center space-x-1" title="阿塔坎">
             <Atakhan class="w-3.5 h-3.5 text-red-400" />
             <span class="font-mono">{{ team.teamInfo.objectives.atakhan.kills }}</span>
           </div>
@@ -55,11 +55,11 @@
       </div>
 
       <!-- Right: Bans -->
-      <div v-if="team.teamInfo && team.teamInfo.bans.length > 0" class="flex items-center space-x-1.5">
+      <div v-if="team.teamInfo?.bans?.some(b => b.championId > 0)" class="flex items-center space-x-1.5">
         <span class="text-[10px] text-slate-400">禁用:</span>
         <div class="flex items-center space-x-1">
           <ChampionIcon
-            v-for="ban in team.teamInfo.bans.slice(0, 5)"
+            v-for="ban in (team.teamInfo?.bans || []).filter(b => b.championId > 0).slice(0, 5)"
             :key="ban.championId"
             :champion-id="ban.championId"
             :size="18"
@@ -129,8 +129,8 @@
             {{ p.kills }}/<span class="text-red-400">{{ p.deaths }}</span>/{{ p.assists }}
           </div>
           <div class="text-[10px] font-mono text-slate-400">
-            <span class="text-slate-300 font-semibold">{{ p.kda.toFixed(2) }}</span>
-            <span> ({{ (p.killParticipation * 100).toFixed(0) }}%)</span>
+            <span class="text-slate-300 font-semibold">{{ formatKda(p.kda) }}</span>
+            <span> ({{ formatKp(p.killParticipation) }}%)</span>
           </div>
         </div>
 
@@ -165,10 +165,10 @@
         <!-- CS & Gold -->
         <div class="w-20 text-right shrink-0">
           <div class="text-xs font-mono font-bold text-amber-300">
-            {{ (p.goldEarned / 1000).toFixed(1) }}k 金
+            {{ formatGold(p.goldEarned) }}k 金
           </div>
           <div class="text-[10px] font-mono text-slate-400">
-            {{ p.cs }} 刀 ({{ ((p.cs / Math.max(basicInfo.gameDuration / 60, 1))).toFixed(1) }}/分)
+            {{ p.cs || 0 }} 刀 ({{ formatCsPerMin(p.cs, basicInfo.gameDuration) }}/分)
           </div>
         </div>
 
@@ -192,7 +192,7 @@
         <div class="w-16 text-right pr-2 shrink-0 font-mono text-xs">
           <div class="font-bold text-slate-200">{{ p.visionScore }}</div>
           <div class="text-[9px] text-slate-500">
-            {{ p.wardsPlaced }}/{{ p.wardsKilled }}/{{ p.detectorWardsPlaced }}
+            {{ p.wardsPlaced ?? 0 }}/{{ p.wardsKilled ?? 0 }}/{{ p.detectorWardsPlaced ?? 0 }}
           </div>
         </div>
       </div>
@@ -252,4 +252,26 @@ const tableTheme = computed(() => {
     header: 'bg-red-950/60 border-b border-red-900/60'
   }
 })
+
+function formatGold(gold?: number): string {
+  const g = typeof gold === 'number' && Number.isFinite(gold) ? gold : 0
+  return (g / 1000).toFixed(1)
+}
+
+function formatKda(kda?: number): string {
+  if (typeof kda !== 'number' || !Number.isFinite(kda)) return '0.00'
+  return kda.toFixed(2)
+}
+
+function formatKp(kp?: number): string {
+  if (typeof kp !== 'number' || !Number.isFinite(kp)) return '0'
+  return (kp * 100).toFixed(0)
+}
+
+function formatCsPerMin(cs?: number, durationSec?: number): string {
+  const c = typeof cs === 'number' && Number.isFinite(cs) ? cs : 0
+  const d = typeof durationSec === 'number' && Number.isFinite(durationSec) ? durationSec : 0
+  const minutes = Math.max(d / 60, 1)
+  return (c / minutes).toFixed(1)
+}
 </script>

@@ -1,10 +1,84 @@
 use super::connector::{LcuConnector, LcuCredentials};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use std::sync::atomic::{AtomicU32, Ordering};
+
+#[derive(Debug, Clone)]
+pub struct LruStore<K: std::hash::Hash + Eq + Clone, V: Clone> {
+    capacity: usize,
+    map: HashMap<K, V>,
+    order: VecDeque<K>,
+}
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone> LruStore<K, V> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    pub fn get(&mut self, key: &K) -> Option<V> {
+        if let Some(val) = self.map.get(key) {
+            let val = val.clone();
+            if let Some(pos) = self.order.iter().position(|x| x == key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(key.clone());
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    pub fn insert(&mut self, key: K, value: V) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key.clone(), value);
+            if let Some(pos) = self.order.iter().position(|x| x == &key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(key);
+            return;
+        }
+
+        while self.map.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+
+        self.map.insert(key.clone(), value);
+        self.order.push_back(key);
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.map.contains_key(key)
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
 
 #[derive(Clone)]
 pub struct LcuClient {
@@ -13,6 +87,28 @@ pub struct LcuClient {
     pub current_phase: Arc<RwLock<String>>,
     pub current_session: Arc<RwLock<Value>>,
     consecutive_failures: Arc<AtomicU32>,
+    pub match_detail_cache: Arc<std::sync::Mutex<LruStore<u64, Value>>>,
+    pub match_timeline_cache: Arc<std::sync::Mutex<LruStore<u64, Value>>>,
+    pub concurrency_limiter: Arc<tokio::sync::Semaphore>,
+    in_flight_details: Arc<std::sync::Mutex<HashSet<u64>>>,
+    in_flight_timelines: Arc<std::sync::Mutex<HashSet<u64>>>,
+    cache_notify: Arc<tokio::sync::Notify>,
+    opgg: Arc<RwLock<Option<Arc<crate::crawler::OpggClient>>>>,
+}
+
+struct InFlightGuard {
+    set: Arc<std::sync::Mutex<HashSet<u64>>>,
+    key: u64,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.set.lock() {
+            set.remove(&self.key);
+        }
+        self.notify.notify_waiters();
+    }
 }
 
 impl Default for LcuClient {
@@ -35,7 +131,61 @@ impl LcuClient {
             current_phase: Arc::new(RwLock::new("None".to_string())),
             current_session: Arc::new(RwLock::new(Value::Null)),
             consecutive_failures: Arc::new(AtomicU32::new(0)),
+            match_detail_cache: Arc::new(std::sync::Mutex::new(LruStore::new(256))),
+            match_timeline_cache: Arc::new(std::sync::Mutex::new(LruStore::new(256))),
+            concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(4)),
+            in_flight_details: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            in_flight_timelines: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            cache_notify: Arc::new(tokio::sync::Notify::new()),
+            opgg: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_opgg(&self, opgg: Arc<crate::crawler::OpggClient>) {
+        let mut g = self.opgg.write().await;
+        *g = Some(opgg);
+    }
+
+    pub async fn get_opgg(&self) -> Option<Arc<crate::crawler::OpggClient>> {
+        let g = self.opgg.read().await;
+        g.clone()
+    }
+
+    pub fn get_cached_match_detail(&self, game_id: u64) -> Option<Value> {
+        self.match_detail_cache.lock().ok()?.get(&game_id)
+    }
+
+    pub fn insert_cached_match_detail(&self, game_id: u64, val: Value) {
+        if let Ok(mut cache) = self.match_detail_cache.lock() {
+            cache.insert(game_id, val);
+        }
+        self.cache_notify.notify_waiters();
+    }
+
+    pub fn get_cached_match_timeline(&self, game_id: u64) -> Option<Value> {
+        self.match_timeline_cache.lock().ok()?.get(&game_id)
+    }
+
+    pub fn insert_cached_match_timeline(&self, game_id: u64, val: Value) {
+        if let Ok(mut cache) = self.match_timeline_cache.lock() {
+            cache.insert(game_id, val);
+        }
+        self.cache_notify.notify_waiters();
+    }
+
+    pub fn clear_lru_caches(&self) {
+        if let Ok(mut c) = self.match_detail_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.match_timeline_cache.lock() {
+            c.clear();
+        }
+    }
+
+    pub fn get_cache_stats(&self) -> (usize, usize) {
+        let details = self.match_detail_cache.lock().map(|c| c.len()).unwrap_or(0);
+        let timelines = self.match_timeline_cache.lock().map(|c| c.len()).unwrap_or(0);
+        (details, timelines)
     }
 
     pub async fn ensure_credentials(&self) -> bool {
@@ -105,23 +255,40 @@ impl LcuClient {
                 if status == reqwest::StatusCode::UNAUTHORIZED {
                     self.invalidate_credentials().await;
                     None
-                } else if status.is_server_error() {
-                    self.record_failure().await;
-                    None
                 } else if status.is_success() {
                     self.record_success();
                     Some(res)
                 } else {
-                    self.record_success();
                     None
                 }
             }
-            Err(_) => {
-                self.record_failure().await;
+            Err(e) => {
+                if e.is_connect() {
+                    self.record_failure().await;
+                }
                 None
             }
         }
     }
+
+    /// Handles an HTTP/HTTPS response candidate when an HTTP fallback will immediately follow.
+    /// Does not increment consecutive_failures or invalidate credentials on error, ensuring
+    /// failures are only recorded if both HTTPS and HTTP fallback fail.
+    async fn handle_response_fallback_candidate(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
+        match res_result {
+            Ok(res) => {
+                let status = res.status();
+                if status.is_success() {
+                    self.record_success();
+                    Some(res)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
 
     async fn get_auth_header(&self) -> Option<HeaderMap> {
         let guard = self.creds.read().await;
@@ -290,6 +457,33 @@ impl LcuClient {
         self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
     }
 
+    pub async fn get_champion_mastery(&self, puuid: &str) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return None,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return None,
+        };
+
+        let url = if puuid.is_empty() || puuid.starts_with("mock_") {
+            format!("https://127.0.0.1:{}/lol-champion-mastery/v1/local-player/champion-mastery", port)
+        } else {
+            format!("https://127.0.0.1:{}/lol-champion-mastery/v1/{}/champion-mastery", port, puuid)
+        };
+
+        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                return Some(val);
+            }
+        }
+        None
+    }
+
     pub async fn apply_summoner_spells(&self, spell1_id: i64, spell2_id: i64) -> bool {
         if !self.ensure_credentials().await {
             return false;
@@ -384,6 +578,71 @@ impl LcuClient {
         self.handle_response(self.client.post(&url).headers(headers).json(&page_payload).send().await).await.is_some()
     }
 
+    pub async fn do_apply_runes_and_spells(
+        &self,
+        db: &crate::data::loader::Database,
+        champion_id: i64,
+    ) -> (bool, String) {
+        if !self.is_connected().await {
+            return (false, "英雄联盟客户端未连接，无法应用符文与技能".to_string());
+        }
+
+        let cid_str = champion_id.to_string();
+        let cached_opgg = self.get_opgg().await;
+        let detail = if let Some(ref client) = cached_opgg {
+            client.get_champion_detail(&cid_str, "all").await
+        } else {
+            let local_client = crate::crawler::OpggClient::new();
+            local_client.get_champion_detail(&cid_str, "all").await
+        };
+        let mut perk_applied = false;
+        let mut spells_applied = false;
+
+        if let Some(detail) = detail {
+            // 1. Apply recommended runes only when style IDs and non-empty perks are valid
+            if let Some(runes) = detail.get("recommendedRunes").filter(|r| !r.is_null()) {
+                let primary_style_id = runes.get("primaryStyleId").and_then(|v| v.as_i64()).unwrap_or(0);
+                let sub_style_id = runes.get("subStyleId").and_then(|v| v.as_i64()).unwrap_or(0);
+                let perk_ids_arr = runes.get("selectedPerkIds").and_then(|v| v.as_array());
+
+                if primary_style_id > 0 && sub_style_id > 0 {
+                    if let Some(arr) = perk_ids_arr {
+                        if !arr.is_empty() {
+                            let hero_name = db.resolve_hero_name(&cid_str).unwrap_or_else(|| format!("英雄{}", champion_id));
+                            let payload = json!({
+                                "name": format!("HexBrain: {}", hero_name),
+                                "primaryStyleId": primary_style_id,
+                                "subStyleId": sub_style_id,
+                                "selectedPerkIds": arr,
+                                "current": true
+                            });
+                            perk_applied = self.apply_perk_page(&payload).await;
+                        }
+                    }
+                }
+            }
+
+            // 2. Apply summoner spells only when real spell IDs are provided
+            if let Some(spells) = detail.get("summonerSpells").and_then(|s| s.as_array()) {
+                if let Some(first_pair) = spells.first().and_then(|p| p.as_array()) {
+                    if first_pair.len() >= 2 {
+                        if let (Some(s1), Some(s2)) = (first_pair[0].as_i64(), first_pair[1].as_i64()) {
+                            if s1 > 0 && s2 > 0 {
+                                spells_applied = self.apply_summoner_spells(s1, s2).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if perk_applied || spells_applied {
+            (true, "推荐符文与召唤师技能已自动应用至客户端".to_string())
+        } else {
+            (false, "未获取到该英雄权威推荐或未能写入客户端，请检查是否处于英雄选择阶段".to_string())
+        }
+    }
+
     pub async fn get_chat_conversation_participants(&self, chat_room_id: &str) -> Vec<Value> {
         if !self.ensure_credentials().await || chat_room_id.is_empty() {
             return Vec::new();
@@ -424,19 +683,177 @@ impl LcuClient {
         res.json::<Value>().await.ok()
     }
 
-    pub async fn get_player_match_history(&self, puuid: &str, end_idx: usize) -> Option<Value> {
+    async fn fetch_match_history_batch(
+        &self,
+        port: u16,
+        headers: &HeaderMap,
+        puuid: &str,
+        beg_index: usize,
+        end_index: usize,
+    ) -> Option<Value> {
+        let https_url = format!(
+            "https://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+            port, puuid, beg_index, end_index
+        );
+        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&https_url).headers(headers.clone()).send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if val.get("games").is_some() || val.get("matches").is_some() {
+                    return Some(val);
+                }
+            }
+        }
+        // HTTP fallback for test harness / local mock
+        let http_url = format!(
+            "http://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+            port, puuid, beg_index, end_index
+        );
+        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&http_url).headers(headers.clone()).send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if val.get("games").is_some() || val.get("matches").is_some() {
+                    return Some(val);
+                }
+            }
+        }
+        // Fallback for current summoner endpoint if puuid is "current" / "me" / empty OR matches current summoner's PUUID:
+        let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
+            true
+        } else if let Some(cur) = self.get_current_summoner().await {
+            cur.get("puuid").and_then(|v| v.as_str()).map(|p| p.eq_ignore_ascii_case(puuid)).unwrap_or(false)
+        } else {
+            false
+        };
+
+        if is_current {
+            let cur_https = format!(
+                "https://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
+                port, beg_index, end_index
+            );
+            if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&cur_https).headers(headers.clone()).send().await).await {
+                if let Ok(val) = res.json::<Value>().await {
+                    if val.get("games").is_some() || val.get("matches").is_some() {
+                        return Some(val);
+                    }
+                }
+            }
+            let cur_http = format!(
+                "http://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
+                port, beg_index, end_index
+            );
+            if let Some(res) = self.handle_response(self.client.get(&cur_http).headers(headers.clone()).send().await).await {
+                if let Ok(val) = res.json::<Value>().await {
+                    if val.get("games").is_some() || val.get("matches").is_some() {
+                        return Some(val);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn get_raw_match_history(
+        &self,
+        puuid: &str,
+        beg_index: usize,
+        end_index: usize,
+    ) -> Option<Value> {
         if !self.ensure_credentials().await || puuid.is_empty() {
             return None;
         }
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!(
-            "https://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex=0&endIndex={}",
-            port, puuid, end_idx
-        );
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
-        res.json::<Value>().await.ok()
+        let (beg_index, end_index) = (beg_index, end_index.max(beg_index));
+        let total_requested = end_index.saturating_add(1).saturating_sub(beg_index).clamp(1, 200);
+        let effective_end = beg_index.saturating_add(total_requested).saturating_sub(1).min(end_index);
+
+        // If requested 20 or fewer matches, single request is sufficient
+        if total_requested <= 20 {
+            let _permit = self.concurrency_limiter.acquire().await.ok()?;
+            return self.fetch_match_history_batch(port, &headers, puuid, beg_index, effective_end).await;
+        }
+
+        // For > 20 matches (e.g. 30, 50, 100, 200), chunk in batches of 20 (LCU native limit per page)
+        let mut all_games = Vec::new();
+        let mut cur_beg = beg_index;
+        let mut base_obj: Option<Value> = None;
+
+        while cur_beg <= effective_end && all_games.len() < total_requested {
+            let cur_end = cur_beg.saturating_add(19).min(effective_end);
+            let _permit = self.concurrency_limiter.acquire().await.ok()?;
+
+            let chunk_val = self.fetch_match_history_batch(port, &headers, puuid, cur_beg, cur_end).await;
+
+            if let Some(val) = chunk_val {
+                if base_obj.is_none() {
+                    base_obj = Some(val.clone());
+                }
+                let mut found_count = 0;
+                if let Some(games) = val.get("games")
+                    .and_then(|g| g.get("games").and_then(|arr| arr.as_array()).or_else(|| g.as_array()))
+                    .or_else(|| val.get("matches").and_then(|m| m.as_array()))
+                {
+                    found_count = games.len();
+                    for g in games {
+                        all_games.push(g.clone());
+                        if all_games.len() >= total_requested {
+                            break;
+                        }
+                    }
+                }
+
+                let batch_expected = cur_end.saturating_add(1).saturating_sub(cur_beg);
+                if found_count == 0 || found_count < batch_expected {
+                    // Reached end of available match history on client
+                    break;
+                }
+            } else {
+                break;
+            }
+
+            match cur_beg.checked_add(20) {
+                Some(next) => cur_beg = next,
+                None => break,
+            }
+        }
+
+        if let Some(mut base) = base_obj {
+            let total_games_len = all_games.len();
+            if let Some(g_map) = base.get_mut("games") {
+                if let Some(inner_games) = g_map.get_mut("games") {
+                    *inner_games = Value::Array(all_games);
+                } else {
+                    *g_map = json!({ "games": all_games });
+                }
+                if let Some(obj) = g_map.as_object_mut() {
+                    obj.insert("gameCount".to_string(), json!(total_games_len));
+                    if total_games_len > 0 {
+                        obj.insert(
+                            "gameIndexEnd".to_string(),
+                            json!(beg_index.saturating_add(total_games_len).saturating_sub(1)),
+                        );
+                    }
+                }
+            } else {
+                base["games"] = json!({
+                    "games": all_games,
+                    "gameCount": total_games_len,
+                    "gameIndexBegin": beg_index,
+                    "gameIndexEnd": if total_games_len > 0 { beg_index.saturating_add(total_games_len).saturating_sub(1) } else { beg_index }
+                });
+            }
+            Some(base)
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_player_match_history(
+        &self,
+        puuid: &str,
+        beg_index: usize,
+        end_index: usize,
+    ) -> Option<Value> {
+        self.get_raw_match_history(puuid, beg_index, end_index).await
     }
 
     pub async fn get_current_summoner(&self) -> Option<Value> {
@@ -481,14 +898,62 @@ impl LcuClient {
         if !self.ensure_credentials().await || game_id.is_empty() {
             return None;
         }
+
+        let parsed_id = game_id.parse::<u64>().ok();
+        if let Some(gid) = parsed_id {
+            if let Some(cached) = self.get_cached_match_detail(gid) {
+                return Some(cached);
+            }
+        }
+
+        let _in_flight_guard = if let Some(gid) = parsed_id {
+            loop {
+                if let Some(cached) = self.get_cached_match_detail(gid) {
+                    return Some(cached);
+                }
+                let is_in_flight = {
+                    let mut set = self.in_flight_details.lock().ok()?;
+                    if set.contains(&gid) {
+                        true
+                    } else {
+                        set.insert(gid);
+                        false
+                    }
+                };
+                if is_in_flight {
+                    let notified = self.cache_notify.notified();
+                    if let Some(cached) = self.get_cached_match_detail(gid) {
+                        return Some(cached);
+                    }
+                    let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
+                } else {
+                    break Some(InFlightGuard {
+                        set: self.in_flight_details.clone(),
+                        key: gid,
+                        notify: self.cache_notify.clone(),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
+
+        let _permit = self.concurrency_limiter.acquire().await.ok()?;
+
+        if let Some(gid) = parsed_id {
+            if let Some(cached) = self.get_cached_match_detail(gid) {
+                return Some(cached);
+            }
+        }
 
         let url = format!(
             "https://127.0.0.1:{}/lol-match-history/v1/games/{}",
             port, game_id
         );
-        let res = match self.handle_response(self.client.get(&url).headers(headers.clone()).send().await).await {
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
             Some(r) => Some(r),
             None => {
                 let http_url = format!(
@@ -498,21 +963,68 @@ impl LcuClient {
                 self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
             }
         }?;
-        res.json::<Value>().await.ok()
+        let val = res.json::<Value>().await.ok()?;
+        if let Some(gid) = parsed_id {
+            self.insert_cached_match_detail(gid, val.clone());
+        }
+        Some(val)
     }
 
-    pub async fn get_game_timeline(&self, game_id: u64) -> Option<Value> {
+    pub async fn get_raw_match_detail(&self, game_id: u64) -> Option<Value> {
+        self.get_match_detail(&game_id.to_string()).await
+    }
+
+    pub async fn get_raw_match_timeline(&self, game_id: u64) -> Option<Value> {
         if !self.ensure_credentials().await || game_id == 0 {
             return None;
         }
+
+        if let Some(cached) = self.get_cached_match_timeline(game_id) {
+            return Some(cached);
+        }
+
+        let _in_flight_guard = loop {
+            if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                return Some(cached);
+            }
+            let is_in_flight = {
+                let mut set = self.in_flight_timelines.lock().ok()?;
+                if set.contains(&game_id) {
+                    true
+                } else {
+                    set.insert(game_id);
+                    false
+                }
+            };
+            if is_in_flight {
+                let notified = self.cache_notify.notified();
+                if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                    return Some(cached);
+                }
+                let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
+            } else {
+                break InFlightGuard {
+                    set: self.in_flight_timelines.clone(),
+                    key: game_id,
+                    notify: self.cache_notify.clone(),
+                };
+            }
+        };
+
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
+
+        let _permit = self.concurrency_limiter.acquire().await.ok()?;
+
+        if let Some(cached) = self.get_cached_match_timeline(game_id) {
+            return Some(cached);
+        }
 
         let url = format!(
             "https://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
             port, game_id
         );
-        let res = match self.handle_response(self.client.get(&url).headers(headers.clone()).send().await).await {
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
             Some(r) => Some(r),
             None => {
                 let http_url = format!(
@@ -522,11 +1034,86 @@ impl LcuClient {
                 self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
             }
         }?;
-        res.json::<Value>().await.ok()
+        let val = res.json::<Value>().await.ok()?;
+        self.insert_cached_match_timeline(game_id, val.clone());
+        Some(val)
+    }
+
+    pub async fn get_game_timeline(&self, game_id: u64) -> Option<Value> {
+        self.get_raw_match_timeline(game_id).await
     }
 
     pub async fn get_match_timeline(&self, game_id: u64) -> Option<Value> {
-        self.get_game_timeline(game_id).await
+        self.get_raw_match_timeline(game_id).await
+    }
+
+    pub async fn get_entitlements_token(&self) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!("https://127.0.0.1:{}/entitlements/v1/token", port);
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let http_url = format!("http://127.0.0.1:{}/entitlements/v1/token", port);
+                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
+            }
+        }?;
+        res.json::<Value>().await.ok()
+    }
+
+    pub async fn get_league_session_token(&self) -> Option<String> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = self.get_port().await?;
+        let headers = self.get_auth_header().await?;
+
+        let url = format!("https://127.0.0.1:{}/lol-league-session/v1/league-session-token", port);
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let http_url = format!("http://127.0.0.1:{}/lol-league-session/v1/league-session-token", port);
+                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
+            }
+        }?;
+        let text = res.text().await.ok()?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed == "null" {
+            return None;
+        }
+
+        // Handle JSON object response (e.g. {"token":"..."} or {"leagueSessionToken":"..."})
+        if trimmed.starts_with('{') {
+            if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                if let Some(tok) = val.get("token")
+                    .or_else(|| val.get("leagueSessionToken"))
+                    .or_else(|| val.get("sessionToken"))
+                    .or_else(|| val.get("jwt"))
+                    .or_else(|| val.get("accessToken"))
+                    .and_then(|v| v.as_str())
+                {
+                    let t = tok.trim();
+                    if !t.is_empty() {
+                        return Some(t.to_string());
+                    }
+                }
+            }
+        }
+
+        let token = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+        if token.is_empty() {
+            None
+        } else {
+            Some(token.to_string())
+        }
     }
 
     pub async fn send_chat_message(&self, chat_room_id: &str, message: &str) -> bool {
@@ -567,11 +1154,33 @@ impl LcuClient {
         };
 
         let url = format!(
-            "https://127.0.0.1:{}/lol-summoner/v1/summoners?name={}",
-            port, query_name
+            "https://127.0.0.1:{}/lol-summoner/v1/summoners",
+            port
         );
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
-        res.json::<Value>().await.ok()
+        let req = self.client.get(&url).headers(headers.clone()).query(&[("name", query_name)]);
+        if let Some(res) = self.handle_response(req.send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
+                    return Some(val);
+                }
+            }
+        }
+
+        // Fallback to HTTP
+        let url_http = format!(
+            "http://127.0.0.1:{}/lol-summoner/v1/summoners",
+            port
+        );
+        let req_http = self.client.get(&url_http).headers(headers).query(&[("name", query_name)]);
+        if let Some(res) = self.handle_response(req_http.send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
+                    return Some(val);
+                }
+            }
+        }
+
+        None
     }
 
     pub async fn get_summoner_by_puuid(&self, puuid: &str) -> Option<Value> {
@@ -584,11 +1193,23 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!(
+        let url_v2 = format!(
             "https://127.0.0.1:{}/lol-summoner/v2/summoners/puuid/{}",
             port, puuid
         );
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        if let Some(res) = self.handle_response(self.client.get(&url_v2).headers(headers.clone()).send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if !val.is_null() && (val.get("gameName").is_some() || val.get("displayName").is_some()) {
+                    return Some(val);
+                }
+            }
+        }
+
+        let url_v1 = format!(
+            "https://127.0.0.1:{}/lol-summoner/v1/summoners/by-puuid/{}",
+            port, puuid
+        );
+        let res = self.handle_response(self.client.get(&url_v1).headers(headers).send().await).await?;
         res.json::<Value>().await.ok()
     }
 
@@ -636,6 +1257,61 @@ impl LcuClient {
 
         let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/decline", port);
         self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
+    }
+
+    /// Retrieves region code and platform ID from LCU endpoints (e.g. "TENCENT", Some("HN1")).
+    pub async fn get_region_and_platform(&self) -> (String, Option<String>) {
+        if !self.ensure_credentials().await {
+            return (String::new(), None);
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return (String::new(), None),
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return (String::new(), None),
+        };
+
+        let mut region = String::new();
+        let mut platform_id = None;
+
+        // 1. /riotclient/region-locale
+        let url_rl = format!("https://127.0.0.1:{}/riotclient/region-locale", port);
+        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&url_rl).headers(headers.clone()).send().await).await {
+            if let Ok(v) = res.json::<Value>().await {
+                if let Some(r) = v.get("region").and_then(|s| s.as_str()) {
+                    region = r.to_string();
+                }
+            }
+        }
+
+        // 2. /lol-platform-config/v1/namespaces/LoginDataPacket/platformId
+        let url_pid = format!("https://127.0.0.1:{}/lol-platform-config/v1/namespaces/LoginDataPacket/platformId", port);
+        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&url_pid).headers(headers.clone()).send().await).await {
+            if let Ok(t) = res.text().await {
+                let trimmed = t.trim().trim_matches('"');
+                if !trimmed.is_empty() {
+                    platform_id = Some(trimmed.to_string());
+                }
+            }
+        }
+
+        // 3. Fallback: inspect entitlements token subject (e.g. "user@HN1")
+        if platform_id.is_none() {
+            if let Some(ent) = self.get_entitlements_token().await {
+                if let Some(sub) = ent.get("subject").and_then(|s| s.as_str()) {
+                    if let Some(pos) = sub.find('@') {
+                        let potential_pid = &sub[pos + 1..];
+                        if !potential_pid.is_empty() {
+                            platform_id = Some(potential_pid.to_uppercase());
+                        }
+                    }
+                }
+            }
+        }
+
+        (region, platform_id)
     }
 }
 

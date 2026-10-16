@@ -57,12 +57,17 @@ const iconUrl = computed(() => {
   if (hasError.value || !props.championId || props.championId <= 0) {
     return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png'
   }
-  return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/${props.championId}.png`
+  return `https://game.gtimg.cn/images/lol/act/img/champion/${props.championId}.png`
 })
 
 const handleImgError = (e: Event) => {
-  hasError.value = true
   const target = e.target as HTMLImageElement
+  if (target && !target.dataset.triedFallback && props.championId && props.championId > 0) {
+    target.dataset.triedFallback = 'true'
+    target.src = `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/${props.championId}.png`
+    return
+  }
+  hasError.value = true
   if (target) {
     target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png'
   }

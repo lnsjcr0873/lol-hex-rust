@@ -25,7 +25,7 @@ pub fn calc_wilson_lower_bound(p: f64, n: i64, z: f64) -> f64 {
     }
     let spread = z * discriminant.sqrt();
     let lower = (centre - spread) / denominator;
-    if lower.is_nan() {
+    if lower.is_nan() || lower.is_infinite() {
         p
     } else {
         lower.clamp(0.0, 1.0)
@@ -109,19 +109,33 @@ impl DecisionEngine {
 
         match sort_by {
             "winRate" => results.sort_by(|a, b| {
-                let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let wa = a.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                let wb = b.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                 wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        let ida = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let idb = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        ida.cmp(idb)
+                    })
             }),
             "pickRate" => results.sort_by(|a, b| {
-                let pa = a.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let pb = b.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let pa = a.get("pickRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                let pb = b.get("pickRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                 pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        let ida = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let idb = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        ida.cmp(idb)
+                    })
             }),
             "games" => results.sort_by(|a, b| {
                 let ga = a.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
                 let gb = b.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
-                gb.cmp(&ga)
+                gb.cmp(&ga).then_with(|| {
+                    let ida = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let idb = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    ida.cmp(idb)
+                })
             }),
             _ => results.sort_by(|a, b| {
                 let ta = a.get("tier").and_then(|v| v.as_i64()).unwrap_or(99);
@@ -129,9 +143,14 @@ impl DecisionEngine {
                 if ta != tb {
                     ta.cmp(&tb)
                 } else {
-                    let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let wa = a.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+                    let wb = b.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
                     wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| {
+                            let ida = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let idb = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            ida.cmp(idb)
+                        })
                 }
             }),
         }
@@ -141,6 +160,15 @@ impl DecisionEngine {
 
     pub fn calculate_reroll_roi(tier: i32, win_rate: f64) -> Value {
         let avg_pool_wr = 0.500;
+
+        if win_rate <= 0.0 || !win_rate.is_finite() {
+            return json!({
+                "action": "UNKNOWN",
+                "label": "⏳ 暂无样本·视阵容决定",
+                "color": "slate",
+                "desc": "该英雄暂未录入充分胜率样本，请根据实际阵容需要选用。"
+            });
+        }
 
         if tier == 1 || win_rate >= 0.53 {
             json!({
@@ -519,9 +547,10 @@ impl DecisionEngine {
         });
 
         let best_candidate = candidates.first().cloned();
-        let all_traps = candidates
-            .iter()
-            .all(|c| c.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0) < 0.0);
+        let all_traps = !candidates.is_empty()
+            && candidates
+                .iter()
+                .all(|c| c.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0) < 0.0);
 
         let rationale = if let Some(ref best) = best_candidate {
             let bname = best.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -529,7 +558,7 @@ impl DecisionEngine {
             let syn_note = best.get("synergyNote").and_then(|v| v.as_str());
 
             if all_traps {
-                format!("🚨 全陷阱警告：当前 3 个候选强化对 {} 均为负收益！建议重掷！若无骰子勉强选【{}】。", hero_summary.name, bname)
+                format!("🚨 全陷阱警告：当前候选强化对 {} 均为负收益！建议重掷！若无骰子勉强选【{}】。", hero_summary.name, bname)
             } else if let Some(sn) = syn_note {
                 format!("✨ 推荐【{}】（{}），契合度与实战容错率极佳 (+{:.2}%)。", bname, sn, bdelta)
             } else if best.get("isDestiny").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -541,11 +570,17 @@ impl DecisionEngine {
             "暂无可对比强化".to_string()
         };
 
-        let reroll_decision = if all_traps {
+        let reroll_decision = if candidates.is_empty() {
+            json!({
+                "action": "WAIT",
+                "label": "⏳ 等待强化选项",
+                "desc": "未检测到候选海克斯强化，请等待海克斯回合出现。"
+            })
+        } else if all_traps {
             json!({
                 "action": "REROLL",
                 "label": "🎲 强烈建议消耗 1 颗骰子重摇",
-                "desc": format!("当前 3 个强化对 {} 契合度偏低，重随摇出 T1 天命强化的期望概率极高！", hero_summary.name)
+                "desc": format!("当前候选强化对 {} 契合度偏低，重随摇出 T1 天命强化的期望概率极高！", hero_summary.name)
             })
         } else if let Some(ref b) = best_candidate {
             if b.get("isDestiny").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -631,9 +666,14 @@ impl DecisionEngine {
         }
 
         results.sort_by(|a, b| {
-            let wa = a.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let wb = b.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let wa = a.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+            let wb = b.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ida = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let idb = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    ida.cmp(idb)
+                })
         });
 
         results.into_iter().take(30).collect()
@@ -734,9 +774,10 @@ impl DecisionEngine {
             !iid.is_empty() && !owned_set.contains(&iid)
         }).cloned();
 
+        let safe_gold = if gold.is_finite() && gold >= 0.0 { gold } else { 0.0 };
         let gold_info = next_item.as_ref().map(|item| {
             let iid = extract_item_id(item);
-            calculate_item_net_cost(&iid, current_items, gold, &cfg.gold_calc_mode)
+            calculate_item_net_cost(&iid, current_items, safe_gold, &cfg.gold_calc_mode)
         });
 
         let terminal_trios = hero_detail
@@ -754,7 +795,7 @@ impl DecisionEngine {
 
         json!({
             "heroId": hid,
-            "gold": gold,
+            "gold": safe_gold,
             "level": level,
             "archetype": archetype_info,
             "threatProfile": threat_profile,

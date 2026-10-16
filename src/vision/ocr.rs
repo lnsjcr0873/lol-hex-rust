@@ -92,11 +92,11 @@ impl OcrScanner {
             // 2. Substring match with Longest Match Principle to prevent random HashMap iteration from picking short names
             let mut best_sub_match: Option<(&String, usize)> = None;
             for (aug_norm, aid) in &db.norm_name_to_augment_id {
-                if aug_norm.len() >= 2 && norm.contains(aug_norm) {
+                let match_len = aug_norm.chars().count();
+                if match_len >= 2 && norm.contains(aug_norm) {
                     if !matched_ids.contains(aid) {
-                        let match_len = aug_norm.chars().count();
-                        if let Some((_, best_len)) = best_sub_match {
-                            if match_len > best_len {
+                        if let Some((best_aid, best_len)) = best_sub_match {
+                            if match_len > best_len || (match_len == best_len && aid < best_aid) {
                                 best_sub_match = Some((aid, match_len));
                             }
                         } else {
@@ -111,7 +111,7 @@ impl OcrScanner {
             }
 
             // 3. Fuzzy match with jaro_winkler (bounded by character length delta <= 3)
-            let mut best_id = None;
+            let mut best_id: Option<String> = None;
             let mut best_score = 0.0;
             let norm_char_count = norm.chars().count() as i32;
 
@@ -120,9 +120,13 @@ impl OcrScanner {
                 let len_diff = (norm_char_count - aug_char_count).abs();
                 if len_diff <= 3 {
                     let score = jaro_winkler(&norm, aug_norm);
-                    if score > 0.82 && score > best_score {
-                        best_score = score;
-                        best_id = Some(aid.clone());
+                    if score > 0.82 {
+                        let is_better = score > best_score + 1e-6
+                            || ((score - best_score).abs() <= 1e-6 && best_id.as_ref().map_or(true, |cur| aid < cur));
+                        if is_better {
+                            best_score = score;
+                            best_id = Some(aid.clone());
+                        }
                     }
                 }
             }
@@ -195,7 +199,15 @@ impl OcrScanner {
                         }
                     }
                 }
-                guard.as_ref().unwrap().0.clone()
+                match guard.as_ref() {
+                    Some(eng) => eng.0.clone(),
+                    None => {
+                        return Err(windows::core::Error::new(
+                            windows::core::HRESULT(0x80004005_u32 as i32),
+                            "WinRT OcrEngine initialization returned empty guard",
+                        ));
+                    }
+                }
             };
 
             let ocr_result = engine.RecognizeAsync(&software_bitmap)?.get()?;
@@ -225,6 +237,31 @@ impl OcrScanner {
     #[cfg(not(windows))]
     pub async fn run_windows_ocr_bytes(_bmp_bytes: &[u8]) -> Vec<String> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_chinese_text() {
+        assert_eq!(OcrScanner::clean_chinese_text("珠 光 护 手"), "珠光护手");
+        assert_eq!(OcrScanner::clean_chinese_text("AD Carry 100"), "AD Carry 100");
+    }
+
+    #[test]
+    fn test_match_augments_from_texts_deterministic() {
+        let mut db = Database::default();
+        // Insert two augments with the same length: "珠光护手" (101) and "日炎斗篷" (102)
+        db.norm_name_to_augment_id.insert("珠光护手".to_string(), "101".to_string());
+        db.norm_name_to_augment_id.insert("日炎斗篷".to_string(), "102".to_string());
+        // Insert a 1-character name that must not match via substring
+        db.norm_name_to_augment_id.insert("珠".to_string(), "999".to_string());
+
+        let lines = vec!["这是关于珠光护手的卡牌".to_string()];
+        let matched = OcrScanner::match_augments_from_texts(&db, &lines);
+        assert_eq!(matched, vec!["101"]);
     }
 }
 

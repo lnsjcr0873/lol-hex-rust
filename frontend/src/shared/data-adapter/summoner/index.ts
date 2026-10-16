@@ -14,9 +14,15 @@ export function toLcuSummoner(
     gameName: gameName,
     internalName: sgpSummoner.internalName,
     nameChangeFlag: sgpSummoner.nameChangeFlag,
-    percentCompleteForNextLevel: Math.round(
-      (sgpSummoner.expPoints / sgpSummoner.expToNextLevel) * 100
-    ),
+    percentCompleteForNextLevel:
+      sgpSummoner.expToNextLevel > 0
+        ? Math.round(
+            Math.min(
+              100,
+              Math.max(0, (sgpSummoner.expPoints / sgpSummoner.expToNextLevel) * 100)
+            )
+          )
+        : 0,
     privacy: sgpSummoner.privacy as 'PUBLIC' | 'PRIVATE' | string, // 强制转换以匹配类型
     profileIconId: sgpSummoner.profileIconId,
     puuid: sgpSummoner.puuid,

@@ -162,6 +162,7 @@ const props = withDefaults(
 const emits = defineEmits<{
   selectPlayer: [player: EnhancedPlayerCard]
   inspectPlayer: [puuid: string]
+  'preview-game': [payload: { gameId: number; puuid?: string }]
 }>()
 
 const layoutMode = ref<'lane-aligned' | 'team-split'>('lane-aligned')
@@ -175,7 +176,7 @@ const kdaOutliers = computed<Record<string, 'over' | 'below'>>(() => {
 
   const list = all.map((p) => ({
     puuid: p.puuid,
-    kda: p.recent_kda_ratio ?? 3.0
+    kda: p.recent_kda_ratio ?? 0
   }))
 
   const res = findOutliersByIqr(list, (i) => i.kda, 1.2)
@@ -216,10 +217,11 @@ const getPremadeGroupsForTeam = (team: PlayerCard[]): PremadeGroup[] => {
   })
 
   return Object.entries(partyBuckets).map(([partyIdStr, puuids]) => {
-    const partyId = Number(partyIdStr)
-    const letter = PREMADE_TEAMS[(partyId - 1) % PREMADE_TEAMS.length]
+    const partyId = Math.max(1, Number(partyIdStr) || 1)
+    const partyIdx = (partyId - 1) % PREMADE_TEAMS.length
+    const letter = PREMADE_TEAMS[partyIdx] || 'A'
     const members = team.filter((p) => puuids.includes(p.puuid))
-    const avgWinRate = members.reduce((sum, p) => sum + (p.recent_win_rate || 50), 0) / members.length
+    const avgWinRate = members.length > 0 ? members.reduce((sum, p) => sum + (p.recent_win_rate ?? 0), 0) / members.length : 0
 
     let winRateTeamInfo: { type: 'win-rate-team' | 'loss-rate-team' } | undefined = undefined
     if (avgWinRate >= 85 && members.length >= 2) {
@@ -282,29 +284,59 @@ interface PairedRow {
 }
 
 const pairedLaneRows = computed<PairedRow[]>(() => {
+  if (sortBy.value !== 'position') {
+    const maxLen = Math.max(enhancedBlueTeam.value.length, enhancedRedTeam.value.length, 5)
+    const metricLabels: Record<string, string> = {
+      kda: 'KDA 对比',
+      winrate: '胜率 对比',
+      premade: '车队 梯队'
+    }
+    const label = metricLabels[sortBy.value] || '战力 顺位'
+    const rows: PairedRow[] = []
+    for (let i = 0; i < maxLen; i++) {
+      rows.push({
+        key: `rank-${i}`,
+        positionShort: `#${i + 1}`,
+        positionName: label,
+        blue: enhancedBlueTeam.value[i],
+        red: enhancedRedTeam.value[i]
+      })
+    }
+    return rows
+  }
+
   const laneDefs = [
     { key: 'TOP', short: 'TOP', name: '上路对位', matchKeys: ['TOP', '1'] },
     { key: 'JUG', short: 'JUG', name: '打野对位', matchKeys: ['JUG', 'JUNGLE', '2'] },
     { key: 'MID', short: 'MID', name: '中路对位', matchKeys: ['MID', 'MIDDLE', '3'] },
-    { key: 'BOT', short: 'BOT', name: '下路对位', matchKeys: ['BOT', 'BOTTOM', '4'] },
-    { key: 'SUP', short: 'SUP', name: '辅助对位', matchKeys: ['SUP', 'UTILITY', '5'] }
+    { key: 'BOT', short: 'BOT', name: '下路对位', matchKeys: ['BOT', 'BOTTOM', 'ADC', '4'] },
+    { key: 'SUP', short: 'SUP', name: '辅助对位', matchKeys: ['SUP', 'UTILITY', 'SUPPORT', '5'] }
   ]
 
   const usedBlue = new Set<string>()
   const usedRed = new Set<string>()
 
+  const getPlayerKey = (p: EnhancedPlayerCard, idx: number) =>
+    p.puuid || p.summoner_id || `${p.game_name || 'summoner'}-${idx}`
+
   const rows: PairedRow[] = []
 
   for (const lane of laneDefs) {
     const bluePlayer = enhancedBlueTeam.value.find(
-      (p) => !usedBlue.has(p.puuid) && lane.matchKeys.includes(p.assigned_position?.toUpperCase())
+      (p, idx) =>
+        !usedBlue.has(getPlayerKey(p, idx)) &&
+        Boolean(p.assigned_position) &&
+        lane.matchKeys.includes(p.assigned_position.toUpperCase())
     )
     const redPlayer = enhancedRedTeam.value.find(
-      (p) => !usedRed.has(p.puuid) && lane.matchKeys.includes(p.assigned_position?.toUpperCase())
+      (p, idx) =>
+        !usedRed.has(getPlayerKey(p, idx)) &&
+        Boolean(p.assigned_position) &&
+        lane.matchKeys.includes(p.assigned_position.toUpperCase())
     )
 
-    if (bluePlayer) usedBlue.add(bluePlayer.puuid)
-    if (redPlayer) usedRed.add(redPlayer.puuid)
+    if (bluePlayer) usedBlue.add(getPlayerKey(bluePlayer, enhancedBlueTeam.value.indexOf(bluePlayer)))
+    if (redPlayer) usedRed.add(getPlayerKey(redPlayer, enhancedRedTeam.value.indexOf(redPlayer)))
 
     rows.push({
       key: lane.key,
@@ -316,8 +348,12 @@ const pairedLaneRows = computed<PairedRow[]>(() => {
   }
 
   // Any remaining unassigned players (e.g. ARAM or Arena)
-  const remainingBlue = enhancedBlueTeam.value.filter((p) => !usedBlue.has(p.puuid))
-  const remainingRed = enhancedRedTeam.value.filter((p) => !usedRed.has(p.puuid))
+  const remainingBlue = enhancedBlueTeam.value.filter(
+    (p, idx) => !usedBlue.has(getPlayerKey(p, idx))
+  )
+  const remainingRed = enhancedRedTeam.value.filter(
+    (p, idx) => !usedRed.has(getPlayerKey(p, idx))
+  )
 
   // Place remaining blue players into rows without blue
   for (const bPlayer of remainingBlue) {
@@ -359,6 +395,7 @@ provideOngoingGamePanel({
   streamerMode,
   premadeTeamIdMap,
   selectPlayer: (player) => emits('selectPlayer', player),
-  inspectPlayer: (puuid) => emits('inspectPlayer', puuid)
+  inspectPlayer: (puuid) => emits('inspectPlayer', puuid),
+  previewGame: (gameId, puuid) => emits('preview-game', { gameId, puuid })
 })
 </script>

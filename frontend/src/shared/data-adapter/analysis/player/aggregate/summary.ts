@@ -9,20 +9,20 @@ import { avgIfAllNonNull, avgOrOne, avgOrZero } from '../utils/math'
 export function sumPings(pings: MatchParticipant['pings']): number | null {
   if (!pings) return null
   return (
-    pings.allInPings +
-    pings.assistMePings +
-    pings.basicPings +
-    pings.commandPings +
-    pings.dangerPings +
-    pings.enemyMissingPings +
-    pings.enemyVisionPings +
-    pings.getBackPings +
-    pings.holdPings +
-    pings.needVisionPings +
-    pings.onMyWayPings +
-    pings.pushPings +
-    pings.retreatPings +
-    pings.visionClearedPings
+    (pings.allInPings ?? 0) +
+    (pings.assistMePings ?? 0) +
+    (pings.basicPings ?? 0) +
+    (pings.commandPings ?? 0) +
+    (pings.dangerPings ?? 0) +
+    (pings.enemyMissingPings ?? 0) +
+    (pings.enemyVisionPings ?? 0) +
+    (pings.getBackPings ?? 0) +
+    (pings.holdPings ?? 0) +
+    (pings.needVisionPings ?? 0) +
+    (pings.onMyWayPings ?? 0) +
+    (pings.pushPings ?? 0) +
+    (pings.retreatPings ?? 0) +
+    (pings.visionClearedPings ?? 0)
   )
 }
 

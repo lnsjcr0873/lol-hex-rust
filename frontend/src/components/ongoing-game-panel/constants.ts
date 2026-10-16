@@ -55,8 +55,10 @@ export const POSITION_ORDER: Record<string, number> = {
   MID: 3,
   BOTTOM: 4,
   BOT: 4,
+  ADC: 4,
   UTILITY: 5,
-  SUP: 5
+  SUP: 5,
+  SUPPORT: 5
 }
 
 export const POSITION_DISPLAY_NAMES: Record<string, string> = {
@@ -67,8 +69,10 @@ export const POSITION_DISPLAY_NAMES: Record<string, string> = {
   MID: '中单',
   BOTTOM: '下路',
   BOT: '下路',
+  ADC: '射手',
   UTILITY: '辅助',
   SUP: '辅助',
+  SUPPORT: '辅助',
   NONE: '未知'
 }
 

@@ -18,13 +18,16 @@ export function computeSingleSummary(
     return value / noZero(total) / (1 / teamParticipants.length)
   }
 
-  const teamMaxChampionDmg = Math.max(...teamParticipants.map((p) => p.totalDamageDealtToChampions))
-  const teamMaxDmgTaken = Math.max(...teamParticipants.map((p) => p.totalDamageTaken))
-  const teamMaxGold = Math.max(...teamParticipants.map((p) => p.goldEarned))
-  const teamMaxCs = Math.max(...teamParticipants.map((p) => p.cs))
-  const teamMaxTowerDmg = Math.max(...teamParticipants.map((p) => p.totalDamageToTowers))
+  const durationMinutes = Math.max((basic.gameDuration || 0) / 60, 1)
+
+  const teamMaxChampionDmg = Math.max(...teamParticipants.map((p) => p.totalDamageDealtToChampions), 0)
+  const teamMaxDmgTaken = Math.max(...teamParticipants.map((p) => p.totalDamageTaken), 0)
+  const teamMaxGold = Math.max(...teamParticipants.map((p) => p.goldEarned), 0)
+  const teamMaxCs = Math.max(...teamParticipants.map((p) => p.cs), 0)
+  const teamMaxTowerDmg = Math.max(...teamParticipants.map((p) => p.totalDamageToTowers), 0)
   const teamMaxShieldedDmg = Math.max(
-    ...teamParticipants.map((p) => p.totalDamageShieldedOnTeammates ?? 0)
+    ...teamParticipants.map((p) => p.totalDamageShieldedOnTeammates ?? 0),
+    0
   )
   const teamTotalChampionDmg = teamParticipants.reduce(
     (acc, p) => acc + p.totalDamageDealtToChampions,
@@ -42,13 +45,14 @@ export function computeSingleSummary(
   )
   const teamTotalKills = teamParticipants.reduce((acc, p) => acc + p.kills, 0)
 
-  const maxChampionDmg = Math.max(...allParticipants.map((p) => p.totalDamageDealtToChampions))
-  const maxDmgTaken = Math.max(...allParticipants.map((p) => p.totalDamageTaken))
-  const maxGold = Math.max(...allParticipants.map((p) => p.goldEarned))
-  const maxCs = Math.max(...allParticipants.map((p) => p.cs))
-  const maxTowerDmg = Math.max(...allParticipants.map((p) => p.totalDamageToTowers))
+  const maxChampionDmg = Math.max(...allParticipants.map((p) => p.totalDamageDealtToChampions), 0)
+  const maxDmgTaken = Math.max(...allParticipants.map((p) => p.totalDamageTaken), 0)
+  const maxGold = Math.max(...allParticipants.map((p) => p.goldEarned), 0)
+  const maxCs = Math.max(...allParticipants.map((p) => p.cs), 0)
+  const maxTowerDmg = Math.max(...allParticipants.map((p) => p.totalDamageToTowers), 0)
   const maxShieldedDmg = Math.max(
-    ...allParticipants.map((p) => p.totalDamageShieldedOnTeammates ?? 0)
+    ...allParticipants.map((p) => p.totalDamageShieldedOnTeammates ?? 0),
+    0
   )
 
   return {
@@ -61,7 +65,7 @@ export function computeSingleSummary(
     championDamageRatioToMax: participant.totalDamageDealtToChampions / noZero(maxChampionDmg),
     championDamagePercentageOfTeam:
       participant.totalDamageDealtToChampions / noZero(teamTotalChampionDmg),
-    championDamagePerMinute: participant.totalDamageDealtToChampions / (basic.gameDuration / 60),
+    championDamagePerMinute: participant.totalDamageDealtToChampions / durationMinutes,
     damageTakenRatioToTeamMax: participant.totalDamageTaken / noZero(teamMaxDmgTaken),
     damageTakenRatioToExpectedContribution: getExpectedContributionRatio(
       participant.totalDamageTaken,
@@ -81,7 +85,7 @@ export function computeSingleSummary(
     csRatioToTeamMax: participant.cs / noZero(teamMaxCs),
     csRatioToMax: participant.cs / noZero(maxCs),
     csPercentageOfTeam: participant.cs / noZero(teamTotalCs),
-    csPerMinute: participant.cs / (basic.gameDuration / 60),
+    csPerMinute: participant.cs / durationMinutes,
     towerDamageRatioToTeamMax: participant.totalDamageToTowers / noZero(teamMaxTowerDmg),
     towerDamageRatioToMax: participant.totalDamageToTowers / noZero(maxTowerDmg),
     towerDamagePercentageOfTeam: participant.totalDamageToTowers / noZero(teamTotalTowerDmg),
@@ -106,11 +110,18 @@ export function computeSingleSummary(
     win: participant.winResult === 'win',
     killParticipation: (participant.kills + participant.assists) / noZero(teamTotalKills),
     damageGoldEfficiency: participant.totalDamageDealtToChampions / noZero(participant.goldEarned),
-    killDamageEfficiency:
-      teamTotalKills === 0 || teamTotalChampionDmg === 0
-        ? 1
-        : participant.kills /
-          teamTotalKills /
-          (participant.totalDamageDealtToChampions / noZero(teamTotalChampionDmg))
+    killDamageEfficiency: (() => {
+      if (
+        teamTotalKills === 0 ||
+        teamTotalChampionDmg === 0 ||
+        participant.totalDamageDealtToChampions === 0
+      ) {
+        return 1
+      }
+      const val =
+        (participant.kills / teamTotalKills) /
+        (participant.totalDamageDealtToChampions / teamTotalChampionDmg)
+      return Number.isFinite(val) ? val : 1
+    })()
   }
 }

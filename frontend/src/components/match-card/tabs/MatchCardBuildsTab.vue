@@ -1,9 +1,9 @@
 <template>
   <div class="space-y-4">
     <!-- Notice if timeline events present -->
-    <div v-if="!hasTimelineEvents" class="p-6 text-center rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
-      <div class="text-sm font-semibold text-slate-300 mb-1">技能与出装时间轴需时间线事件数据</div>
-      <div>正在加载或当前对局模式不支持逐帧出装事件，已展示当前局末最终神装</div>
+    <div v-if="!hasTimelineEvents" class="p-4 text-center rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
+      <div class="text-sm font-semibold text-slate-300 mb-1">该对局无时间线加点与出装事件</div>
+      <div class="text-slate-500">当前对局模式不支持逐帧事件记录，或客户端未记录时间轴</div>
     </div>
 
     <div class="space-y-4">
@@ -30,9 +30,9 @@
         <!-- Skill Leveling Order Timeline -->
         <div>
           <div class="text-xs font-bold text-slate-300 mb-2 flex items-center space-x-2">
-            <span>技能加点路线 (1 - 18 级):</span>
+            <span>技能加点路线:</span>
           </div>
-          <div class="flex items-center space-x-1.5 flex-wrap gap-y-1.5">
+          <div v-if="getSkillOrderForPlayer(p.participantId).length > 0" class="flex items-center space-x-1.5 flex-wrap gap-y-1.5">
             <div
               v-for="(skill, idx) in getSkillOrderForPlayer(p.participantId)"
               :key="idx"
@@ -46,6 +46,9 @@
               </span>
             </div>
           </div>
+          <div v-else class="py-1 text-xs text-slate-500 italic">
+            暂无技能加点记录
+          </div>
         </div>
 
         <!-- Item Purchase Timeline -->
@@ -53,7 +56,7 @@
           <div class="text-xs font-bold text-slate-300 mb-2">
             出装时间轴记录:
           </div>
-          <div class="flex items-center space-x-2 flex-wrap gap-y-2">
+          <div v-if="getItemPurchasesForPlayer(p.participantId).length > 0" class="flex items-center space-x-2 flex-wrap gap-y-2">
             <div
               v-for="(itemEv, idx) in getItemPurchasesForPlayer(p.participantId)"
               :key="idx"
@@ -63,6 +66,9 @@
               <ItemDisplay :item-id="itemEv.itemId" :size="22" />
               <span class="text-[10px] font-mono text-slate-400 pr-1">{{ itemEv.timestamp }}</span>
             </div>
+          </div>
+          <div v-else class="py-1 text-xs text-slate-500 italic">
+            暂无装备购买时间记录
           </div>
         </div>
       </div>
@@ -97,45 +103,40 @@ const hasTimelineEvents = computed(() => {
 
 function getSkillOrderForPlayer(pid: number) {
   const skillEvents = allEvents.value.filter(
-    (e) => (e.type === 'SKILL_LEVEL_UP' || e.skillSlot !== undefined) && e.participantId === pid
+    (e) =>
+      (e.type === 'SKILL_LEVEL_UP' || (!e.type && e.skillSlot !== undefined)) &&
+      e.participantId === pid
   )
 
   if (skillEvents.length > 0) {
     const slotMap: Record<number, string> = { 1: 'Q', 2: 'W', 3: 'E', 4: 'R' }
-    return skillEvents.map((e) => ({
-      slot: slotMap[e.skillSlot] || 'Q',
-      isEvolve: e.levelUpType === 'EVOLVE',
-      timestamp: formatMilliseconds(e.timestamp || 0)
-    }))
+    return skillEvents.map((e) => {
+      const slot = typeof e.skillSlot === 'string'
+        ? e.skillSlot
+        : (slotMap[Number(e.skillSlot)] || String(e.skillSlot || 'Q'))
+      return {
+        slot,
+        isEvolve: e.levelUpType === 'EVOLVE',
+        timestamp: formatMilliseconds(e.timestamp || 0)
+      }
+    })
   }
 
-  // Graceful fallback standard sequence
-  const standard = ['Q', 'W', 'E', 'Q', 'Q', 'R', 'Q', 'W', 'Q', 'W', 'R', 'W', 'W', 'E', 'E', 'R', 'E', 'E']
-  return standard.map((slot, idx) => ({
-    slot,
-    isEvolve: false,
-    timestamp: `${idx + 1}:00`
-  }))
+  return []
 }
 
 function getItemPurchasesForPlayer(pid: number) {
   const itemEvents = allEvents.value.filter(
-    (e) => (e.type === 'ITEM_PURCHASED' || e.itemId) && e.participantId === pid
+    (e) =>
+      (e.type === 'ITEM_PURCHASED' || (!e.type && e.itemId)) &&
+      e.participantId === pid &&
+      (e.itemId || 0) > 0
   )
 
   if (itemEvents.length > 0) {
     return itemEvents.map((e) => ({
       itemId: e.itemId,
       timestamp: formatMilliseconds(e.timestamp || 0)
-    }))
-  }
-
-  // Fallback to participant's final items
-  const p = participants.value.find((x) => x.participantId === pid)
-  if (p && p.items) {
-    return p.items.filter((id) => id > 0).map((id, idx) => ({
-      itemId: id,
-      timestamp: `${idx * 4 + 1}:00`
     }))
   }
 

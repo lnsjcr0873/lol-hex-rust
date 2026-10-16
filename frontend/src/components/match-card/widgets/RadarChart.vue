@@ -45,7 +45,11 @@ try {
   // Standalone mode outside of MatchCardContext
 }
 
-const noZero = (val: number | undefined) => (val && val > 0 ? val : 1)
+const noZero = (val: number | undefined) => (val && val > 0 && Number.isFinite(val) ? val : 1)
+const safePercent = (val: number, max: number) => {
+  if (!Number.isFinite(val) || !Number.isFinite(max) || max <= 0) return 0
+  return Math.min(Math.max(Math.round((val / max) * 100), 0), 100)
+}
 
 const labels = ['输出 (DMG)', '承伤 (TANK)', '经济 (GOLD)', '补兵 (CS)', '战损 (KDA)', '参团 (KP)']
 
@@ -59,12 +63,12 @@ const chartData = computed(() => {
         {
           label: '个人表现',
           data: [
-            s.output ?? 60,
-            s.survival ?? 60,
-            s.gold ?? 60,
-            s.vision ?? 60,
-            s.kda ?? 60,
-            s.join_rate ?? 60
+            safePercent(s.output ?? 0, 100),
+            safePercent(s.survival ?? 0, 100),
+            safePercent(s.gold ?? 0, 100),
+            safePercent(s.vision ?? 0, 100),
+            safePercent(s.kda ?? 0, 100),
+            safePercent(s.join_rate ?? 0, 100)
           ],
           backgroundColor: 'rgba(10, 200, 185, 0.25)',
           borderColor: '#0ac8b9',
@@ -81,10 +85,10 @@ const chartData = computed(() => {
       labels,
       datasets: [
         {
-          label: '个人',
-          data: [50, 50, 50, 50, 50, 50],
-          backgroundColor: 'rgba(248,113,113,0.25)',
-          borderColor: '#f87171'
+          label: '暂无数据',
+          data: [0, 0, 0, 0, 0, 0],
+          backgroundColor: 'rgba(148,163,184,0.1)',
+          borderColor: '#64748b'
         }
       ]
     }
@@ -120,12 +124,12 @@ const chartData = computed(() => {
   const maxKp = noZero(allStats.maxKillParticipation)
 
   const pData = [
-    Math.min(Math.round(((p.totalDamageDealtToChampions || 0) / maxDmg) * 100), 100),
-    Math.min(Math.round(((p.totalDamageTaken || 0) / maxTaken) * 100), 100),
-    Math.min(Math.round(((p.goldEarned || 0) / maxGold) * 100), 100),
-    Math.min(Math.round(((p.cs || 0) / maxCs) * 100), 100),
-    Math.min(Math.round(((p.kda || 0) / maxKda) * 100), 100),
-    Math.min(Math.round(((p.killParticipation || 0) / maxKp) * 100), 100)
+    safePercent(p.totalDamageDealtToChampions || 0, maxDmg),
+    safePercent(p.totalDamageTaken || 0, maxTaken),
+    safePercent(p.goldEarned || 0, maxGold),
+    safePercent(p.cs || 0, maxCs),
+    safePercent(p.kda || 0, maxKda),
+    safePercent(p.killParticipation || 0, maxKp)
   ]
 
   // Team average ratios
@@ -137,12 +141,12 @@ const chartData = computed(() => {
   const tKp = t ? (t.totalKillParticipation || 0) / teamSize : 0
 
   const tData = [
-    Math.min(Math.round((tDmg / maxDmg) * 100), 100),
-    Math.min(Math.round((tTaken / maxTaken) * 100), 100),
-    Math.min(Math.round((tGold / maxGold) * 100), 100),
-    Math.min(Math.round((tCs / maxCs) * 100), 100),
-    Math.min(Math.round((tKda / maxKda) * 100), 100),
-    Math.min(Math.round((tKp / maxKp) * 100), 100)
+    safePercent(tDmg, maxDmg),
+    safePercent(tTaken, maxTaken),
+    safePercent(tGold, maxGold),
+    safePercent(tCs, maxCs),
+    safePercent(tKda, maxKda),
+    safePercent(tKp, maxKp)
   ]
 
   return {

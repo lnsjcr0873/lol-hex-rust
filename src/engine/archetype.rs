@@ -64,7 +64,12 @@ impl ArchetypeEngine {
         candidate_items: &[Value],
         _resolve_conflicts: bool,
     ) -> ArchetypeInfo {
-        let _hid = hero_id.trim();
+        let hid = hero_id.trim();
+        let multi_hero = ENGINE_META.famous_multi_archetype_heroes.get(hid);
+        let default_arch_id = multi_hero
+            .and_then(|v| v.get("default"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("CRIT_MARKSMAN");
 
         // 1. Check if user already owns major items
         let mut valid_owned = Vec::new();
@@ -75,9 +80,47 @@ impl ArchetypeEngine {
             }
         }
 
+        // Multi-archetype champion triggers (e.g. Kai'Sa, Varus, Kog'Maw, Sion, Vi, Lee Sin)
         if !valid_owned.is_empty() {
-            // Check signature items matching
-            for (arch_id, arch) in &ENGINE_META.archetypes {
+            if let Some(cfg) = multi_hero {
+                let trigger_mappings: &[(&str, &str)] = &[
+                    ("ap_trigger_items", "AP_POKE_BURST"),
+                    ("crit_trigger_items", "CRIT_MARKSMAN"),
+                    ("on_hit_trigger_items", "ON_HIT_ATTACK_SPEED"),
+                    ("lethality_trigger_items", "LETHALITY_ASSASSIN"),
+                    ("tank_trigger_items", "PURE_TANK"),
+                    ("bruiser_trigger_items", "BRUISER_FIGHTER"),
+                ];
+
+                for &(key, target_arch) in trigger_mappings {
+                    if let Some(arr) = cfg.get(key).and_then(|v| v.as_array()) {
+                        for it in arr {
+                            if let Some(s) = it.as_str() {
+                                if valid_owned.iter().any(|o| o == s) {
+                                    if let Some(arch) = ENGINE_META.archetypes.get(target_arch) {
+                                        return ArchetypeInfo {
+                                            locked_archetype_id: target_arch.to_string(),
+                                            name: arch.name.clone(),
+                                            badge: arch.badge.clone(),
+                                            description: arch.description.clone(),
+                                            is_locked: true,
+                                            lock_reason: format!("检测到多流派英雄出装核心触发件[{}]", s),
+                                            favored_tags: arch.favored_tags.clone(),
+                                            forbidden_tags: arch.forbidden_tags.clone(),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check signature items matching with deterministic ordering
+            let mut sorted_archetypes: Vec<(&String, &ArchetypeDefinition)> = ENGINE_META.archetypes.iter().collect();
+            sorted_archetypes.sort_by_key(|(id, _)| id.as_str());
+
+            for (arch_id, arch) in sorted_archetypes {
                 for sig in &arch.signature_items {
                     if valid_owned.iter().any(|o| o == sig) {
                         return ArchetypeInfo {
@@ -125,11 +168,20 @@ impl ArchetypeEngine {
             arch_scores.insert(arch_id.as_str(), score);
         }
 
-        let arch_id = arch_scores
-            .into_iter()
-            .max_by_key(|&(_, score)| score)
-            .map(|(id, _)| id)
-            .unwrap_or("CRIT_MARKSMAN");
+        let mut sorted_scores: Vec<(&str, i32)> = arch_scores.into_iter().collect();
+        sorted_scores.sort_by(|(id_a, score_a), (id_b, score_b)| {
+            score_b.cmp(score_a).then_with(|| id_a.cmp(id_b))
+        });
+
+        let arch_id = if let Some(&(best_id, best_score)) = sorted_scores.first() {
+            if best_score > 0 {
+                best_id
+            } else {
+                default_arch_id
+            }
+        } else {
+            default_arch_id
+        };
 
         if let Some(arch) = ENGINE_META.archetypes.get(arch_id) {
             ArchetypeInfo {
@@ -169,6 +221,9 @@ impl ArchetypeEngine {
             let has_forbidden = tags.iter().any(|t| forbidden.contains(t.as_str()));
 
             let mut score = c.get("tacticalScore").and_then(|v| v.as_f64()).unwrap_or(50.0);
+            if !score.is_finite() {
+                score = 50.0;
+            }
 
             if has_forbidden && !is_counter_exempt {
                 if resolve_conflicts && archetype_info.is_locked {
@@ -180,6 +235,9 @@ impl ArchetypeEngine {
                 c["isArchetypeFavored"] = Value::Bool(true);
             }
 
+            if !score.is_finite() {
+                score = 50.0;
+            }
             c["tacticalScore"] = Value::from((score * 10.0).round() / 10.0);
             refined.push(c);
         }
@@ -233,8 +291,9 @@ impl ArchetypeEngine {
         let mut scored_trios: Vec<(f64, Value)> = all_trios
             .iter()
             .map(|trio| {
-                let wr = trio.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                let games = trio.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
+                let wr = trio.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let wr = if wr.is_finite() { wr } else { 0.0 };
+                let games = trio.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
                 let mut score = wr * 100.0;
 
                 let items = Self::extract_trio_item_ids(trio);
@@ -263,10 +322,14 @@ impl ArchetypeEngine {
                     }
                 }
 
-                if trio_mode == "STRICT_TRIO" {
+                if trio_mode == "STRICT_TRIO" && games > 0 {
                     // In strict trio mode, sample size and pure winrate carry extra weight
                     let smoothed_wr = (wr * games as f64 + 0.5 * 50.0) / (games as f64 + 50.0);
                     score += (smoothed_wr - 0.5) * 40.0;
+                }
+
+                if !score.is_finite() {
+                    score = 0.0;
                 }
 
                 let mut enriched = trio.clone();
@@ -277,8 +340,55 @@ impl ArchetypeEngine {
             })
             .collect();
 
-        scored_trios.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored_trios.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ka = a.1.get("trioKey").and_then(|v| v.as_str()).unwrap_or("");
+                    let kb = b.1.get("trioKey").and_then(|v| v.as_str()).unwrap_or("");
+                    ka.cmp(kb)
+                })
+        });
         scored_trios.into_iter().next().map(|(_, val)| val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_archetype_kaisa_default_and_crit_trigger() {
+        // Kai'Sa (145) defaults to AP_POKE_BURST when no items owned
+        let info = ArchetypeEngine::get_hero_archetype_info("145");
+        assert_eq!(info.locked_archetype_id, "AP_POKE_BURST");
+        assert!(!info.is_locked);
+
+        // Kai'Sa with Infinity Edge (3031) locks to CRIT_MARKSMAN
+        let crit_info = ArchetypeEngine::detect_archetype("145", &["3031".to_string()], &[], &[], false);
+        assert_eq!(crit_info.locked_archetype_id, "CRIT_MARKSMAN");
+        assert!(crit_info.is_locked);
+    }
+
+    #[test]
+    fn test_detect_archetype_sion_default() {
+        // Sion (14) defaults to PURE_TANK
+        let info = ArchetypeEngine::get_hero_archetype_info("14");
+        assert_eq!(info.locked_archetype_id, "PURE_TANK");
+    }
+
+    #[test]
+    fn test_detect_archetype_lee_sin_default() {
+        // Lee Sin (64) defaults to BRUISER_FIGHTER
+        let info = ArchetypeEngine::get_hero_archetype_info("64");
+        assert_eq!(info.locked_archetype_id, "BRUISER_FIGHTER");
+    }
+
+    #[test]
+    fn test_detect_archetype_deterministic_empty_candidates() {
+        let a1 = ArchetypeEngine::detect_archetype("9999", &[], &[], &[], false);
+        let a2 = ArchetypeEngine::detect_archetype("9999", &[], &[], &[], false);
+        assert_eq!(a1.locked_archetype_id, a2.locked_archetype_id);
     }
 }
 

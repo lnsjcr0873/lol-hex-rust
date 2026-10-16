@@ -18,9 +18,22 @@
           </div>
         </template>
         <ChampionAnalysisContent
-          :analysis="analysis.champions[player.champion_id]"
+          v-if="currentChampAnalysis"
+          :analysis="currentChampAnalysis"
           :mastery="playerMastery"
         />
+        <template v-else>
+          <div class="mb-2 flex items-center gap-2 text-xs">
+            <ChampionIcon ring :ring-width="1" round class="w-6 h-6" :champion-id="player.champion_id" />
+            <div class="text-xs font-bold text-slate-200">
+              {{ player.champion_name || `英雄 #${player.champion_id}` }}
+            </div>
+          </div>
+          <ChampionMasteryContent v-if="playerMastery" :mastery="playerMastery" />
+          <div v-else class="text-xs text-slate-400 py-1">
+            暂无该英雄近期对局分析数据
+          </div>
+        </template>
       </NPopover>
 
       <!-- Spells (Spell 1 & Spell 2) -->
@@ -49,8 +62,8 @@
           >
             {{ displayName }}
           </span>
-          <span v-if="!streamerMode" class="text-[10px] text-slate-400 shrink-0">
-            #{{ player.tag_line || 'CN' }}
+          <span v-if="!streamerMode && player.tag_line" class="text-[10px] text-slate-400 shrink-0">
+            #{{ player.tag_line }}
           </span>
         </div>
 
@@ -96,11 +109,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NDropdown, NPopover } from 'naive-ui'
+import { NDropdown, NPopover, useMessage } from 'naive-ui'
 import type { EnhancedPlayerCard } from '../../types'
 import { RANKED_MEDAL_MAP, PREMADE_TEAM_COLORS } from '../../constants'
 import ChampionIcon from '../../../widgets/ChampionIcon.vue'
 import ChampionAnalysisContent from '../../../champion-analysis/ChampionAnalysisContent.vue'
+import ChampionMasteryContent from '../../../champion-analysis/ChampionMasteryContent.vue'
 import { adaptPlayerCardToAggregatedAnalysis } from '../../utils/player-adapter'
 import { useOngoingGamePanel } from '../../context'
 import type { ChampionAnalysisMastery } from '../../../champion-analysis/types'
@@ -109,15 +123,17 @@ const props = defineProps<{
   player: EnhancedPlayerCard
 }>()
 
+const message = useMessage()
 const { streamerMode, inspectPlayer, selectPlayer } = useOngoingGamePanel()
 
 const analysis = computed(() => adaptPlayerCardToAggregatedAnalysis(props.player))
+const currentChampAnalysis = computed(() => analysis.value?.champions?.[props.player.champion_id] ?? null)
 
 const displayName = computed(() => {
   if (streamerMode.value) {
     return props.player.champion_name || '玩家'
   }
-  return props.player.game_name
+  return props.player.game_name || (props.player as any).summoner_name || props.player.champion_name || '玩家'
 })
 
 const premadeColor = computed(() => {
@@ -129,7 +145,10 @@ const premadeColor = computed(() => {
 
 const rankMedal = computed(() => {
   const tierKey = (props.player.tier || 'UNRANKED').toUpperCase()
-  return RANKED_MEDAL_MAP[tierKey] || RANKED_MEDAL_MAP.GOLD
+  if (tierKey === 'UNRANKED' || tierKey === 'NONE' || tierKey === '') {
+    return undefined
+  }
+  return RANKED_MEDAL_MAP[tierKey]
 })
 
 const formatTier = (tier?: string, div?: string) => {
@@ -147,18 +166,20 @@ const formatTier = (tier?: string, div?: string) => {
     CHALLENGER: '王者'
   }
   const translated = tierMap[tier.toUpperCase()] || tier
-  return div ? `${translated} ${div}` : translated
+  if (!div || div === 'NA' || div === 'NONE' || div.trim() === '') {
+    return translated
+  }
+  // Sanitize div: if div already contains tier name (e.g. "白银 I" or "SILVER I"), remove the tier prefix
+  const cleanDiv = div.replace(translated, '').replace(new RegExp(`^${tier}\\s*`, 'i'), '').trim()
+  return cleanDiv ? `${translated} ${cleanDiv}` : translated
 }
 
-const playerMastery = computed<ChampionAnalysisMastery>(() => {
-  return {
-    championId: props.player.champion_id,
-    championLevel: 7,
-    championPoints: 125600,
-    championSeasonMilestone: 3,
-    highestGrade: 'S+',
-    lastPlayTime: Date.now() - 86400000
+const playerMastery = computed<ChampionAnalysisMastery | null>(() => {
+  if (props.player.masteries && props.player.masteries.length > 0) {
+    const found = props.player.masteries.find((m) => m.championId === props.player.champion_id)
+    if (found) return found
   }
+  return null
 })
 
 const actionOptions = [
@@ -168,15 +189,28 @@ const actionOptions = [
   { label: '复制 PUUID', key: 'copy_puuid' }
 ]
 
-const handleActionSelect = (key: string) => {
+const handleActionSelect = async (key: string) => {
   if (key === 'view_profile') {
     inspectPlayer(props.player.puuid)
   } else if (key === 'open_drawer') {
     selectPlayer(props.player)
   } else if (key === 'copy_name') {
-    navigator.clipboard?.writeText(props.player.game_name)
+    const textToCopy = props.player.tag_line
+      ? `${props.player.game_name}#${props.player.tag_line}`
+      : (props.player.game_name || '')
+    try {
+      await navigator.clipboard?.writeText(textToCopy)
+      message.success(`已复制召唤师名: ${textToCopy}`)
+    } catch {
+      message.warning('复制失败，请检查剪贴板权限')
+    }
   } else if (key === 'copy_puuid') {
-    navigator.clipboard?.writeText(props.player.puuid)
+    try {
+      await navigator.clipboard?.writeText(props.player.puuid || '')
+      message.success('已复制 PUUID')
+    } catch {
+      message.warning('复制失败，请检查剪贴板权限')
+    }
   }
 }
 </script>

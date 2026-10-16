@@ -6,6 +6,9 @@
     <!-- 20-Game Summary & Akari Score Pane -->
     <SummaryPane :analysis="analysis" :profile-summary="profile?.recent_summary" />
 
+    <!-- Summoner Challenges & Assets -->
+    <PlayerChallenges :challenges-data="challengesData" />
+
     <!-- Champion Masteries Pane -->
     <ChampionMasteryPane :masteries-list="masteriesList" />
 
@@ -39,10 +42,12 @@ import SummaryPane from './SummaryPane.vue'
 import ChampionMasteryPane from './ChampionMasteryPane.vue'
 import RecentlyPlayers from './RecentlyPlayers.vue'
 import EncounteredGames from './EncounteredGames.vue'
+import PlayerChallenges from './widgets/PlayerChallenges.vue'
 
 defineProps<{
   profile?: any
   analysis?: any
+  challengesData?: any
   masteriesList?: any[]
   matches?: any[]
   encounteredGames?: any[]

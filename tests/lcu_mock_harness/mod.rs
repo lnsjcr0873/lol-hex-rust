@@ -1,7 +1,7 @@
 pub mod fixtures;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -27,6 +27,8 @@ pub struct MockLcuState {
     pub match_history: RwLock<HashMap<String, Value>>,
     pub match_details: RwLock<HashMap<String, Value>>,
     pub match_timelines: RwLock<HashMap<String, Value>>,
+    pub entitlements_token: RwLock<Value>,
+    pub league_session_token: RwLock<String>,
     pub ready_check: RwLock<Value>,
     pub ready_check_accepted: RwLock<bool>,
     pub ready_check_declined: RwLock<bool>,
@@ -49,6 +51,14 @@ impl MockLcuState {
             match_history: RwLock::new(HashMap::new()),
             match_details: RwLock::new(HashMap::new()),
             match_timelines: RwLock::new(HashMap::new()),
+            entitlements_token: RwLock::new(json!({
+                "accessToken": "mock_entitlements_jwt_token_12345",
+                "entitlements": [],
+                "issuer": "https://auth.riotgames.com",
+                "subject": "mock_subject_puuid",
+                "token": "mock_token"
+            })),
+            league_session_token: RwLock::new("mock_league_session_jwt_67890".to_string()),
             ready_check: RwLock::new(json!({
                 "state": "InProgress",
                 "playerResponse": "None",
@@ -100,6 +110,16 @@ impl MockLcuState {
     pub async fn set_ranked_stats(&self, puuid: &str, stats: Value) {
         let mut g = self.ranked_stats.write().await;
         g.insert(puuid.to_string(), stats);
+    }
+
+    pub async fn set_entitlements_token(&self, token: Value) {
+        let mut g = self.entitlements_token.write().await;
+        *g = token;
+    }
+
+    pub async fn set_league_session_token(&self, token: &str) {
+        let mut g = self.league_session_token.write().await;
+        *g = token.to_string();
     }
 
     pub async fn set_status_override(&self, status: Option<StatusCode>) {
@@ -167,6 +187,11 @@ impl MockLcuServer {
             .route(
                 "/lol-matchmaking/v1/ready-check/decline",
                 post(handle_ready_check_decline),
+            )
+            .route("/entitlements/v1/token", get(handle_entitlements_token))
+            .route(
+                "/lol-league-session/v1/league-session-token",
+                get(handle_league_session_token),
             )
             .with_state(state.clone());
 
@@ -309,12 +334,30 @@ async fn handle_match_history(
     State(state): State<Arc<MockLcuState>>,
     Path(puuid): Path<String>,
     headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     if let Some(resp) = check_override_and_auth(&state, &headers).await {
         return resp;
     }
     let map = state.match_history.read().await;
     if let Some(val) = map.get(&puuid) {
+        if let (Some(b_str), Some(e_str)) = (params.get("begIndex"), params.get("endIndex")) {
+            if let (Ok(b), Ok(e)) = (b_str.parse::<usize>(), e_str.parse::<usize>()) {
+                let mut cloned = val.clone();
+                if let Some(games_val) = cloned.get_mut("games") {
+                    if let Some(arr) = games_val.get_mut("games").and_then(|g| g.as_array_mut()) {
+                        let total = arr.len();
+                        if b < total {
+                            let end = (e + 1).min(total);
+                            *arr = arr[b..end].to_vec();
+                        } else {
+                            *arr = Vec::new();
+                        }
+                    }
+                }
+                return Json(cloned).into_response();
+            }
+        }
         Json(val.clone()).into_response()
     } else {
         (StatusCode::NOT_FOUND, "No match history found").into_response()
@@ -417,6 +460,28 @@ async fn handle_ready_check_decline(
     let mut g = state.ready_check_declined.write().await;
     *g = true;
     StatusCode::OK.into_response()
+}
+
+async fn handle_entitlements_token(
+    State(state): State<Arc<MockLcuState>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = check_override_and_auth(&state, &headers).await {
+        return resp;
+    }
+    let token = state.entitlements_token.read().await;
+    Json(token.clone()).into_response()
+}
+
+async fn handle_league_session_token(
+    State(state): State<Arc<MockLcuState>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = check_override_and_auth(&state, &headers).await {
+        return resp;
+    }
+    let token = state.league_session_token.read().await;
+    Json(token.clone()).into_response()
 }
 
 /// Lightweight test client connecting to MockLcuServer
@@ -562,13 +627,14 @@ impl MockLcuClient {
     pub async fn get_player_match_history(
         &self,
         puuid: &str,
-        end_idx: usize,
+        beg_index: usize,
+        end_index: usize,
     ) -> Result<Value, String> {
         let res = self
             .client
             .get(format!(
-                "{}/lol-match-history/v1/products/lol/{}/matches?begIndex=0&endIndex={}",
-                self.base_url, puuid, end_idx
+                "{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+                self.base_url, puuid, beg_index, end_index
             ))
             .header("Authorization", &self.auth_header)
             .send()

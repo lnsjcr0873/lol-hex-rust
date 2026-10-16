@@ -19,6 +19,12 @@ pub struct RecommendationConfig {
     pub auto_accept_match: bool,
     #[serde(default = "default_auto_accept_delay")]
     pub auto_accept_delay_seconds: u64,
+    #[serde(default)]
+    pub auto_swap_bench: bool,
+    #[serde(default)]
+    pub auto_apply_runes: bool,
+    #[serde(default)]
+    pub bench_preferred_champions: Vec<String>,
 }
 
 fn default_auto_accept_delay() -> u64 {
@@ -37,6 +43,9 @@ impl Default for RecommendationConfig {
             current_preset: "SMART".to_string(),
             auto_accept_match: false,
             auto_accept_delay_seconds: 2,
+            auto_swap_bench: false,
+            auto_apply_runes: false,
+            bench_preferred_champions: Vec::new(),
         }
     }
 }
@@ -262,6 +271,40 @@ impl ConfigManager {
 
     pub async fn set_auto_accept(&self, enabled: bool, delay_secs: Option<u64>) -> RecommendationConfig {
         self.update(None, None, None, None, None, None, None, Some(enabled), delay_secs).await
+    }
+
+    pub async fn update_automation(
+        &self,
+        auto_accept_match: Option<bool>,
+        auto_accept_delay_seconds: Option<u64>,
+        auto_swap_bench: Option<bool>,
+        auto_apply_runes: Option<bool>,
+        bench_preferred_champions: Option<Vec<String>>,
+    ) -> RecommendationConfig {
+        let mut cfg = self.config.write().await;
+        if let Some(aam) = auto_accept_match {
+            cfg.auto_accept_match = aam;
+        }
+        if let Some(aads) = auto_accept_delay_seconds {
+            cfg.auto_accept_delay_seconds = aads.clamp(0, 10);
+        }
+        if let Some(asb) = auto_swap_bench {
+            cfg.auto_swap_bench = asb;
+        }
+        if let Some(aar) = auto_apply_runes {
+            cfg.auto_apply_runes = aar;
+        }
+        if let Some(bpc) = bench_preferred_champions {
+            cfg.bench_preferred_champions = bpc;
+        }
+
+        // Persist to disk safely via atomic rename
+        if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
+            let path = Path::new(&self.config_file_path);
+            let _ = save_atomic(path, &json_str);
+        }
+
+        cfg.clone()
     }
 }
 

@@ -57,15 +57,19 @@ import dayjs from 'dayjs'
 import { computed } from 'vue'
 import type { ChampionAnalysisMastery } from './types'
 
-const { mastery } = defineProps<{
+const props = defineProps<{
   mastery: ChampionAnalysisMastery
 }>()
 
-const formatMasteryTime = (value: number) => dayjs(value).format('YYYY-MM-DD')
+const formatMasteryTime = (value?: number | null) => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '未知'
+  const d = dayjs(value)
+  return d.isValid() ? d.format('YYYY-MM-DD') : '未知'
+}
 
 const hasLevelProgress = computed(
   () =>
-    mastery.championPointsSinceLastLevel !== undefined &&
-    mastery.championPointsUntilNextLevel !== undefined
+    props.mastery?.championPointsSinceLastLevel !== undefined &&
+    props.mastery?.championPointsUntilNextLevel !== undefined
 )
 </script>

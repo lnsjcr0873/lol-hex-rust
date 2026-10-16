@@ -21,7 +21,7 @@
               />
               <div>
                 <div class="text-xs font-bold text-slate-100 flex items-center space-x-1.5">
-                  <span>{{ p.gameName || '召唤师' }}</span>
+                  <span>{{ p.gameName || `选手 #${p.participantId}` }}</span>
                   <span v-if="p.tagLine" class="text-[10px] text-slate-500 font-mono">#{{ p.tagLine }}</span>
                 </div>
                 <div class="text-[10px] text-slate-400 mt-0.5 flex items-center space-x-1">
@@ -62,11 +62,8 @@
                   <PerkDisplay :perk-id="sel.perk" :size="22" class="mt-0.5 shrink-0" />
                   <div class="min-w-0">
                     <div class="font-bold text-slate-200">{{ getPerkName(sel.perk) }}</div>
-                    <div class="text-[11px] text-[#0ac8b9] font-mono mt-0.5">
-                      局内收益:
-                      <span v-if="sel.var1 !== undefined">数值1: {{ sel.var1.toLocaleString() }} </span>
-                      <span v-if="sel.var2 && sel.var2 > 0">| 数值2: {{ sel.var2.toLocaleString() }} </span>
-                      <span v-if="sel.var3 && sel.var3 > 0">| 数值3: {{ sel.var3.toLocaleString() }}</span>
+                    <div class="text-[11px] text-[#0ac8b9] font-mono mt-0.5" v-if="hasRuneStats(sel)">
+                      局内收益: {{ formatRuneStats(sel) }}
                     </div>
                   </div>
                 </div>
@@ -90,8 +87,8 @@
                   <PerkDisplay :perk-id="sel.perk" :size="22" class="mt-0.5 shrink-0" />
                   <div class="min-w-0">
                     <div class="font-bold text-slate-200">{{ getPerkName(sel.perk) }}</div>
-                    <div class="text-[11px] text-[#0ac8b9] font-mono mt-0.5" v-if="sel.var1 || sel.var2 || sel.var3">
-                      局内收益: {{ sel.var1 ? sel.var1.toLocaleString() : 0 }}
+                    <div class="text-[11px] text-[#0ac8b9] font-mono mt-0.5" v-if="hasRuneStats(sel)">
+                      局内收益: {{ formatRuneStats(sel) }}
                     </div>
                   </div>
                 </div>
@@ -141,5 +138,28 @@ function scrollToParticipant(pid: number) {
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
+}
+
+function hasRuneStats(sel?: { var1?: number; var2?: number; var3?: number }): boolean {
+  if (!sel) return false
+  return Boolean(
+    (typeof sel.var1 === 'number' && sel.var1 !== 0) ||
+    (typeof sel.var2 === 'number' && sel.var2 !== 0) ||
+    (typeof sel.var3 === 'number' && sel.var3 !== 0)
+  )
+}
+
+function formatRuneStats(sel: { var1?: number; var2?: number; var3?: number }): string {
+  const parts: string[] = []
+  if (typeof sel.var1 === 'number' && Number.isFinite(sel.var1)) {
+    parts.push(`数值1: ${sel.var1.toLocaleString()}`)
+  }
+  if (typeof sel.var2 === 'number' && Number.isFinite(sel.var2) && sel.var2 !== 0) {
+    parts.push(`数值2: ${sel.var2.toLocaleString()}`)
+  }
+  if (typeof sel.var3 === 'number' && Number.isFinite(sel.var3) && sel.var3 !== 0) {
+    parts.push(`数值3: ${sel.var3.toLocaleString()}`)
+  }
+  return parts.join(' | ')
 }
 </script>

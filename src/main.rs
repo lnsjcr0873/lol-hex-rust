@@ -1,9 +1,12 @@
+#![recursion_limit = "512"]
+
 mod config;
 mod crawler;
 mod data;
 mod engine;
 mod lcu;
 mod overlay;
+mod sgp;
 mod vision;
 mod web;
 
@@ -13,6 +16,7 @@ use data::loader::Database;
 use engine::ranked_draft::RankedDraftManager;
 use lcu::{LcuClient, LiveClientDataReader};
 use overlay::{BenchOverlay, HotkeyManager, InGameOverlay, ItemOverlay, RankedOverlay, TextToSpeech};
+use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tracing::{info, Level};
@@ -34,61 +38,6 @@ where
 }
 
 
-async fn fetch_slot_counters_and_synergies(
-    opgg: &crate::crawler::OpggClient,
-    db: &crate::data::loader::Database,
-    cid_str: &str,
-    pos: &str,
-) -> (Vec<crate::overlay::CounterHeroItem>, Vec<crate::overlay::CounterHeroItem>) {
-    if cid_str.is_empty() || cid_str == "0" {
-        return (Vec::new(), Vec::new());
-    }
-
-    let (c_data, syn_data) = tokio::join!(
-        opgg.get_counter_picks_against(cid_str, pos, Some(30)),
-        opgg.get_champion_synergies(cid_str, pos)
-    );
-
-    let mut counters = Vec::new();
-    if let Some(arr) = c_data.get("counters").and_then(|v| v.as_array()) {
-        for c in arr {
-            let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
-            let opp_name = db.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
-            let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-            let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
-            let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
-            counters.push(crate::overlay::CounterHeroItem {
-                champion_id: opp_cid.parse().unwrap_or(0),
-                name: opp_name,
-                tier,
-                counter_win_rate: c_wr,
-                overall_win_rate: c_wr,
-                games,
-            });
-        }
-    }
-
-    let mut synergies = Vec::new();
-    if let Some(arr) = syn_data.get("synergies").and_then(|v| v.as_array()) {
-        for s in arr {
-            let syn_cid = s.get("championId").and_then(|v| v.as_str()).unwrap_or("");
-            let syn_name = db.resolve_hero_name(syn_cid).unwrap_or_else(|| format!("Hero-{}", syn_cid));
-            let wr = s.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-            let games = s.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
-            let tier = s.get("tier").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
-            synergies.push(crate::overlay::CounterHeroItem {
-                champion_id: syn_cid.parse().unwrap_or(0),
-                name: syn_name,
-                tier,
-                counter_win_rate: wr,
-                overall_win_rate: wr,
-                games,
-            });
-        }
-    }
-
-    (counters, synergies)
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -218,6 +167,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Background LCU & Game Polling Task
     let player_history = Arc::new(crate::engine::PlayerHistoryManager::new());
     player_history.set_database(db.clone()).await;
+    let sgp_client = Arc::new(crate::sgp::SgpClient::new(lcu_client.clone()));
+    player_history.set_sgp_client(sgp_client.clone()).await;
+    lcu_client.set_opgg(opgg_client.clone()).await;
     if let Ok(mut gh) = crate::overlay::win32_hud::GLOBAL_HISTORY.write() {
         *gh = Some(player_history.clone());
     }
@@ -268,6 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_level = 0i32;
         let mut last_draft_sig = String::new();
         let mut cached_ranked_data: Option<crate::overlay::RankedOverlayData> = None;
+        let mut last_applied_runes_cid = 0i64;
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -281,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let player_resp = rc.get("playerResponse").and_then(|v| v.as_str()).unwrap_or("");
                         let state = rc.get("state").and_then(|v| v.as_str()).unwrap_or("");
                         if player_resp != "Accepted" && player_resp != "Declined" && state == "InProgress" {
-                            let delay = cfg.auto_accept_delay_seconds;
+                            let delay = cfg.auto_accept_delay_seconds.clamp(0, 10);
                             if delay > 0 {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
                             }
@@ -302,6 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if phase != "ChampSelect" {
+                last_applied_runes_cid = 0;
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
                 }
@@ -344,157 +298,92 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !views.is_empty() {
                                 bench_bg.show_bench_heroes(views);
                             }
+
+                            // ARAM Auto-Swap Bench Fast Grab
+                            let cfg = config_bg.get().await;
+                            if cfg.auto_swap_bench && !cfg.bench_preferred_champions.is_empty() {
+                                let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64()).unwrap_or(-1);
+                                let my_cid_str = session.get("myTeam")
+                                    .and_then(|t| t.as_array())
+                                    .and_then(|arr| {
+                                        arr.iter()
+                                            .find(|m| m.get("cellId").and_then(|c| c.as_i64()) == Some(local_cell_id))
+                                            .and_then(|m| m.get("championId").or_else(|| m.get("championPickIntent")))
+                                            .map(|v| match v {
+                                                Value::String(s) => s.clone(),
+                                                Value::Number(n) => n.to_string(),
+                                                _ => String::new(),
+                                            })
+                                    })
+                                    .unwrap_or_default();
+
+                                for pref_id in &cfg.bench_preferred_champions {
+                                    if !my_cid_str.is_empty() && my_cid_str == *pref_id {
+                                        break;
+                                    }
+                                    let on_bench = bench.iter().any(|b| {
+                                        b.get("championId")
+                                            .map(|v| match v {
+                                                Value::String(s) => s == pref_id,
+                                                Value::Number(n) => n.to_string() == *pref_id,
+                                                _ => false,
+                                            })
+                                            .unwrap_or(false)
+                                    });
+                                    if on_bench {
+                                        if lcu_bg.swap_bench_champion(pref_id).await {
+                                            let pref_name = db_bg.resolve_hero_name(pref_id).unwrap_or_else(|| format!("英雄{}", pref_id));
+                                            tracing::info!("⚡ [HexBrain ARAM] 心愿英雄已出现在待选席！已极速为您秒抢：{}", pref_name);
+                                            ws_bg.send_event("auto_swap_bench", serde_json::json!({
+                                                "status": "swapped",
+                                                "championId": pref_id,
+                                                "championName": pref_name
+                                            }));
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else if !d.state.my_team.is_empty() {
                         if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                             bench_bg.stop();
                         }
 
-                        // Compute draft session fingerprint: if unchanged, reuse cached HUD data to avoid spamming OP.GG API
-                        let mut current_sig = String::new();
-                        for s in &d.state.my_team {
-                            current_sig.push_str(&format!("M:{}:{}:{};", s.cell_id, s.champion_id, s.position));
-                        }
-                        for s in &d.state.their_team {
-                            current_sig.push_str(&format!("T:{}:{}:{};", s.cell_id, s.champion_id, s.position));
-                        }
+                        // Auto-apply recommended runes for locked champion
+                        let cfg = config_bg.get().await;
+                        if cfg.auto_apply_runes {
+                            let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64()).unwrap_or(-1);
+                            let is_locked = session.get("actions").and_then(|v| v.as_array()).map(|action_rounds| {
+                                action_rounds.iter().any(|round| {
+                                    round.as_array().map(|actions| {
+                                        actions.iter().any(|a| {
+                                            let actor = a.get("actorCellId").and_then(|v| v.as_i64()).unwrap_or(-1);
+                                            let atype = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                            let completed = a.get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
+                                            actor == local_cell_id && atype == "pick" && completed
+                                        })
+                                    }).unwrap_or(false)
+                                })
+                            }).unwrap_or(false);
 
-                        let my_cids: Vec<i32> = d.state.my_team.iter().map(|s| s.champion_id.parse::<i32>().unwrap_or(0)).collect();
-                        let my_locals: Vec<bool> = d.state.my_team.iter().map(|s| s.is_local_player).collect();
-
-                        if current_sig == last_draft_sig {
-                            if let Some(ref cached) = cached_ranked_data {
-                                let my_ready = cached.my_team.iter().filter(|s| s.profile.is_some()).count();
-                                if my_ready >= 4 || my_ready == d.state.my_team.len() {
-                                    ranked_bg.show_ranked_draft(cached.clone());
-                                    continue;
-                                }
-                            }
-                        }
-
-                        // Resolve teammate and opponent profiles via enhanced multi-tier resolver
-                        let profiles = history_bg.resolve_teammates(&session, &my_cids, &my_locals, &lcu_bg).await;
-                        let their_cids: Vec<i32> = d.state.their_team.iter().map(|s| s.champion_id.parse::<i32>().unwrap_or(0)).collect();
-                        let their_profiles = history_bg.resolve_opponents_champ_select(&session, &their_cids, &lcu_bg).await;
-
-                        let local_slot = d.state.my_team.iter().find(|s| s.is_local_player).cloned();
-                        let local_pos = local_slot.as_ref().map(|s| s.position.clone()).unwrap_or_default();
-
-                        // 2. 5v5 Ranked / Normal Draft -> RankedOverlay HUD
-                        let mut my_slots = Vec::new();
-                        for (idx, s) in d.state.my_team.iter().enumerate() {
-                            let prof = profiles.get(idx).cloned().flatten();
-                            let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
-                            let opp_slot = d.state.their_team.iter().find(|t| t.position == s.position);
-                            let m_wr = if s.is_local_player && !s.champion_id.is_empty() {
-                                if let Some(opp) = opp_slot {
-                                    if !opp.champion_id.is_empty() {
-                                        opgg_bg.get_matchup_win_rate(&s.champion_id, &opp.champion_id, &s.position).await
-                                            .and_then(|v| v.get("winRate").and_then(|w| w.as_f64()))
-                                    } else { None }
-                                } else { None }
-                            } else { None };
-
-                            let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
-                                fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
-                            } else {
-                                (Vec::new(), Vec::new())
-                            };
-
-                            my_slots.push(crate::overlay::RankedSlotView {
-                                slot_index: idx,
-                                position: s.position.clone(),
-                                position_cn: s.position_cn.clone(),
-                                champion_name: s.champion_name.clone(),
-                                champion_id: cid_num,
-                                win_rate: s.win_rate,
-                                tier: s.tier,
-                                is_local_player: s.is_local_player,
-                                is_locked: !s.champion_id.is_empty(),
-                                is_manual_pos: false,
-                                matchup_win_rate: m_wr,
-                                profile: prof,
-                                counter_heroes: c_heroes,
-                                synergy_heroes: s_heroes,
-                            });
-                        }
-
-                        let mut their_slots = Vec::new();
-                        for (idx, s) in d.state.their_team.iter().enumerate() {
-                            let prof = their_profiles.get(idx).cloned().flatten();
-                            let cid_num = s.champion_id.parse::<i32>().unwrap_or(0);
-                            let is_opp = !local_pos.is_empty() && s.position == local_pos;
-                            let my_opp = d.state.my_team.iter().find(|m| m.position == s.position);
-                            let m_wr = if is_opp && !s.champion_id.is_empty() {
-                                if let Some(opp) = my_opp {
-                                    if !opp.champion_id.is_empty() {
-                                        opgg_bg.get_matchup_win_rate(&opp.champion_id, &s.champion_id, &s.position).await
-                                            .and_then(|v| v.get("winRate").and_then(|w| w.as_f64()))
-                                    } else { None }
-                                } else { None }
-                            } else { None };
-
-                            let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
-                                fetch_slot_counters_and_synergies(&opgg_bg, &db_bg, &s.champion_id, &s.position).await
-                            } else {
-                                (Vec::new(), Vec::new())
-                            };
-
-                            their_slots.push(crate::overlay::RankedSlotView {
-                                slot_index: idx,
-                                position: s.position.clone(),
-                                position_cn: s.position_cn.clone(),
-                                champion_name: s.champion_name.clone(),
-                                champion_id: cid_num,
-                                win_rate: s.win_rate,
-                                tier: s.tier,
-                                is_local_player: false,
-                                is_locked: !s.champion_id.is_empty(),
-                                is_manual_pos: false,
-                                matchup_win_rate: m_wr,
-                                profile: prof,
-                                counter_heroes: c_heroes,
-                                synergy_heroes: s_heroes,
-                            });
-                        }
-
-                        let mut rune_guide = None;
-                        let mut lane_counters = Vec::new();
-
-                        if let Some(ref local) = local_slot {
-                            if !local.champion_id.is_empty() {
-                                if let Some(detail) = opgg_bg.get_champion_detail(&local.champion_id, &local.position).await {
-                                    if let Some(runes) = detail.get("recommendedRunes") {
-                                        if !runes.is_null() {
-                                            rune_guide = Some(crate::overlay::RuneGuideView {
-                                                champion_name: local.champion_name.clone(),
-                                                position_cn: local.position_cn.clone(),
-                                                skill_order: "Q > E > W".to_string(),
-                                                rune_data: runes.clone(),
-                                            });
-                                        }
-                                    }
-                                }
-
-                                let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
-                                if let Some(enemy) = enemy_slot {
-                                    if !enemy.champion_id.is_empty() {
-                                        let c_data = opgg_bg.get_counter_picks_against(&enemy.champion_id, &enemy.position, Some(8)).await;
-                                        if let Some(c_arr) = c_data.get("counters").and_then(|v| v.as_array()) {
-                                            for c in c_arr {
-                                                let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
-                                                let opp_name = db_bg.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
-                                                let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                                let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
-                                                let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
-                                                lane_counters.push(crate::overlay::CounterHeroItem {
-                                                    champion_id: opp_cid.parse().unwrap_or(0),
-                                                    name: opp_name,
-                                                    tier,
-                                                    counter_win_rate: c_wr,
-                                                    overall_win_rate: c_wr,
-                                                    games,
-                                                });
+                            if is_locked {
+                                let local_slot = d.state.my_team.iter().find(|s| s.is_local_player);
+                                if let Some(local) = local_slot {
+                                    if !local.champion_id.is_empty() {
+                                        if let Ok(cid_i64) = local.champion_id.parse::<i64>() {
+                                            if cid_i64 > 0 && cid_i64 != last_applied_runes_cid {
+                                                last_applied_runes_cid = cid_i64;
+                                                let (success, msg) = lcu_bg.do_apply_runes_and_spells(&db_bg, cid_i64).await;
+                                                if success {
+                                                    tracing::info!("⚡ [HexBrain LCU] 已自动为【{}】配置版本推荐符文天赋与召唤师技能", local.champion_name);
+                                                    ws_bg.send_event("auto_apply_runes", serde_json::json!({
+                                                        "status": "applied",
+                                                        "championId": cid_i64,
+                                                        "championName": local.champion_name,
+                                                        "message": msg
+                                                    }));
+                                                }
                                             }
                                         }
                                     }
@@ -502,111 +391,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        // Pick phase fallback: if local player has not locked or lane_counters is empty
-                        if lane_counters.is_empty() {
-                            let enemy_counterpart = d.state.their_team.iter().find(|s| s.position == local_pos && !s.champion_id.is_empty())
-                                .or_else(|| d.state.their_team.iter().find(|s| !s.champion_id.is_empty()));
-                            if let Some(enemy) = enemy_counterpart {
-                                let c_data = opgg_bg.get_counter_picks_against(&enemy.champion_id, &local_pos, Some(8)).await;
-                                if let Some(c_arr) = c_data.get("counters").and_then(|v| v.as_array()) {
-                                    for c in c_arr {
-                                        let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
-                                        let opp_name = db_bg.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
-                                        let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                        let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
-                                        let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else { 3 };
-                                        lane_counters.push(crate::overlay::CounterHeroItem {
-                                            champion_id: opp_cid.parse().unwrap_or(0),
-                                            name: opp_name,
-                                            tier,
-                                            counter_win_rate: c_wr,
-                                            overall_win_rate: c_wr,
-                                            games,
-                                        });
-                                    }
-                                }
-                            }
-
-                            // If still empty (e.g. no enemy champions picked yet), pull top meta picks for local_pos
-                            if lane_counters.is_empty() && !local_pos.is_empty() {
-                                let tier_list = opgg_bg.get_ranked_tier_list(false).await;
-                                if let Some(champs) = tier_list.get("champions").and_then(|v| v.as_object()) {
-                                    let mut meta_picks: Vec<(i32, String, i32, f64, i64)> = Vec::new();
-                                    for (cid_str, cval) in champs {
-                                        if let Some(pos_obj) = cval.get("positions").and_then(|p| p.get(&local_pos)) {
-                                            let tier = pos_obj.get("tier").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
-                                            let wr = pos_obj.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                            let games = pos_obj.get("games").and_then(|v| v.as_i64()).unwrap_or(100);
-                                            let name = db_bg.resolve_hero_name(cid_str).unwrap_or_else(|| format!("Hero-{}", cid_str));
-                                            let cid_num = cid_str.parse::<i32>().unwrap_or(0);
-                                            meta_picks.push((cid_num, name, tier, wr, games));
-                                        }
-                                    }
-                                    meta_picks.sort_by(|a, b| {
-                                        a.2.cmp(&b.2).then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
-                                    });
-                                    for (cid_num, name, tier, wr, games) in meta_picks.into_iter().take(8) {
-                                        lane_counters.push(crate::overlay::CounterHeroItem {
-                                            champion_id: cid_num,
-                                            name,
-                                            tier,
-                                            counter_win_rate: wr,
-                                            overall_win_rate: wr,
-                                            games,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        let rec_text = if let Some(ref local) = local_slot {
-                            if !local.champion_id.is_empty() {
-                                let enemy_slot = d.state.their_team.iter().find(|s| s.position == local.position);
-                                if let Some(enemy) = enemy_slot {
-                                    if !enemy.champion_id.is_empty() {
-                                        format!(
-                                            "对位[{}]: 胜率 {:.1}% · 推荐符文已就绪 · 技能: 闪现 + 点燃",
-                                            enemy.champion_name,
-                                            local.win_rate * 100.0
-                                        )
-                                    } else {
-                                        format!("已选[{}]: 等待敌方对位锁定 · 符文已就绪", local.champion_name)
-                                    }
-                                } else {
-                                    format!("已选[{}]: 推荐符文已就绪 · 召唤师技能: 闪现 + 点燃", local.champion_name)
-                                }
-                            } else {
-                                let enemy_counterpart = d.state.their_team.iter().find(|s| s.position == local_pos && !s.champion_id.is_empty());
-                                if let Some(enemy) = enemy_counterpart {
-                                    format!("敌方已锁定 [{}]: 克制英雄推荐已呈现于顶部决策栏", enemy.champion_name)
-                                } else {
-                                    format!("[{}] 选人思考期: 当前分路版本强势英雄已推荐于顶部", local.position_cn)
-                                }
-                            }
-                        } else {
-                            "排位选人辅助已激活 · 实时分析对位胜率".to_string()
-                        };
-
-                        let decision_card = crate::overlay::RankedDecisionCard {
-                            mode: "counter".to_string(),
-                            my_locked: local_slot.as_ref().map_or(false, |l| !l.champion_id.is_empty()),
-                            default_tab: if rune_guide.is_some() { "runes".to_string() } else { "lane_counter".to_string() },
-                            rune_guide,
-                            lane_counters,
-                            multi_counters: Vec::new(),
-                            synergy_picks: Vec::new(),
-                        };
-
-                        let overlay_data = crate::overlay::RankedOverlayData {
-                            my_team: my_slots,
-                            their_team: their_slots,
-                            decision_card,
-                            recommendation: rec_text,
-                        };
-
-                        ranked_bg.show_ranked_draft(overlay_data.clone());
-                        cached_ranked_data = Some(overlay_data);
-                        last_draft_sig = current_sig;
+                        drop(d);
+                        crate::overlay::ranked_overlay::update_ranked_draft_overlay(
+                            &session,
+                            &draft_bg,
+                            &ranked_bg,
+                            &lcu_bg,
+                            &history_bg,
+                            &opgg_bg,
+                            &db_bg,
+                            &mut last_draft_sig,
+                            &mut cached_ranked_data,
+                        ).await;
                     }
 
                 }
@@ -729,7 +525,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                             ranked_bg.stop();
                         }
-                        if !live_stats.hero_id.is_empty() {
+                        if !live_stats.hero_id.is_empty() && db_bg.get_hero_detail(&live_stats.hero_id).is_none() {
                             let crawler = hex_bg.clone();
                             let db_clone = db_bg.clone();
                             let hero_id = live_stats.hero_id.clone();
@@ -1231,11 +1027,9 @@ mod tests {
     #[tokio::test]
     async fn test_opgg_client_fallback_and_cache() {
         let opgg = crate::crawler::OpggClient::new();
-        let matchup = opgg.get_matchup_win_rate("1", "86", "MID").await;
-        assert!(matchup.is_some());
-        let val = matchup.unwrap();
-        assert!(val.get("winRate").is_some());
-        assert!(val.get("label").is_some());
+        assert_eq!(opgg.get_primary_position("24").as_deref(), Some("TOP"));
+        assert_eq!(opgg.get_primary_position("64").as_deref(), Some("JUNGLE"));
+        assert!(opgg.get_matchup_win_rate("", "", "MID").await.is_none());
     }
 
     #[tokio::test]

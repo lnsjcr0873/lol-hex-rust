@@ -31,6 +31,8 @@ impl WsBroadcaster {
                 for (k, v) in payload_obj {
                     obj.insert(k.clone(), v.clone());
                 }
+            } else {
+                obj.insert("data".to_string(), payload);
             }
         }
         let _ = self.sender.send(msg.to_string());

@@ -1,49 +1,54 @@
 <template>
   <div class="flex items-center space-x-3 text-xs select-none">
-    <!-- Team Win Rate -->
-    <NPopover :delay="50" :keep-alive-on-hover="true" placement="top">
-      <template #trigger>
-        <div class="flex items-center space-x-1 cursor-pointer">
-          <span class="text-slate-400 text-[11px]">胜率:</span>
-          <span
-            class="font-extrabold tabular-nums font-mono text-sm"
-            :class="avgWinRate >= 50 ? WIN_RATE_GTE_50_TEXT_CLASSES : WIN_RATE_LT_50_TEXT_CLASSES"
-          >
-            {{ avgWinRate.toFixed(0) }}%
-          </span>
+    <!-- Team Win Rate & KDA (Shown when valid stats exist) -->
+    <template v-if="hasStats">
+      <NPopover :delay="50" :keep-alive-on-hover="true" placement="top">
+        <template #trigger>
+          <div class="flex items-center space-x-1 cursor-pointer">
+            <span class="text-slate-400 text-[11px]">胜率:</span>
+            <span
+              class="font-extrabold tabular-nums font-mono text-sm"
+              :class="avgWinRate >= 50 ? WIN_RATE_GTE_50_TEXT_CLASSES : WIN_RATE_LT_50_TEXT_CLASSES"
+            >
+              {{ avgWinRate.toFixed(0) }}%
+            </span>
+          </div>
+        </template>
+        <div class="text-xs text-slate-200 p-1">
+          <div class="font-bold text-slate-100 mb-0.5">队伍平均胜率</div>
+          <div class="text-[11px] text-slate-300 font-mono">
+            {{ avgWinRate.toFixed(1) }}% ({{ Math.round((avgWinRate / 100) * totalGames) }} 胜 / {{ totalGames }} 场)
+          </div>
         </div>
-      </template>
-      <div class="text-xs text-slate-200 p-1">
-        <div class="font-bold text-slate-100 mb-0.5">队伍平均胜率</div>
-        <div class="text-[11px] text-slate-300 font-mono">
-          {{ avgWinRate.toFixed(1) }}% ({{ Math.round((avgWinRate / 100) * totalGames) }} 胜 / {{ totalGames }} 场)
-        </div>
-      </div>
-    </NPopover>
+      </NPopover>
 
-    <!-- Divider -->
-    <div class="h-3 w-px bg-slate-700/80"></div>
+      <!-- Divider -->
+      <div class="h-3 w-px bg-slate-700/80"></div>
 
-    <!-- Team Average KDA -->
-    <NPopover :delay="50" :keep-alive-on-hover="true" placement="top">
-      <template #trigger>
-        <div class="flex items-center space-x-1 cursor-pointer">
-          <span class="text-slate-400 text-[11px]">KDA:</span>
-          <span class="font-extrabold text-slate-100 tabular-nums font-mono text-sm">
-            {{ avgKda.toFixed(2) }}
-          </span>
+      <!-- Team Average KDA -->
+      <NPopover :delay="50" :keep-alive-on-hover="true" placement="top">
+        <template #trigger>
+          <div class="flex items-center space-x-1 cursor-pointer">
+            <span class="text-slate-400 text-[11px]">KDA:</span>
+            <span class="font-extrabold text-slate-100 tabular-nums font-mono text-sm">
+              {{ avgKda.toFixed(2) }}
+            </span>
+          </div>
+        </template>
+        <div class="text-xs text-slate-200 p-1">
+          <div class="font-bold text-slate-100 mb-0.5">队伍场均 KDA 比值</div>
+          <div v-if="teamCombatStats" class="text-[11px] text-slate-300 font-mono">
+            场均击杀 {{ teamCombatStats.kills }} / 场均阵亡 {{ teamCombatStats.deaths }} / 场均助攻 {{ teamCombatStats.assists }}
+          </div>
+          <div v-else class="text-[11px] text-slate-400">
+            暂无场均战斗明细数据
+          </div>
         </div>
-      </template>
-      <div class="text-xs text-slate-200 p-1">
-        <div class="font-bold text-slate-100 mb-0.5">队伍场均 KDA 比值</div>
-        <div class="text-[11px] text-slate-300 font-mono">
-          总击杀 {{ totalKills }} / 阵亡 {{ totalDeaths }} / 助攻 {{ totalAssists }}
-        </div>
-      </div>
-    </NPopover>
+      </NPopover>
+    </template>
 
-    <!-- Divider (if premade groups exist) -->
-    <div v-if="premadeGroups.length > 0" class="h-3 w-px bg-slate-700/80"></div>
+    <!-- Divider (if both stats and premade groups exist) -->
+    <div v-if="hasStats && premadeGroups.length > 0" class="h-3 w-px bg-slate-700/80"></div>
 
     <!-- Premade Groups Badges -->
     <div v-if="premadeGroups.length > 0" class="flex items-center space-x-1.5">
@@ -106,32 +111,66 @@ const props = defineProps<{
   premadeGroups: PremadeGroup[]
 }>()
 
+const hasStats = computed(() => {
+  return props.players.some((p) => (p.recent_games_count ?? 0) > 0)
+})
+
 const avgWinRate = computed(() => {
-  if (props.players.length === 0) return 50
-  const sum = props.players.reduce((acc, p) => acc + (p.recent_win_rate || 50), 0)
-  return sum / props.players.length
+  const valid = props.players.filter((p) => (p.recent_games_count ?? 0) > 0)
+  if (valid.length === 0) return 0
+  const sum = valid.reduce((acc, p) => acc + (p.recent_win_rate ?? 0), 0)
+  return sum / valid.length
 })
 
 const avgKda = computed(() => {
-  if (props.players.length === 0) return 3.0
-  const sum = props.players.reduce((acc, p) => acc + (p.recent_kda_ratio || 3.0), 0)
-  return sum / props.players.length
+  const valid = props.players.filter((p) => (p.recent_games_count ?? 0) > 0)
+  if (valid.length === 0) return 0
+  const sum = valid.reduce((acc, p) => acc + (p.recent_kda_ratio ?? 0), 0)
+  return sum / valid.length
 })
 
 const totalGames = computed(() => {
-  return props.players.reduce((acc, p) => acc + (p.recent_games_count || 20), 0)
+  return props.players.reduce((acc, p) => acc + (p.recent_games_count ?? 0), 0)
 })
 
-const totalKills = computed(() => {
-  return Math.round(avgKda.value * 28)
-})
+const teamCombatStats = computed(() => {
+  let killsSum = 0
+  let deathsSum = 0
+  let assistsSum = 0
+  let validCount = 0
 
-const totalDeaths = computed(() => {
-  return Math.round(props.players.length * 15)
-})
+  for (const p of props.players) {
+    if (p.matches && p.matches.length > 0) {
+      let pK = 0, pD = 0, pA = 0
+      for (const m of p.matches) {
+        pK += m.kills || 0
+        pD += m.deaths || 0
+        pA += m.assists || 0
+      }
+      killsSum += pK / p.matches.length
+      deathsSum += pD / p.matches.length
+      assistsSum += pA / p.matches.length
+      validCount++
+    } else if (p.recent_kda && typeof p.recent_kda === 'string') {
+      const parts = p.recent_kda.split('/').map((s) => parseFloat(s.trim()))
+      if (parts.length === 3 && !parts.some(isNaN)) {
+        killsSum += parts[0]
+        deathsSum += parts[1]
+        assistsSum += parts[2]
+        validCount++
+      }
+    }
+  }
 
-const totalAssists = computed(() => {
-  return Math.round(avgKda.value * 32)
+  if (validCount > 0) {
+    return {
+      kills: killsSum.toFixed(1),
+      deaths: deathsSum.toFixed(1),
+      assists: assistsSum.toFixed(1)
+    }
+  }
+
+  return null
 })
 
 const getPremadeTheme = (groupId: string) => {

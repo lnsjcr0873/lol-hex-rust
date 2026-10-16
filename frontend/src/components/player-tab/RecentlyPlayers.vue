@@ -29,8 +29,8 @@
             <span class="truncate text-xs font-semibold text-slate-200 group-hover:text-cyan-400 transition">
               {{ p.targetGameName }}
             </span>
-            <span class="text-[10px] text-slate-400 font-mono shrink-0">
-              #{{ p.targetTagLine || 'CN' }}
+            <span v-if="p.targetTagLine" class="text-[10px] text-slate-400 font-mono shrink-0">
+              #{{ p.targetTagLine }}
             </span>
           </div>
         </div>
@@ -94,23 +94,23 @@ const players = computed<EncounteredPlayer[]>(() => {
     }>()
 
     for (const m of props.matches) {
-      const participants = m.participants || m.raw?.participants || []
+      const participants = m.participants_preview || m.participants || m.raw?.participants || []
       const isWin = !!(m.is_win ?? m.win)
-      const myTeam = m.team || 'blue'
+      const myTeam = m.team_id ? (m.team_id === 100 ? 'blue' : 'red') : (m.is_blue !== undefined ? (m.is_blue ? 'blue' : 'red') : (m.team || 'blue'))
 
       for (const p of participants) {
         const pPuuid = p.puuid || p.player?.puuid || ''
-        if (pPuuid && pPuuid === props.selfPuuid) continue
+        if (pPuuid && props.selfPuuid && pPuuid === props.selfPuuid) continue
 
-        const pTeam = p.team || (p.teamId === 100 ? 'blue' : 'red')
+        const pTeam = p.team || (p.team_id ? (p.team_id === 100 ? 'blue' : 'red') : (p.teamId === 100 ? 'blue' : 'red'))
         const isSameTeam = pTeam === myTeam
 
         if ((isAlly && isSameTeam) || (!isAlly && !isSameTeam)) {
           const key = pPuuid || p.summoner_name || p.gameName || 'unknown'
           const existing = playerStatsMap.get(key) || {
             puuid: pPuuid,
-            name: p.summoner_name || p.gameName || p.game_name || '玩家',
-            tag: p.tagLine || p.tag_line || 'CN',
+            name: p.game_name || p.summoner_name || p.gameName || '玩家',
+            tag: p.tag_line || p.tagLine || '',
             icon: p.profile_icon_id || p.profileIcon || 1,
             wins: 0,
             losses: 0,
@@ -151,17 +151,6 @@ const players = computed<EncounteredPlayer[]>(() => {
     }
   }
 
-  // Fallback demo data
-  if (props.side === 'ally') {
-    return [
-      { targetPuuid: 'p-1', targetGameName: '绝活哥小明', targetTagLine: '777', targetProfileIconId: 588, win: 3, lose: 1 },
-      { targetPuuid: 'p-2', targetGameName: '国服第一深海泰坦', targetTagLine: 'SUP', targetProfileIconId: 4661, win: 2, lose: 0 }
-    ]
-  } else {
-    return [
-      { targetPuuid: 'p-3', targetGameName: '无情中单杀手', targetTagLine: 'MID', targetProfileIconId: 548, win: 1, lose: 2 },
-      { targetPuuid: 'p-4', targetGameName: '狂风绝息斩', targetTagLine: 'CN', targetProfileIconId: 3515, win: 2, lose: 1 }
-    ]
-  }
+  return []
 })
 </script>

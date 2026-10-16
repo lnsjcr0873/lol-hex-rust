@@ -11,200 +11,618 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
     return player.analysis
   }
 
-  const count = player.recent_games_count || 20
-  const winRate = (player.recent_win_rate || 50) / 100
+  // 1. If matches array exists, aggregate from genuine matches
+  if (player.matches && player.matches.length > 0) {
+    const matches = player.matches
+    const count = matches.length
+    const wins = matches.filter((m) => m.win).length
+    const losses = count - wins
+    const winRate = count > 0 ? wins / count : 0
+
+    let winningStreak = 0
+    let losingStreak = 0
+    for (const m of matches) {
+      if (m.win) {
+        if (losingStreak > 0) break
+        winningStreak++
+      } else {
+        if (winningStreak > 0) break
+        losingStreak++
+      }
+    }
+
+    const totalKills = matches.reduce((acc, m) => acc + (m.kills || 0), 0)
+    const totalDeaths = matches.reduce((acc, m) => acc + (m.deaths || 0), 0)
+    const totalAssists = matches.reduce((acc, m) => acc + (m.assists || 0), 0)
+    const avgKda = totalDeaths === 0 ? (totalKills + totalAssists) : (totalKills + totalAssists) / totalDeaths
+    const avgCsPerMinute = count > 0 ? matches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / count : 0
+
+    // Spells
+    const isFlashD = player.spell1_id === 4
+    const isFlashF = player.spell2_id === 4
+    const flashOnD = isFlashD ? count : 0
+    const flashOnF = isFlashF ? count : 0
+
+    // Champions
+    const champions: Record<string, AggregatedChampionAnalysis> = {}
+    const champGroups = new Map<number, any[]>()
+    for (const m of matches) {
+      if (m.champion_id > 0) {
+        const list = champGroups.get(m.champion_id) || []
+        list.push(m)
+        champGroups.set(m.champion_id, list)
+      }
+    }
+
+    for (const [cid, cMatches] of champGroups.entries()) {
+      const cCount = cMatches.length
+      const cWins = cMatches.filter((m) => m.win).length
+      const cLosses = cCount - cWins
+      const cWinRate = cCount > 0 ? cWins / cCount : 0
+      const cKills = cMatches.reduce((acc, m) => acc + (m.kills || 0), 0) / cCount
+      const cDeaths = cMatches.reduce((acc, m) => acc + (m.deaths || 0), 0) / cCount
+      const cAssists = cMatches.reduce((acc, m) => acc + (m.assists || 0), 0) / cCount
+      const cAvgKda = cDeaths === 0 ? (cKills + cAssists) : (cKills + cAssists) / cDeaths
+      const cCsPerMin = cMatches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / cCount
+
+      let cWinStreak = 0
+      let cLoseStreak = 0
+      for (const m of cMatches) {
+        if (m.win) {
+          if (cLoseStreak > 0) break
+          cWinStreak++
+        } else {
+          if (cWinStreak > 0) break
+          cLoseStreak++
+        }
+      }
+
+      champions[String(cid)] = {
+        championId: cid,
+        summary: {
+          avgKda: cAvgKda,
+          winRate: cWinRate,
+          avgChampionDamagePercentageOfTeam: 0,
+          avgDamageTakenPercentageOfTeam: 0,
+          avgCsPercentageOfTeam: 0,
+          avgCsPerMinute: cCsPerMin,
+          avgGoldPercentageOfTeam: 0,
+          avgKillParticipation: 0,
+          avgChampionDamagePerMinute: 0,
+          kills: Math.round(cKills),
+          deaths: Math.round(cDeaths),
+          assists: Math.round(cAssists),
+          avgChampionDamageRatioToTeamMax: 0,
+          avgChampionDamageRatioToMax: 0,
+          avgDamageTakenRatioToTeamMax: 0,
+          avgDamageTakenRatioToMax: 0,
+          avgGoldRatioToTeamMax: 0,
+          avgGoldRatioToMax: 0,
+          avgCsRatioToTeamMax: 0,
+          avgCsRatioToMax: 0,
+          avgTowerDamageRatioToTeamMax: 0,
+          avgTowerDamageRatioToMax: 0,
+          avgTowerDamagePercentageOfTeam: 0,
+          avgVisionScore: 0,
+          avgVisionScorePercentageOfTeam: 0,
+          avgDamageGoldEfficiency: 0,
+          avgKillDamageEfficiency: 0,
+          kdaCv: 0,
+          avgSoloKills: null,
+          avgEnemyMissingPings: null,
+          avgPings: null
+        },
+        winLoss: {
+          all: {
+            count: cCount,
+            wins: cWins,
+            losses: cLosses,
+            winRate: cWinRate,
+            winningStreak: cWinStreak,
+            losingStreak: cLoseStreak,
+            activeSessionWins: cWins,
+            activeSessionLosses: cLosses
+          },
+          normal: {
+            count: cCount,
+            wins: cWins,
+            losses: cLosses,
+            winRate: cWinRate,
+            winningStreak: cWinStreak,
+            losingStreak: cLoseStreak,
+            activeSessionWins: cWins,
+            activeSessionLosses: cLosses
+          },
+          cherry: {
+            count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+            activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+            topHalfRate: 0, avgSubteamPlacement: 0
+          }
+        },
+        positions: {
+          TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0
+        },
+        akariScore: {
+          total: 0,
+          maxScore: 17.0,
+          kdaScore: Math.min(1.0, cAvgKda / 5.0),
+          winRateScore: Math.min(1.0, cWinRate),
+          dmgScore: 0,
+          dmgTakenScore: 0,
+          healingScore: 0,
+          csScore: 0,
+          goldScore: 0,
+          participationScore: 0,
+          visionScore: 0,
+          outstanding: null,
+          extraordinary: null
+        },
+        jungle: null
+      }
+    }
+
+    const kdaScore = Math.min(1.0, avgKda / 5.0)
+    const winRateScore = Math.min(1.0, winRate)
+    const dmgScore = Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
+    const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
+    const csScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+    const goldScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+    const participationScore = Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
+    const visionScore = Math.min(2.0, (player.radar?.vision ?? 0) / 45)
+    const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
+    const isExtraordinary = akariTotal >= 13.5 && count >= 5
+    const isOutstanding = akariTotal >= 11.5 && count >= 5
+
+    const akariScore: AkariScore = {
+      total: akariTotal,
+      maxScore: 17.0,
+      kdaScore,
+      winRateScore,
+      dmgScore,
+      dmgTakenScore,
+      healingScore: 0,
+      csScore,
+      goldScore,
+      participationScore,
+      visionScore,
+      outstanding: isOutstanding ? ({ total: akariTotal } as any) : null,
+      extraordinary: isExtraordinary ? ({ total: akariTotal } as any) : null
+    }
+
+    return {
+      count,
+      detailsCount: count,
+      summary: {
+        avgChampionDamageRatioToTeamMax: 0,
+        avgChampionDamageRatioToMax: 0,
+        avgChampionDamagePercentageOfTeam: 0,
+        avgChampionDamagePerMinute: 0,
+        avgDamageTakenRatioToTeamMax: 0,
+        avgDamageTakenRatioToMax: 0,
+        avgDamageTakenPercentageOfTeam: 0,
+        avgGoldRatioToTeamMax: 0,
+        avgGoldRatioToMax: 0,
+        avgGoldPercentageOfTeam: 0,
+        avgCsRatioToTeamMax: 0,
+        avgCsRatioToMax: 0,
+        avgCsPercentageOfTeam: 0,
+        avgCsPerMinute,
+        avgTowerDamageRatioToTeamMax: 0,
+        avgTowerDamageRatioToMax: 0,
+        avgTowerDamagePercentageOfTeam: 0,
+        avgVisionScore: player.radar?.vision ?? 0,
+        avgVisionScorePercentageOfTeam: 0,
+        avgDamageGoldEfficiency: 0,
+        avgKillParticipation: 0,
+        avgKillDamageEfficiency: 0,
+        kills: Math.round(totalKills / count),
+        deaths: Math.round(totalDeaths / count),
+        assists: Math.round(totalAssists / count),
+        avgKda,
+        kdaCv: 0,
+        winRate,
+        avgSoloKills: null,
+        avgEnemyMissingPings: null,
+        avgPings: null
+      },
+      winLoss: {
+        all: {
+          count,
+          activeSessionWins: wins,
+          activeSessionLosses: losses,
+          wins,
+          losses,
+          winRate,
+          winningStreak,
+          losingStreak
+        },
+        normal: {
+          count,
+          activeSessionWins: wins,
+          activeSessionLosses: losses,
+          wins,
+          losses,
+          winRate,
+          winningStreak,
+          losingStreak
+        },
+        cherry: {
+          count: 0, activeSessionWins: 0, activeSessionLosses: 0, wins: 0, losses: 0, winRate: 0,
+          winningStreak: 0, losingStreak: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+          topHalfRate: 0, avgSubteamPlacement: 0
+        }
+      },
+      spells: {
+        flashOnD,
+        flashOnF
+      },
+      teamSide: {
+        redSideCount: 0,
+        blueSideCount: 0
+      },
+      positions: {
+        TOP: player.assigned_position === 'TOP' ? count : 0,
+        JUNGLE: player.assigned_position === 'JUNGLE' ? count : 0,
+        MIDDLE: player.assigned_position === 'MIDDLE' || player.assigned_position === 'MID' ? count : 0,
+        BOTTOM: player.assigned_position === 'BOTTOM' || player.assigned_position === 'BOT' ? count : 0,
+        UTILITY: player.assigned_position === 'UTILITY' || player.assigned_position === 'SUP' ? count : 0
+      },
+      champions,
+      map: {},
+      jungle: player.jungleAnalysis ?? null,
+      akariScore,
+      details: {
+        avgEarlyDeathsWithEnemyJunglerInvolved: null
+      }
+    }
+  }
+
+  // 2. If no matches array, check recent_games_count
+  const count = player.recent_games_count ?? 0
+  if (count === 0) {
+    const emptyAkariScore: AkariScore = {
+      total: 0,
+      maxScore: 17.0,
+      kdaScore: 0,
+      winRateScore: 0,
+      dmgScore: 0,
+      dmgTakenScore: 0,
+      healingScore: 0,
+      csScore: 0,
+      goldScore: 0,
+      participationScore: 0,
+      visionScore: 0,
+      outstanding: null,
+      extraordinary: null
+    }
+
+    return {
+      count: 0,
+      detailsCount: 0,
+      summary: {
+        avgChampionDamageRatioToTeamMax: 0,
+        avgChampionDamageRatioToMax: 0,
+        avgChampionDamagePercentageOfTeam: 0,
+        avgChampionDamagePerMinute: 0,
+        avgDamageTakenRatioToTeamMax: 0,
+        avgDamageTakenRatioToMax: 0,
+        avgDamageTakenPercentageOfTeam: 0,
+        avgGoldRatioToTeamMax: 0,
+        avgGoldRatioToMax: 0,
+        avgGoldPercentageOfTeam: 0,
+        avgCsRatioToTeamMax: 0,
+        avgCsRatioToMax: 0,
+        avgCsPercentageOfTeam: 0,
+        avgCsPerMinute: 0,
+        avgTowerDamageRatioToTeamMax: 0,
+        avgTowerDamageRatioToMax: 0,
+        avgTowerDamagePercentageOfTeam: 0,
+        avgVisionScore: 0,
+        avgVisionScorePercentageOfTeam: 0,
+        avgDamageGoldEfficiency: 0,
+        avgKillParticipation: 0,
+        avgKillDamageEfficiency: 0,
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+        avgKda: 0,
+        kdaCv: 0,
+        winRate: 0,
+        avgSoloKills: null,
+        avgEnemyMissingPings: null,
+        avgPings: null
+      },
+      winLoss: {
+        all: {
+          count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+          activeSessionWins: 0, activeSessionLosses: 0
+        },
+        normal: {
+          count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+          activeSessionWins: 0, activeSessionLosses: 0
+        },
+        cherry: {
+          count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+          activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+          topHalfRate: 0, avgSubteamPlacement: 0
+        }
+      },
+      spells: {
+        flashOnD: 0,
+        flashOnF: 0
+      },
+      teamSide: {
+        redSideCount: 0,
+        blueSideCount: 0
+      },
+      positions: {
+        TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0
+      },
+      champions: {},
+      map: {},
+      jungle: player.jungleAnalysis ?? null,
+      akariScore: emptyAkariScore,
+      details: {
+        avgEarlyDeathsWithEnemyJunglerInvolved: null
+      }
+    }
+  }
+
+  // 3. Fallback when recent_games_count > 0 but matches array is missing:
+  // Derive faithfully from scalar fields without inventing fake game metrics
+  const winRate = (player.recent_win_rate ?? 0) / 100
   const wins = Math.round(count * winRate)
   const losses = count - wins
+  const kdaRatio = player.recent_kda_ratio ?? 0
 
-  // Count streaks from recent_matches
   let winningStreak = 0
   let losingStreak = 0
   if (player.recent_matches && player.recent_matches.length > 0) {
-    let currentStreak = 0
-    let streakType: 'win' | 'loss' | null = null
-    for (let i = player.recent_matches.length - 1; i >= 0; i--) {
-      const match = player.recent_matches[i]
-      if (streakType === null) {
-        streakType = match
-        currentStreak = 1
-      } else if (match === streakType) {
-        currentStreak++
+    for (const match of player.recent_matches) {
+      if (match === 'win') {
+        if (losingStreak > 0) break
+        winningStreak++
       } else {
-        break
+        if (winningStreak > 0) break
+        losingStreak++
       }
     }
-    if (streakType === 'win') winningStreak = currentStreak
-    if (streakType === 'loss') losingStreak = currentStreak
   }
 
-  // Spells flash check (D is spell1, F is spell2)
+  let kills = 0
+  let deaths = 0
+  let assists = 0
+  if (player.recent_kda && typeof player.recent_kda === 'string') {
+    const parts = player.recent_kda.split('/').map((s) => parseFloat(s.trim()))
+    if (parts.length === 3 && !parts.some(isNaN)) {
+      kills = parts[0]
+      deaths = parts[1]
+      assists = parts[2]
+    }
+  }
+
   const isFlashD = player.spell1_id === 4
   const isFlashF = player.spell2_id === 4
-  const hasSuspiciousFlashBadge = (player.badges || []).some(
-    (b) => b.id.includes('flash') || b.label.includes('闪现')
-  )
+  const flashOnD = isFlashD ? count : 0
+  const flashOnF = isFlashF ? count : 0
 
-  let flashOnD = isFlashD ? count : 0
-  let flashOnF = isFlashF ? count : 0
-  if (hasSuspiciousFlashBadge) {
-    flashOnD = Math.max(1, Math.floor(count * 0.35))
-    flashOnF = Math.max(1, count - flashOnD)
-  }
+  const kdaScore = Math.min(1.0, kdaRatio / 5.0)
+  const winRateScore = Math.min(1.0, winRate)
+  const dmgScore = Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
+  const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
+  const csScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+  const goldScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+  const participationScore = Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
+  const visionScore = Math.min(2.0, (player.radar?.vision ?? 0) / 45)
+  const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
+  const isExtraordinary = akariTotal >= 13.5 && count >= 5
+  const isOutstanding = akariTotal >= 11.5 && count >= 5
 
-  // Check easy gank badge
-  const hasEasyGankBadge = (player.badges || []).some(
-    (b) => b.id.includes('gank') || b.label.includes('容易被抓') || b.label.includes('提款机')
-  )
-  const hasHardGankBadge = (player.badges || []).some(
-    (b) => b.label.includes('难被抓') || b.label.includes('意识极佳')
-  )
-  let earlyDeaths = 1.1
-  if (hasEasyGankBadge) earlyDeaths = 2.4
-  if (hasHardGankBadge) earlyDeaths = 0.4
-
-  const kdaRatio = player.recent_kda_ratio || 3.0
-  const isExtraordinary = kdaRatio >= 4.8 && winRate >= 0.65
-  const isOutstanding = kdaRatio >= 3.8 && winRate >= 0.58
-
-  const akariTotal = Math.min(17.0, Math.max(4.0, (winRate * 4.5) + (kdaRatio * 1.4) + 1.8))
   const akariScore: AkariScore = {
     total: akariTotal,
     maxScore: 17.0,
-    kdaScore: Math.min(1.0, kdaRatio / 5.0),
-    winRateScore: Math.min(1.0, winRate),
-    dmgScore: Math.min(3.0, (player.radar?.output ?? 75) / 33),
-    dmgTakenScore: Math.min(2.0, (player.radar?.survival ?? 70) / 45),
-    healingScore: 1.2,
-    csScore: 1.6,
-    goldScore: Math.min(2.0, (player.radar?.gold ?? 75) / 45),
-    participationScore: Math.min(2.0, (player.radar?.join_rate ?? 70) / 45),
-    visionScore: Math.min(2.0, (player.radar?.vision ?? 60) / 45),
-    outstanding: isOutstanding ? { total: akariTotal } as any : null,
-    extraordinary: isExtraordinary ? { total: akariTotal } as any : null
+    kdaScore,
+    winRateScore,
+    dmgScore,
+    dmgTakenScore,
+    healingScore: 0,
+    csScore,
+    goldScore,
+    participationScore,
+    visionScore,
+    outstanding: isOutstanding ? ({ total: akariTotal } as any) : null,
+    extraordinary: isExtraordinary ? ({ total: akariTotal } as any) : null
   }
 
-  const champAnalysis: AggregatedChampionAnalysis = {
-    championId: player.champion_id,
-    summary: {
-      avgKda: player.champ_recent_win_rate ? (kdaRatio * 1.1) : kdaRatio,
-      winRate: (player.champ_recent_win_rate || 55) / 100,
-      avgChampionDamagePercentageOfTeam: 0.28,
-      avgDamageTakenPercentageOfTeam: 0.22,
-      avgCsPercentageOfTeam: 0.28,
-      avgCsPerMinute: 8.2,
-      avgGoldPercentageOfTeam: 0.26,
-      avgKillParticipation: 0.68,
-      avgChampionDamagePerMinute: 720,
-      kills: 8,
-      deaths: 3,
-      assists: 7,
-      avgChampionDamageRatioToTeamMax: 0.9,
-      avgChampionDamageRatioToMax: 0.85,
-      avgDamageTakenRatioToTeamMax: 0.85,
-      avgDamageTakenRatioToMax: 0.8,
-      avgGoldRatioToTeamMax: 0.9,
-      avgGoldRatioToMax: 0.85,
-      avgCsRatioToTeamMax: 0.9,
-      avgCsRatioToMax: 0.85,
-      avgTowerDamageRatioToTeamMax: 0.8,
-      avgTowerDamageRatioToMax: 0.75,
-      avgTowerDamagePercentageOfTeam: 0.25,
-      avgVisionScore: 45,
-      avgVisionScorePercentageOfTeam: 0.22,
-      avgDamageGoldEfficiency: 1.28,
-      avgKillDamageEfficiency: 1.2,
-      kdaCv: 0.2,
-      avgSoloKills: 1.2,
-      avgEnemyMissingPings: 1.0,
-      avgPings: 10
-    },
-    winLoss: {
-      all: {
-        count: player.champ_recent_games || 8,
-        wins: Math.round((player.champ_recent_games || 8) * ((player.champ_recent_win_rate || 65) / 100)),
-        losses: (player.champ_recent_games || 8) - Math.round((player.champ_recent_games || 8) * ((player.champ_recent_win_rate || 65) / 100)),
-        winRate: (player.champ_recent_win_rate || 65) / 100,
-        winningStreak: 2,
-        losingStreak: 0,
-        activeSessionWins: 2,
-        activeSessionLosses: 0
-      },
-      normal: {
-        count: player.champ_recent_games || 8,
-        wins: Math.round((player.champ_recent_games || 8) * ((player.champ_recent_win_rate || 65) / 100)),
-        losses: (player.champ_recent_games || 8) - Math.round((player.champ_recent_games || 8) * ((player.champ_recent_win_rate || 65) / 100)),
-        winRate: (player.champ_recent_win_rate || 65) / 100,
-        winningStreak: 2,
-        losingStreak: 0,
-        activeSessionWins: 2,
-        activeSessionLosses: 0
-      },
-      cherry: {
-        count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
-        activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
-        topHalfRate: 0, avgSubteamPlacement: 0
+  const champions: Record<string, AggregatedChampionAnalysis> = {}
+  if (player.top_champs && player.top_champs.length > 0) {
+    for (const tc of player.top_champs) {
+      if (tc.champion_id > 0) {
+        const tcWinRate = (tc.win_rate || (tc.win_rate_pct / 100))
+        const tcWins = Math.round(tcWinRate * tc.games)
+        champions[String(tc.champion_id)] = {
+          championId: tc.champion_id,
+          summary: {
+            avgKda: tc.kda,
+            winRate: tcWinRate,
+            avgChampionDamagePercentageOfTeam: 0,
+            avgDamageTakenPercentageOfTeam: 0,
+            avgCsPercentageOfTeam: 0,
+            avgCsPerMinute: 0,
+            avgGoldPercentageOfTeam: 0,
+            avgKillParticipation: 0,
+            avgChampionDamagePerMinute: 0,
+            kills: 0,
+            deaths: 0,
+            assists: 0,
+            avgChampionDamageRatioToTeamMax: 0,
+            avgChampionDamageRatioToMax: 0,
+            avgDamageTakenRatioToTeamMax: 0,
+            avgDamageTakenRatioToMax: 0,
+            avgGoldRatioToTeamMax: 0,
+            avgGoldRatioToMax: 0,
+            avgCsRatioToTeamMax: 0,
+            avgCsRatioToMax: 0,
+            avgTowerDamageRatioToTeamMax: 0,
+            avgTowerDamageRatioToMax: 0,
+            avgTowerDamagePercentageOfTeam: 0,
+            avgVisionScore: 0,
+            avgVisionScorePercentageOfTeam: 0,
+            avgDamageGoldEfficiency: 0,
+            avgKillDamageEfficiency: 0,
+            kdaCv: 0,
+            avgSoloKills: null,
+            avgEnemyMissingPings: null,
+            avgPings: null
+          },
+          winLoss: {
+            all: {
+              count: tc.games,
+              wins: tcWins,
+              losses: tc.games - tcWins,
+              winRate: tcWinRate,
+              winningStreak: 0,
+              losingStreak: 0,
+              activeSessionWins: tcWins,
+              activeSessionLosses: tc.games - tcWins
+            },
+            normal: {
+              count: tc.games,
+              wins: tcWins,
+              losses: tc.games - tcWins,
+              winRate: tcWinRate,
+              winningStreak: 0,
+              losingStreak: 0,
+              activeSessionWins: tcWins,
+              activeSessionLosses: tc.games - tcWins
+            },
+            cherry: {
+              count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+              activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+              topHalfRate: 0, avgSubteamPlacement: 0
+            }
+          },
+          positions: { TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0 },
+          akariScore: {
+            total: 0, maxScore: 17.0, kdaScore: Math.min(1.0, tc.kda / 5.0), winRateScore: Math.min(1.0, tcWinRate),
+            dmgScore: 0, dmgTakenScore: 0, healingScore: 0, csScore: 0, goldScore: 0, participationScore: 0, visionScore: 0,
+            outstanding: null, extraordinary: null
+          },
+          jungle: null
+        }
       }
-    },
-    positions: {
-      TOP: player.assigned_position === 'TOP' ? (player.champ_recent_games || 8) : 0,
-      JUNGLE: player.assigned_position === 'JUNGLE' ? (player.champ_recent_games || 8) : 0,
-      MIDDLE: player.assigned_position === 'MIDDLE' || player.assigned_position === 'MID' ? (player.champ_recent_games || 8) : 0,
-      BOTTOM: player.assigned_position === 'BOTTOM' || player.assigned_position === 'BOT' ? (player.champ_recent_games || 8) : 0,
-      UTILITY: player.assigned_position === 'UTILITY' || player.assigned_position === 'SUP' ? (player.champ_recent_games || 8) : 0
-    },
-    akariScore: {
-      total: akariTotal + 0.5,
-      maxScore: 17.0,
-      kdaScore: 0.9,
-      winRateScore: 0.85,
-      dmgScore: 2.4,
-      dmgTakenScore: 1.6,
-      healingScore: 1.0,
-      csScore: 1.8,
-      goldScore: 1.7,
-      participationScore: 1.5,
-      visionScore: 1.4,
-      outstanding: isOutstanding ? { total: akariTotal } as any : null,
-      extraordinary: isExtraordinary ? { total: akariTotal } as any : null
-    },
-    jungle: null
+    }
+  } else if (player.champion_id > 0 && player.champ_recent_games && player.champ_recent_games > 0) {
+    const cCount = player.champ_recent_games
+    const cWinRate = (player.champ_recent_win_rate ?? 0) / 100
+    const cWins = Math.round(cCount * cWinRate)
+    champions[String(player.champion_id)] = {
+      championId: player.champion_id,
+      summary: {
+        avgKda: kdaRatio,
+        winRate: cWinRate,
+        avgChampionDamagePercentageOfTeam: 0,
+        avgDamageTakenPercentageOfTeam: 0,
+        avgCsPercentageOfTeam: 0,
+        avgCsPerMinute: 0,
+        avgGoldPercentageOfTeam: 0,
+        avgKillParticipation: 0,
+        avgChampionDamagePerMinute: 0,
+        kills: Math.round(kills),
+        deaths: Math.round(deaths),
+        assists: Math.round(assists),
+        avgChampionDamageRatioToTeamMax: 0,
+        avgChampionDamageRatioToMax: 0,
+        avgDamageTakenRatioToTeamMax: 0,
+        avgDamageTakenRatioToMax: 0,
+        avgGoldRatioToTeamMax: 0,
+        avgGoldRatioToMax: 0,
+        avgCsRatioToTeamMax: 0,
+        avgCsRatioToMax: 0,
+        avgTowerDamageRatioToTeamMax: 0,
+        avgTowerDamageRatioToMax: 0,
+        avgTowerDamagePercentageOfTeam: 0,
+        avgVisionScore: 0,
+        avgVisionScorePercentageOfTeam: 0,
+        avgDamageGoldEfficiency: 0,
+        avgKillDamageEfficiency: 0,
+        kdaCv: 0,
+        avgSoloKills: null,
+        avgEnemyMissingPings: null,
+        avgPings: null
+      },
+      winLoss: {
+        all: {
+          count: cCount,
+          wins: cWins,
+          losses: cCount - cWins,
+          winRate: cWinRate,
+          winningStreak: 0,
+          losingStreak: 0,
+          activeSessionWins: cWins,
+          activeSessionLosses: cCount - cWins
+        },
+        normal: {
+          count: cCount,
+          wins: cWins,
+          losses: cCount - cWins,
+          winRate: cWinRate,
+          winningStreak: 0,
+          losingStreak: 0,
+          activeSessionWins: cWins,
+          activeSessionLosses: cCount - cWins
+        },
+        cherry: {
+          count: 0, wins: 0, losses: 0, winRate: 0, winningStreak: 0, losingStreak: 0,
+          activeSessionWins: 0, activeSessionLosses: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+          topHalfRate: 0, avgSubteamPlacement: 0
+        }
+      },
+      positions: { TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0 },
+      akariScore: {
+        total: 0, maxScore: 17.0, kdaScore: Math.min(1.0, kdaRatio / 5.0), winRateScore: Math.min(1.0, cWinRate),
+        dmgScore: 0, dmgTakenScore: 0, healingScore: 0, csScore: 0, goldScore: 0, participationScore: 0, visionScore: 0,
+        outstanding: null, extraordinary: null
+      },
+      jungle: null
+    }
   }
 
   return {
     count,
     detailsCount: count,
     summary: {
-      avgChampionDamageRatioToTeamMax: 0.9,
-      avgChampionDamageRatioToMax: 0.85,
-      avgChampionDamagePercentageOfTeam: ((player.radar?.output ?? 75) / 100) * 0.35,
-      avgChampionDamagePerMinute: 680,
-      avgDamageTakenRatioToTeamMax: 0.85,
-      avgDamageTakenRatioToMax: 0.8,
-      avgDamageTakenPercentageOfTeam: 0.24,
-      avgGoldRatioToTeamMax: 0.9,
-      avgGoldRatioToMax: 0.85,
-      avgGoldPercentageOfTeam: ((player.radar?.gold ?? 75) / 100) * 0.28,
-      avgCsRatioToTeamMax: 0.9,
-      avgCsRatioToMax: 0.85,
-      avgCsPercentageOfTeam: 0.26,
-      avgCsPerMinute: 7.8,
-      avgTowerDamageRatioToTeamMax: 0.8,
-      avgTowerDamageRatioToMax: 0.75,
-      avgTowerDamagePercentageOfTeam: 0.25,
-      avgVisionScore: player.radar?.vision ?? 45,
-      avgVisionScorePercentageOfTeam: 0.22,
-      avgDamageGoldEfficiency: 1.28,
-      avgKillParticipation: ((player.radar?.join_rate ?? 70) / 100) * 0.8,
-      avgKillDamageEfficiency: kdaRatio > 4.2 ? 1.42 : (kdaRatio < 2.0 ? 0.6 : 1.05),
-      kills: Math.round(kdaRatio * 2.5),
-      deaths: Math.max(1, Math.round(count * 0.15)),
-      assists: Math.round(kdaRatio * 2.8),
+      avgChampionDamageRatioToTeamMax: 0,
+      avgChampionDamageRatioToMax: 0,
+      avgChampionDamagePercentageOfTeam: 0,
+      avgChampionDamagePerMinute: 0,
+      avgDamageTakenRatioToTeamMax: 0,
+      avgDamageTakenRatioToMax: 0,
+      avgDamageTakenPercentageOfTeam: 0,
+      avgGoldRatioToTeamMax: 0,
+      avgGoldRatioToMax: 0,
+      avgGoldPercentageOfTeam: 0,
+      avgCsRatioToTeamMax: 0,
+      avgCsRatioToMax: 0,
+      avgCsPercentageOfTeam: 0,
+      avgCsPerMinute: 0,
+      avgTowerDamageRatioToTeamMax: 0,
+      avgTowerDamageRatioToMax: 0,
+      avgTowerDamagePercentageOfTeam: 0,
+      avgVisionScore: player.radar?.vision ?? 0,
+      avgVisionScorePercentageOfTeam: 0,
+      avgDamageGoldEfficiency: 0,
+      avgKillParticipation: 0,
+      avgKillDamageEfficiency: 0,
+      kills: Math.round(kills),
+      deaths: Math.round(deaths),
+      assists: Math.round(assists),
       avgKda: kdaRatio,
-      kdaCv: 0.25,
+      kdaCv: 0,
       winRate,
-      avgSoloKills: kdaRatio > 4.0 ? 1.4 : 0.6,
-      avgEnemyMissingPings: winRate < 0.45 ? 2.8 : 0.8,
-      avgPings: 12
+      avgSoloKills: null,
+      avgEnemyMissingPings: null,
+      avgPings: null
     },
     winLoss: {
       all: {
@@ -228,19 +646,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         losingStreak
       },
       cherry: {
-        count: 0,
-        activeSessionWins: 0,
-        activeSessionLosses: 0,
-        wins: 0,
-        losses: 0,
-        winRate: 0,
-        winningStreak: 0,
-        losingStreak: 0,
-        top1s: 0,
-        topHalfFinishes: 0,
-        top1Rate: 0,
-        topHalfRate: 0,
-        avgSubteamPlacement: 0
+        count: 0, activeSessionWins: 0, activeSessionLosses: 0, wins: 0, losses: 0, winRate: 0,
+        winningStreak: 0, losingStreak: 0, top1s: 0, topHalfFinishes: 0, top1Rate: 0,
+        topHalfRate: 0, avgSubteamPlacement: 0
       }
     },
     spells: {
@@ -248,8 +656,8 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       flashOnF
     },
     teamSide: {
-      redSideCount: Math.floor(count / 2),
-      blueSideCount: Math.ceil(count / 2)
+      redSideCount: 0,
+      blueSideCount: 0
     },
     positions: {
       TOP: player.assigned_position === 'TOP' ? count : 0,
@@ -258,108 +666,19 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       BOTTOM: player.assigned_position === 'BOTTOM' || player.assigned_position === 'BOT' ? count : 0,
       UTILITY: player.assigned_position === 'UTILITY' || player.assigned_position === 'SUP' ? count : 0
     },
-    champions: {
-      [player.champion_id]: champAnalysis
-    },
+    champions,
     map: {},
-    jungle: (player.assigned_position?.toUpperCase() === 'JUNGLE' || player.assigned_position === '2')
-      ? createSynthesizedJungleAnalysis(player)
-      : null,
+    jungle: player.jungleAnalysis ?? null,
     akariScore,
     details: {
-      avgEarlyDeathsWithEnemyJunglerInvolved: earlyDeaths
+      avgEarlyDeathsWithEnemyJunglerInvolved: null
     }
   }
 }
 
-export function createSynthesizedJungleAnalysis(player: EnhancedPlayerCard): AggregatedJungleAnalysis {
+export function createSynthesizedJungleAnalysis(player: EnhancedPlayerCard): AggregatedJungleAnalysis | null {
   if (player.jungleAnalysis) {
     return player.jungleAnalysis
   }
-
-  const isBlue = player.team === 'blue'
-  const count = player.champ_recent_games || 12
-
-  const level3Kills = [
-    { x: 2800, y: 11200, lane: 'top' as const },
-    { x: 12200, y: 3200, lane: 'bot' as const }
-  ]
-  const level4Kills = [
-    { x: 7400, y: 7200, lane: 'mid' as const },
-    { x: 13000, y: 2800, lane: 'bot' as const }
-  ]
-
-  return {
-    gamesAnalyzed: count,
-    avgTopZonePercentage: 0.28,
-    avgMidZonePercentage: 0.32,
-    avgBotZonePercentage: 0.40,
-    topZoneWeightSum: 24,
-    midZoneWeightSum: 30,
-    botZoneWeightSum: 42,
-    totalZoneWeightSum: 96,
-    totalTopGanks: 5,
-    totalMidGanks: 6,
-    totalBotGanks: 8,
-    avgTopGanks: 0.4,
-    avgMidGanks: 0.5,
-    avgBotGanks: 0.7,
-    firstClearCamp: {
-      blueGames: isBlue ? count : 0,
-      redGames: isBlue ? 0 : count,
-      blue: { red: 5, blue: 6, wolves: 1, raptors: 0 },
-      red: { red: 6, blue: 5, wolves: 0, raptors: 1 },
-      blueInvade: { red: 1, blue: 0, wolves: 0, raptors: 0 },
-      redInvade: { red: 0, blue: 1, wolves: 0, raptors: 0 }
-    },
-    earlyGank: {
-      level3GankRate: 0.45,
-      level3GankCount: 5,
-      level3KillPositions: level3Kills,
-      level4GankRate: 0.55,
-      level4GankCount: 6,
-      level4KillPositions: level4Kills,
-      byTeam: {
-        blueGames: isBlue ? count : 0,
-        redGames: isBlue ? 0 : count,
-        blueLevel3GankRate: 0.45,
-        blueLevel3GankCount: 4,
-        blueLevel3KillPositions: level3Kills,
-        blueLevel4GankRate: 0.55,
-        blueLevel4GankCount: 7,
-        blueLevel4KillPositions: level4Kills,
-        redLevel3GankRate: 0.42,
-        redLevel3GankCount: 5,
-        redLevel3KillPositions: level3Kills,
-        redLevel4GankRate: 0.52,
-        redLevel4GankCount: 6,
-        redLevel4KillPositions: level4Kills
-      }
-    },
-    minutePositions: [
-      { x: 3830, y: 7880, lane: 'top', minute: 1 },
-      { x: 5200, y: 6400, lane: 'top', minute: 3 },
-      { x: 7000, y: 7000, lane: 'mid', minute: 6 },
-      { x: 8200, y: 5400, lane: 'bot', minute: 8 },
-      { x: 11200, y: 4000, lane: 'bot', minute: 11 },
-      { x: 12800, y: 3100, lane: 'bot', minute: 14 }
-    ],
-    gankPositions: [
-      { x: 12600, y: 3000, lane: 'bot' },
-      { x: 7500, y: 7300, lane: 'mid' },
-      { x: 2600, y: 11800, lane: 'top' }
-    ],
-    objectives: {
-      firstDragonRate: 0.65,
-      soloDragonRate: 0.42,
-      avgDragons: 2.4,
-      avgFirstDragonTime: 420,
-      avgVoidgrubs: 3.2,
-      avgFirstVoidgrubTime: 380,
-      avgHeralds: 0.8,
-      avgFirstHeraldTime: 860,
-      avgBarons: 1.1,
-      avgFirstBaronTime: 1380
-    }
-  }
+  return null
 }

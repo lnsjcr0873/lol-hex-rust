@@ -342,7 +342,7 @@ function participantNumberBetween(
           : relatedValues.length
             ? Math.max(...relatedValues)
             : 0
-      const percent = baseline === 0 ? 0 : (value / baseline) * 100
+      const percent = (Number.isFinite(baseline) && baseline > 0 && Number.isFinite(value)) ? (value / baseline) * 100 : 0
       return percent >= min && percent <= max
     }
   }

@@ -280,7 +280,7 @@ async fn scenario_3_full_history_review_and_10p_scoreboard() {
     let history = canned_match_history(target_puuid, 20, 0.70, 157, &["tm-1", "tm-2"]);
     server.state.set_match_history(target_puuid, history).await;
 
-    let hist_res = client.get_player_match_history(target_puuid, 20).await.expect("history");
+    let hist_res = client.get_player_match_history(target_puuid, 0, 19).await.expect("history");
     let games = hist_res["games"]["games"].as_array().unwrap();
     assert_eq!(games.len(), 20);
 
@@ -414,7 +414,7 @@ async fn scenario_5_high_frequency_concurrent_requests_semaphore() {
 
         handles.push(tokio::spawn(async move {
             let _permit = sem_clone.acquire().await.unwrap();
-            let res = client_clone.get_player_match_history(&puuid, 20).await;
+            let res = client_clone.get_player_match_history(&puuid, 0, 19).await;
             res
         }));
     }

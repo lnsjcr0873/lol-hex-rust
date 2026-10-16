@@ -19,6 +19,10 @@ export function mapToImagePosition(
   mapId: number = 11,
   options?: { invertY?: boolean; clamp?: boolean }
 ) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return { left: 0, top: 0 }
+  }
+
   const { invertY = true, clamp = true } = options || {}
   const domain = getMapDomain(mapId)
 
@@ -34,6 +38,9 @@ export function mapToImagePosition(
 
   let left = normalizedX * imageWidth
   let top = normalizedY * imageHeight
+
+  if (!Number.isFinite(left)) left = 0
+  if (!Number.isFinite(top)) top = 0
 
   if (clamp) {
     if (left < 0) left = 0

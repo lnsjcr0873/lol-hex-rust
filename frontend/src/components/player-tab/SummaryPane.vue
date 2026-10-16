@@ -2,7 +2,7 @@
   <div class="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-300 select-none space-y-2.5 shadow-sm">
     <div class="flex items-center justify-between pb-2 border-b border-slate-800">
       <span class="font-extrabold text-sm text-slate-100">近期战绩综合概览</span>
-      <span class="text-[10px] text-slate-400 font-mono">近 20 场排位样本</span>
+      <span class="text-[10px] text-slate-400 font-mono">{{ subtitle }}</span>
     </div>
 
     <!-- Metrics rows -->
@@ -20,10 +20,37 @@
       <!-- Win Rate & Streak -->
       <div class="flex items-center justify-between">
         <span class="text-slate-400">总胜率 (胜/负)</span>
-        <span class="font-mono text-slate-200">
-          <strong :class="winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'">{{ winRate }}%</strong>
-          <span class="text-slate-400 text-[11px] ml-1">({{ wins }}胜 {{ losses }}负)</span>
-        </span>
+        <div class="flex items-center space-x-1.5">
+          <span class="font-mono text-slate-200">
+            <strong :class="winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'">{{ winRate }}%</strong>
+            <span class="text-slate-400 text-[11px] ml-1">({{ wins }}胜 {{ losses }}负)</span>
+          </span>
+          <span
+            v-if="currentStreak"
+            class="px-1.5 py-0.5 rounded text-[10px] font-bold font-mono border shadow-sm leading-none"
+            :class="currentStreak.isWinning
+              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+              : 'border-rose-500/40 bg-rose-500/15 text-rose-300'"
+          >
+            {{ currentStreak.count }}{{ currentStreak.isWinning ? '连胜' : '连败' }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Blue / Red Side Distribution -->
+      <div v-if="blueSideCount > 0 || redSideCount > 0" class="flex items-center justify-between">
+        <span class="text-slate-400">红蓝方阵营</span>
+        <div class="flex items-center space-x-2 font-mono text-xs">
+          <div class="flex items-center space-x-1 text-sky-400">
+            <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+            <span>蓝方 {{ blueSideCount }}</span>
+          </div>
+          <span class="text-slate-500">/</span>
+          <div class="flex items-center space-x-1 text-rose-400">
+            <span class="w-2 h-2 rounded-full bg-rose-400"></span>
+            <span>红方 {{ redSideCount }}</span>
+          </div>
+        </div>
       </div>
 
       <!-- KDA -->
@@ -38,7 +65,7 @@
       <div class="flex items-center justify-between">
         <span class="text-slate-400">平均参团率 (KP)</span>
         <span class="font-mono text-[#0ac8b9] font-bold">
-          {{ avgKp }}%
+          {{ avgKp }}{{ avgKp !== '—' ? '%' : '' }}
         </span>
       </div>
 
@@ -46,7 +73,7 @@
       <div class="flex items-center justify-between">
         <span class="text-slate-400">队内输出占比</span>
         <span class="font-mono text-slate-200">
-          {{ avgDmgShare }}%
+          {{ avgDmgShare }}{{ avgDmgShare !== '—' ? '%' : '' }}
         </span>
       </div>
 
@@ -54,7 +81,7 @@
       <div class="flex items-center justify-between">
         <span class="text-slate-400">队内承伤占比</span>
         <span class="font-mono text-slate-200">
-          {{ avgTankShare }}%
+          {{ avgTankShare }}{{ avgTankShare !== '—' ? '%' : '' }}
         </span>
       </div>
 
@@ -62,7 +89,7 @@
       <div class="flex items-center justify-between">
         <span class="text-slate-400">分均补刀</span>
         <span class="font-mono text-slate-200">
-          {{ csPerMinute }} 刀/分
+          {{ csPerMinute }}{{ csPerMinute !== '—' ? ' 刀/分' : '' }}
         </span>
       </div>
     </div>
@@ -90,84 +117,190 @@
   </div>
 </template>
 
+<script lang="ts">
+export const QUEUE_NAME_MAP: Record<string, string> = {
+  all: '全部',
+  ranked_solo: '单双排',
+  ranked_flex: '灵活排位',
+  aram: '极地大乱斗',
+  normal: '匹配模式',
+  '420': '单双排',
+  '440': '灵活排位',
+  '450': '极地大乱斗',
+  '430': '匹配模式'
+}
+</script>
+
 <script setup lang="ts">
 import { computed } from 'vue'
 import AkariScorePopover from './widgets/AkariScorePopover.vue'
 import ChampionIcon from '../match-card/widgets/ChampionIcon.vue'
 import { getChampionName } from '../match-card/utils/resources'
 
-const props = defineProps<{
-  analysis?: any
-  profileSummary?: any
-}>()
-
-const akariScoreText = computed(() => {
-  if (props.analysis?.akariScore?.total !== undefined) {
-    return props.analysis.akariScore.total.toFixed(2)
+const props = withDefaults(
+  defineProps<{
+    analysis?: any
+    profileSummary?: any
+    queue?: string
+    sampleCount?: number
+    currentPage?: number
+  }>(),
+  {
+    queue: 'all',
+    currentPage: 1
   }
-  return '14.50'
+)
+
+const computedSampleCount = computed<number>(() => {
+  return totalGames.value
 })
 
-const winRate = computed(() => {
+const subtitle = computed<string>(() => {
+  if (computedSampleCount.value === 0) {
+    return '暂无对局样本'
+  }
+  const q = props.queue ? String(props.queue).toLowerCase() : 'all'
+  const queueLabel = QUEUE_NAME_MAP[q] ?? QUEUE_NAME_MAP[props.queue || ''] ?? (props.queue ? `${props.queue}` : '对局')
+  return `近 ${computedSampleCount.value} 场${queueLabel}样本`
+})
+
+const totalGames = computed<number>(() => {
+  if (props.analysis?.count !== undefined && props.analysis.count > 0) {
+    return props.analysis.count
+  }
+  if (props.analysis?.winLoss?.all?.count !== undefined && props.analysis.winLoss.all.count > 0) {
+    return props.analysis.winLoss.all.count
+  }
+  if (props.sampleCount !== undefined && props.sampleCount > 0) {
+    return props.sampleCount
+  }
+  return 0
+})
+
+const winRate = computed<number>(() => {
   if (props.analysis?.winLoss?.all?.winRate !== undefined) {
     return Math.round(props.analysis.winLoss.all.winRate * 100)
   }
-  return props.profileSummary?.win_rate ?? 65
+  if (props.analysis?.winLoss?.all?.wins !== undefined && totalGames.value > 0) {
+    return Math.round((props.analysis.winLoss.all.wins / totalGames.value) * 100)
+  }
+  return props.profileSummary?.win_rate ?? 0
 })
 
-const wins = computed(() => {
-  return props.analysis?.winLoss?.all?.wins ?? Math.round((winRate.value / 100) * 20)
+const wins = computed<number>(() => {
+  if (props.analysis?.winLoss?.all?.wins !== undefined) {
+    return props.analysis.winLoss.all.wins
+  }
+  if (totalGames.value > 0) {
+    return Math.round((winRate.value / 100) * totalGames.value)
+  }
+  return 0
 })
 
-const losses = computed(() => {
-  return props.analysis?.winLoss?.all?.losses ?? 20 - wins.value
+const losses = computed<number>(() => {
+  if (props.analysis?.winLoss?.all?.losses !== undefined) {
+    return props.analysis.winLoss.all.losses
+  }
+  if (totalGames.value > 0) {
+    return Math.max(0, totalGames.value - wins.value)
+  }
+  return 0
+})
+
+const currentStreak = computed(() => {
+  if (props.currentPage !== undefined && props.currentPage > 1) {
+    return null
+  }
+  if (!props.analysis?.winLoss?.all) return null
+  const winStreak = props.analysis.winLoss.all.winningStreak ?? 0
+  const loseStreak = props.analysis.winLoss.all.losingStreak ?? 0
+
+  if (winStreak >= 2) {
+    return { isWinning: true, count: winStreak }
+  }
+  if (loseStreak >= 2) {
+    return { isWinning: false, count: loseStreak }
+  }
+  return null
+})
+
+const blueSideCount = computed<number>(() => {
+  return props.analysis?.teamSide?.blueSideCount ?? 0
+})
+
+const redSideCount = computed<number>(() => {
+  return props.analysis?.teamSide?.redSideCount ?? 0
+})
+
+const akariScoreText = computed(() => {
+  const val = props.analysis?.akariScore?.total
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return val.toFixed(2)
+  }
+  return '—'
 })
 
 const avgKda = computed(() => {
-  if (props.analysis?.summary?.avgKda !== undefined) {
-    return props.analysis.summary.avgKda.toFixed(2)
+  const val = props.analysis?.summary?.avgKda
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return val.toFixed(2)
   }
-  return props.profileSummary?.avg_kda ?? '3.8'
+  if (props.profileSummary?.avg_kda !== undefined) {
+    return String(props.profileSummary.avg_kda)
+  }
+  return '—'
 })
 
 const avgKp = computed(() => {
-  if (props.analysis?.summary?.avgKillParticipation !== undefined) {
-    return (props.analysis.summary.avgKillParticipation * 100).toFixed(0)
+  const val = props.analysis?.summary?.avgKillParticipation
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return (val * 100).toFixed(0)
   }
-  return '62'
+  return props.profileSummary?.avg_kp ? String(props.profileSummary.avg_kp) : '—'
 })
 
 const avgDmgShare = computed(() => {
-  if (props.analysis?.summary?.avgChampionDamagePercentageOfTeam !== undefined) {
-    return (props.analysis.summary.avgChampionDamagePercentageOfTeam * 100).toFixed(1)
+  const val = props.analysis?.summary?.avgChampionDamagePercentageOfTeam
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return (val * 100).toFixed(1)
   }
-  return '28.5'
+  return props.profileSummary?.avg_damage_share ? String(props.profileSummary.avg_damage_share) : '—'
 })
 
 const avgTankShare = computed(() => {
-  if (props.analysis?.summary?.avgDamageTakenPercentageOfTeam !== undefined) {
-    return (props.analysis.summary.avgDamageTakenPercentageOfTeam * 100).toFixed(1)
+  const val = props.analysis?.summary?.avgDamageTakenPercentageOfTeam
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return (val * 100).toFixed(1)
   }
-  return '24.2'
+  return props.profileSummary?.avg_damage_taken_share ? String(props.profileSummary.avg_damage_taken_share) : '—'
 })
 
 const csPerMinute = computed(() => {
-  if (props.analysis?.summary?.avgCsPerMinute !== undefined) {
-    return props.analysis.summary.avgCsPerMinute.toFixed(1)
+  const val = props.analysis?.summary?.avgCsPerMinute
+  if (val !== undefined && val !== null && Number.isFinite(val)) {
+    return val.toFixed(1)
   }
-  return '7.2'
+  return props.profileSummary?.avg_cs_per_min ? String(props.profileSummary.avg_cs_per_min) : '—'
 })
 
 const topChampions = computed(() => {
-  if (props.analysis?.champions && Array.isArray(props.analysis.champions)) {
-    return props.analysis.champions.map((c: any) => ({
-      championId: c.championId,
-      games: c.winLoss?.all?.count || 1,
-      winRate: Math.round((c.winLoss?.all?.winRate || 0) * 100),
-      kda: (c.summary?.avgKda || 3.0).toFixed(1)
-    }))
+  if (props.analysis?.champions) {
+    const list = (Array.isArray(props.analysis.champions)
+      ? props.analysis.champions
+      : Object.values(props.analysis.champions)) as any[]
+    if (list.length > 0) {
+      return list
+        .filter((c) => (c.winLoss?.all?.count ?? 0) >= 1)
+        .sort((a, b) => (b.winLoss?.all?.count || 0) - (a.winLoss?.all?.count || 0))
+        .map((c: any) => ({
+          championId: c.championId,
+          games: c.winLoss?.all?.count ?? 0,
+          winRate: Math.round((c.winLoss?.all?.winRate || 0) * 100),
+          kda: Number.isFinite(c.summary?.avgKda) ? (c.summary.avgKda).toFixed(1) : '0.0'
+        }))
+    }
   }
-  if (props.profileSummary?.top_champions) {
+  if (props.profileSummary?.top_champions?.length) {
     return props.profileSummary.top_champions.map((c: any) => ({
       championId: c.champion_id,
       games: c.games,
@@ -175,10 +308,6 @@ const topChampions = computed(() => {
       kda: c.kda
     }))
   }
-  return [
-    { championId: 266, games: 8, winRate: 75, kda: '4.2' },
-    { championId: 84, games: 6, winRate: 67, kda: '3.6' },
-    { championId: 39, games: 4, winRate: 50, kda: '2.9' }
-  ]
+  return []
 })
 </script>

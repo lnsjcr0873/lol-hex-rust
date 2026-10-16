@@ -3,7 +3,7 @@
     <div v-if="title" class="text-xs font-bold text-center mb-2.5 text-slate-200">
       {{ title }} (10人横向对比)
     </div>
-    <div class="w-full" :style="{ height: `${Math.max(chartData.length * 24, 180)}px` }">
+    <div class="w-full" :style="{ height: `${Math.max(safeChartData.length * 24, 180)}px` }">
       <Bar :data="barData" :options="chartOptions" />
     </div>
   </div>
@@ -41,6 +41,8 @@ const props = withDefaults(
   }
 )
 
+const safeChartData = computed(() => (Array.isArray(props.chartData) ? props.chartData : []))
+
 const { participants } = useMatchCard()
 
 const participantMap = computed(() => {
@@ -52,13 +54,14 @@ const participantMap = computed(() => {
 })
 
 const barData = computed(() => {
-  const labels = props.chartData.map((d) => {
+  const dataList = safeChartData.value
+  const labels = dataList.map((d) => {
     const p = participantMap.value[d.participantId]
     return p ? getChampionName(p.championId) : `P${d.participantId}`
   })
 
-  const values = props.chartData.map((d) => d.value)
-  const colors = props.chartData.map((d) => {
+  const values = dataList.map((d) => (Number.isFinite(d.value) ? d.value : 0))
+  const colors = dataList.map((d) => {
     const p = participantMap.value[d.participantId]
     return p ? getTeamColor(p.teamIdentifier) : '#3b82f6'
   })
@@ -86,7 +89,7 @@ const chartOptions = computed(() => ({
     tooltip: {
       callbacks: {
         label: (ctx: any) => {
-          const item = props.chartData[ctx.dataIndex]
+          const item = safeChartData.value[ctx.dataIndex]
           const p = item ? participantMap.value[item.participantId] : null
           const name = p ? (p.gameName || p.summonerName || `P${p.participantId}`) : ''
           return `${name}: ${ctx.formattedValue}`
