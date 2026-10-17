@@ -37,6 +37,7 @@
         v-else
         :current-profile="selfProfile"
         @open-summoner="handleOpenSummonerFromStartup"
+        @refresh-connection="() => initSelfProfile(true)"
       />
     </div>
 
@@ -51,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { usePlayerTabsStore, type PlayerTabItem } from '../../stores/player-tabs'
 import PlayerTabStrip from './widgets/PlayerTabStrip.vue'
 import PlayerTab from './PlayerTab.vue'
@@ -116,7 +117,8 @@ function handleOpenSummonerFromStartup(payload: {
     gameName: payload.gameName || '召唤师',
     tagLine: payload.tagLine || '',
     profileIconId: payload.profileIconId ?? 1,
-    isMock: payload.isMock ?? false
+    isMock: payload.isMock ?? false,
+    isSelf: payload.puuid === selfProfile.value?.puuid
   })
 }
 
@@ -138,13 +140,20 @@ function handleRefreshTab(tabId: string) {
   tabComponentsMap.get(tabId)?.refresh?.()
 }
 
-async function initSelfProfile() {
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let hasAutoOpenedInitialTab = false
+let isCheckingSelf = false
+
+async function initSelfProfile(forceOpen = false) {
+  if (isCheckingSelf) return
+  isCheckingSelf = true
   try {
     const p = await getSummonerProfile()
     if (p && p.puuid && p.is_connected) {
       selfProfile.value = p
-      // If no tabs currently opened, auto-open self tab
-      if (playerTabsStore.tabs.length === 0) {
+      // If no tabs currently opened and never auto-opened, or forceOpen is explicitly true
+      if ((playerTabsStore.tabs.length === 0 && !hasAutoOpenedInitialTab) || forceOpen) {
+        hasAutoOpenedInitialTab = true
         playerTabsStore.openTab(p.puuid, 'lcu', {
           gameName: p.game_name,
           tagLine: p.tag_line,
@@ -153,14 +162,30 @@ async function initSelfProfile() {
           isSelf: true
         })
       }
+    } else {
+      if (selfProfile.value?.is_connected) {
+        selfProfile.value = null
+      }
     }
   } catch (err) {
     console.warn('initSelfProfile failed:', err)
+  } finally {
+    isCheckingSelf = false
   }
 }
 
 onMounted(() => {
   initSelfProfile()
+  pollTimer = setInterval(() => {
+    initSelfProfile()
+  }, 2500)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 })
 
 defineExpose({
@@ -168,7 +193,10 @@ defineExpose({
   refreshCurrentTab: () => {
     if (playerTabsStore.currentTabId) {
       handleRefreshTab(playerTabsStore.currentTabId)
+    } else {
+      initSelfProfile(true)
     }
-  }
+  },
+  initSelfProfile
 })
 </script>

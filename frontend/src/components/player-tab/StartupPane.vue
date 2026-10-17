@@ -52,7 +52,7 @@
                 </span>
               </div>
               <div class="text-xs text-slate-400 mt-0.5">
-                单双排位: <span class="font-bold text-slate-200">{{ currentProfile.tier_solo }} {{ currentProfile.division_solo }}</span> · {{ currentProfile.lp_solo }} LP
+                单双排位: <span class="font-bold text-slate-200">{{ currentProfile.tier_solo || '未定级' }} {{ currentProfile.division_solo || '' }}</span> · {{ currentProfile.lp_solo ?? 0 }} LP
               </div>
             </div>
           </div>
@@ -78,12 +78,21 @@
             </div>
           </div>
 
-          <button
-            @click="handleOpenDemo"
-            class="px-3 py-1.5 rounded-xl bg-amber-950/80 hover:bg-amber-900 border border-amber-600/60 text-amber-200 text-xs font-semibold transition active:scale-95 shrink-0"
-          >
-            开启演练体验
-          </button>
+          <div class="flex items-center space-x-2 shrink-0">
+            <button
+              @click="emit('refreshConnection')"
+              class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5"
+            >
+              <RotateCw class="w-3.5 h-3.5" />
+              <span>检测连接</span>
+            </button>
+            <button
+              @click="handleOpenDemo"
+              class="px-3 py-1.5 rounded-xl bg-amber-950/80 hover:bg-amber-900 border border-amber-600/60 text-amber-200 text-xs font-semibold transition active:scale-95 shrink-0"
+            >
+              开启演练体验
+            </button>
+          </div>
         </div>
       </div>
 
@@ -184,7 +193,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Sparkles, Gamepad2, Search, X, Loader2, History, ChevronRight } from 'lucide-vue-next'
+import { Sparkles, Gamepad2, Search, X, Loader2, History, ChevronRight, RotateCw } from 'lucide-vue-next'
 import { usePlayerTabsStore, type SearchHistoryItem } from '../../stores/player-tabs'
 import { searchSummoner, getSummonerProfile, getMockSummonerProfile } from '../../api/tauri'
 import { getProfileIconUrl } from '../match-card/utils/resources'
@@ -196,6 +205,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openSummoner: [payload: { puuid: string; gameName?: string; tagLine?: string; profileIconId?: number; isMock?: boolean }]
+  refreshConnection: []
 }>()
 
 const playerTabsStore = usePlayerTabsStore()

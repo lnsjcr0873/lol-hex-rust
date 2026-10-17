@@ -101,7 +101,12 @@ function toggleDemoMode() {
 }
 
 function handleRefreshCurrent() {
-  playerTabsRef.value?.refreshCurrentTab()
+  if (playerTabsStore.currentTabId) {
+    playerTabsRef.value?.refreshCurrentTab()
+    playerTabsRef.value?.initSelfProfile(false)
+  } else {
+    playerTabsRef.value?.initSelfProfile(true)
+  }
 }
 
 function handleLoadSummoner(puuid: string) {
