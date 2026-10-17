@@ -35,13 +35,59 @@ impl MockLiveClientServer {
         std::fs::write(&payload_file, response_payload.to_string())
             .expect("Failed to write mock payload.json");
 
-        let script = format!(
-            r#"
-import sys, os, ssl, json, http.server, socketserver, datetime, ipaddress
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+        let cert_pem = r#"-----BEGIN CERTIFICATE-----
+MIICtzCCAZ+gAwIBAgICA+gwDQYJKoZIhvcNAQELBQAwFDESMBAGA1UEAwwJMTI3
+LjAuMC4xMB4XDTI1MTAxNzA2MTcxOFoXDTM2MTAxNDA2MTcxOFowFDESMBAGA1UE
+AwwJMTI3LjAuMC4xMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtB8j
+imFh1RON5OUN4bC73+JIhRMPi1TE97yqk/m1gFYUNM3LKhN+DbXG1xWeXxjOebVj
+17Ndh5VSbBSyDOjvHioXeThHSIj2aiYCHEHdLaF5S/oEBZoq5yXvLbmQbk27A+Uk
+btwno2pRg3Gvm704x2UmwP/MFudhAZdXSxF8C3WbwJ3q/jvOHO5QTUdrCTyPcPdF
+jrzv08cKCpykI2g+Ye5ev0PrTAfIMJ46unQmzAyJ4MVp+1+NxD9mEusPwQbfx18Y
+4waYgKDRUNuX3NpzwGrO8I0jozdpwEd+FVg137vuwauQpAtBFewHOs+jP9mgMrwn
+/+lGymbMmf7Pn+hj9QIDAQABoxMwETAPBgNVHREECDAGhwR/AAABMA0GCSqGSIb3
+DQEBCwUAA4IBAQB8rq5z+ZA+MIEuy8N1MErn0iflgCAYGKF2wABkm5VOyoyJ7998
+KmAlFGiplpQ6Ck80v6HCJ6w/6APXHwTQ9LWTqPrB9LBqEDHsHN86c09pbt3seI4j
+DSV+aIEh/nRf6VCpVRbNimL4gkYSQnOBKc5Y3e0mrBaW8sw1+SKlKlfDEz1FONLX
+SjBM/xhqzSyVGlff70VldlI0DiDw1JD7LcF0LHtEnI2dE4XJQd16gjd2QlS265L0
+Y8zf/rdzm5mwH3Az5fEcLiCU661o88120wmcQ7kDFWlEGjD8QlooPIYWF8I85E7v
+GbsuMhVszC73kDQ7ltne9kAIVlB534xNX4Vo
+-----END CERTIFICATE-----"#;
+
+        let key_pem = r#"-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAtB8jimFh1RON5OUN4bC73+JIhRMPi1TE97yqk/m1gFYUNM3L
+KhN+DbXG1xWeXxjOebVj17Ndh5VSbBSyDOjvHioXeThHSIj2aiYCHEHdLaF5S/oE
+BZoq5yXvLbmQbk27A+Ukbtwno2pRg3Gvm704x2UmwP/MFudhAZdXSxF8C3WbwJ3q
+/jvOHO5QTUdrCTyPcPdFjrzv08cKCpykI2g+Ye5ev0PrTAfIMJ46unQmzAyJ4MVp
++1+NxD9mEusPwQbfx18Y4waYgKDRUNuX3NpzwGrO8I0jozdpwEd+FVg137vuwauQ
+pAtBFewHOs+jP9mgMrwn/+lGymbMmf7Pn+hj9QIDAQABAoIBAAroi914klU2LvS6
+zoFpk6c2bA/rHJjilF8whOAbUluoWubrw68TqSGpbZZfD81QkkiarKZGjZaFe41i
+H3parQiVogBMYTzKVqoNDTmq33tA+TiZtp6kPI7tJDQPteiIOpg8y10PZjMmYDNm
+sizrY8HnpVYw56pHbv+Kq9W3BF0pMvTWRbNGbNTvLXW6EL6WEhCOrsxQSZOUh2p1
+owFjIqMxp0lofZMtc1CIVu6LoPpPssHI5G1K+k6yTawHmKI2A5APOUEwJiYKq+Pw
+BR6h6EgUq9A3v5zy9tu/nwhFTQV1MmAM98bFA5M4CcbVSXEFyNECLI1eKEF9RXdS
+CUi9raECgYEA94F1pgVPb04nIO20KaCo2Mi9iGucekhRKFAv4yCQBeaap2uBnc3N
+ibqr33RqGVo3guYRh7F4r3HDdegKJoFqzXlswKqDU1RhiTQ13/r/34hITmwplzUG
+kxnrJkndpPW1dfMEhJnVgl6w2oEY6PuLX+fjvDxR45PilCZI1M2cKhkCgYEAuk2n
+r7+0Lx5/0qDxt6jELOjOY1qG09okvbzv2iodr3Z4g7kqyykFhA6j5Q2AT8Efla+2
+QbyOdwOwvWJ1zG3xe+LTflBJhWcEp9rc/bGKq0+do5y7y5hmpM9aCPujgTEXDyP2
+tyzLntZ5WlXMo80H5GS14JpUhoRl+RMvx/IIvD0CgYEA7W4Gg1Yyxo7NYHxHSWuy
+rgucLkM1H+VB3Y9W8OZq4w4+K/8on04vL0Gg4UKXCW0PNYYpKOep43wZyoDnQ9sA
+rs4d8pFgW87lpi4sxInPbgsZegmuuDwI65KAjwFrG3UON3ECU4YTWPYnZ+VSFSZB
+pKYaRJgE4nEaeY5kbag0d/kCgYADSUNf8j23Zw5SJMyetLdhI2ogjoQ6UGq9fgut
+CXkkky5lBGsg0kRqo+d4LtjIj1uDRGoulqjcqJABhy8UwAu2Z7XbUIc7dym53D5x
+qyQLCYh6TlVxreqBlba82dN0f+0sMzIy4PNmhdn2IfVOHlu5R519rLs49DToQ9Jf
+8ID+8QKBgQCSAhjXo2cUkxeTe2Z1qX4/ze3/a3d9m53e1Rcdzx0q1vM/ug9jerfe
+mD/VvMubfTOmZCQLrDiJ3Gb+s2x98N2if3GSmzM0RTgaspVhM40prjiLr545Lkjt
+GgC7UINjtUuBi+uB4PTZiT2I7WWYjhE2VQn4UZPKlAb1FuL0/FYSGg==
+-----END RSA PRIVATE KEY-----"#;
+
+        let cert_path = temp_dir.join("cert.pem");
+        let key_path = temp_dir.join("key.pem");
+        std::fs::write(&cert_path, cert_pem).expect("Failed to write mock cert.pem");
+        std::fs::write(&key_path, key_pem).expect("Failed to write mock key.pem");
+
+        let script = r#"
+import sys, os, ssl, json, http.server, socketserver
 
 temp_dir = sys.argv[1]
 payload_file = sys.argv[2]
@@ -49,27 +95,8 @@ payload_file = sys.argv[2]
 with open(payload_file, 'r', encoding='utf-8') as f:
     resp_body = f.read().encode('utf-8')
 
-# Generate ephemeral self-signed cert for 127.0.0.1
-key = rsa.generate_private_key(65537, 2048)
-name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, '127.0.0.1')])
-now = datetime.datetime.now(datetime.timezone.utc)
-cert = (
-    x509.CertificateBuilder()
-    .subject_name(name)
-    .issuer_name(name)
-    .public_key(key.public_key())
-    .serial_number(1000)
-    .not_valid_before(now - datetime.timedelta(days=1))
-    .not_valid_after(now + datetime.timedelta(days=1))
-    .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address('127.0.0.1'))]), critical=False)
-    .sign(key, hashes.SHA256())
-)
 cert_path = os.path.join(temp_dir, 'cert.pem')
 key_path = os.path.join(temp_dir, 'key.pem')
-with open(cert_path, 'wb') as f:
-    f.write(cert.public_bytes(serialization.Encoding.PEM))
-with open(key_path, 'wb') as f:
-    f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -96,8 +123,7 @@ sys.stdout.write("READY\n")
 sys.stdout.flush()
 
 httpd.serve_forever()
-"#
-        );
+"#;
 
         let script_file = temp_dir.join("server.py");
         std::fs::write(&script_file, script).expect("Failed to write mock server.py");
