@@ -308,7 +308,7 @@ mod f3_premade_detection {
     fn test_f3_04_quad_premade_detection() {
         // 4 players in a chain/clique with >=2 shared games -> Quad (group index 0 gets #ec4899)
         let mut players = vec![
-            make_player_card("p1", &[301, 302]),
+            make_player_card("p1", &[301, 302, 303]),
             make_player_card("p2", &[301, 302, 303]),
             make_player_card("p3", &[302, 303]),
             make_player_card("p4", &[302, 303]),

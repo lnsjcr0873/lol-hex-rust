@@ -324,18 +324,9 @@ async fn get_match_history(
     }
 
     // Dynamic fetch with cache fallback:
-    let record = if let Some(rec) = state.history.fetch_and_cache_player(&resolved_puuid, &query_name, &state.lcu, resolved_beg, resolved_end).await {
-        let count = (resolved_end + 1).saturating_sub(resolved_beg);
-        let mut sliced = rec;
-        if resolved_beg > 0 {
-            sliced.matches = sliced.matches.into_iter().skip(resolved_beg).take(count).collect();
-        } else if sliced.matches.len() > count {
-            sliced.matches.truncate(count);
-        }
-        sliced
-    } else if let Some(mut cached) = state.history.get_player_data_fresh(&resolved_puuid, std::time::Duration::from_secs(600)).await {
-        let count = (resolved_end + 1).saturating_sub(resolved_beg);
-        cached.matches = cached.matches.into_iter().skip(resolved_beg).take(count).collect();
+    let full_record = if let Some(rec) = state.history.fetch_and_cache_player(&resolved_puuid, &query_name, &state.lcu, resolved_beg, resolved_end).await {
+        rec
+    } else if let Some(cached) = state.history.get_player_data_fresh(&resolved_puuid, std::time::Duration::from_secs(600)).await {
         cached
     } else if resolved_puuid.starts_with("mock_puuid_") {
         let parts: Vec<&str> = resolved_puuid.trim_start_matches("mock_puuid_").split('_').collect();
@@ -347,8 +338,6 @@ async fn get_match_history(
             mock.raw_summoner["name"] = json!(query_name);
             mock.raw_summoner["gameName"] = json!(query_name);
         }
-        let count = (resolved_end + 1).saturating_sub(resolved_beg);
-        mock.matches = mock.matches.into_iter().skip(resolved_beg).take(count).collect();
         mock
     } else {
         CachedPlayerRecord {
@@ -367,23 +356,28 @@ async fn get_match_history(
         }
     };
 
-    let filtered_matches: Vec<ParsedMatchRecord> = if queue_id > 0 {
-        record.matches.iter().filter(|m| m.queue_id == queue_id).cloned().collect()
+    // 1. Filter by queue_id if specified (> 0)
+    let queue_matches: Vec<ParsedMatchRecord> = if queue_id > 0 {
+        full_record.matches.iter().filter(|m| m.queue_id == queue_id).cloned().collect()
     } else {
-        record.matches.clone()
+        full_record.matches.clone()
     };
 
-    let first_cid = filtered_matches.first().map(|m| m.champion_id).unwrap_or(0);
-    let sample_count = (resolved_end + 1).saturating_sub(resolved_beg);
-    let mut rec_for_eval = record.clone();
-    rec_for_eval.matches = filtered_matches.clone();
-    let mut tactical = state.history.compute_tactical_profile(&rec_for_eval, first_cid, sample_count);
-    let radar = compute_radar(&filtered_matches);
+    // 2. Paginated slice for the matches table/cards
+    let count = (resolved_end + 1).saturating_sub(resolved_beg);
+    let paginated_matches: Vec<ParsedMatchRecord> = queue_matches.iter().skip(resolved_beg).take(count).cloned().collect();
+
+    // 3. Tactical profile evaluation MUST always evaluate against the player's full, globally newest merged match history
+    let first_cid = queue_matches.first().map(|m| m.champion_id).unwrap_or(0);
+    let mut rec_for_eval = full_record.clone();
+    rec_for_eval.matches = queue_matches.clone();
+    let mut tactical = state.history.compute_tactical_profile(&rec_for_eval, first_cid, 20);
+    let radar = compute_radar(&queue_matches.iter().take(20).cloned().collect::<Vec<_>>());
     tactical.radar = radar.clone();
 
     Json(json!({
-        "summoner": record.raw_summoner,
-        "ranked": record.raw_ranked,
+        "summoner": full_record.raw_summoner,
+        "ranked": full_record.raw_ranked,
         "analysis": {
             "recent_win_rate_pct": tactical.recent_win_rate_pct,
             "recent_wins": tactical.recent_wins,
@@ -394,7 +388,7 @@ async fn get_match_history(
             "radar": radar,
             "badges": tactical.badges
         },
-        "matches": filtered_matches
+        "matches": paginated_matches
     }))
 }
 

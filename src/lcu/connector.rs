@@ -1,5 +1,9 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
+
+static LAST_SNIFF_ATTEMPT: Mutex<Option<Instant>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Default)]
 pub struct LcuCredentials {
@@ -23,36 +27,56 @@ const COMMON_LOL_PATHS: &[&str] = &[
 ];
 
 impl LcuConnector {
+    pub fn reset_cooldown() {
+        if let Ok(mut last) = LAST_SNIFF_ATTEMPT.lock() {
+            *last = None;
+        }
+    }
+
     pub fn sniff_credentials() -> Option<LcuCredentials> {
+        // Enforce a 3-second cooldown on failed sniff attempts to prevent high CPU / process storm when client is closed
+        {
+            if let Ok(mut last) = LAST_SNIFF_ATTEMPT.lock() {
+                if let Some(t) = *last {
+                    if t.elapsed() < std::time::Duration::from_secs(3) {
+                        return None;
+                    }
+                }
+                *last = Some(Instant::now());
+            }
+        }
+
         // Priority 1: Native Win32 process lockfile sniffing (< 1ms, 0 subprocess overhead, 100% Win11 24H2 compatible)
         #[cfg(windows)]
         {
             if let Some(creds) = Self::sniff_from_process_win32() {
                 return Some(creds);
             }
+            // If on Windows, sniff_from_process_win32 already checked whether League processes exist.
+            // If neither LeagueClientUx.exe nor LeagueClient.exe exists, it returned None without invoking WMIC/PowerShell.
+            None
         }
 
-        // Priority 2: Windows process commandline sniffing (fallback for Tencent/WeGame if lockfile is hidden)
-        #[cfg(windows)]
+        // Priority 2: Check lockfile in known install paths (non-Windows fallback)
+        #[cfg(not(windows))]
         {
-            if let Some(creds) = Self::sniff_from_commandline_win32() {
-                return Some(creds);
-            }
-        }
-
-        // Priority 3: Check lockfile in known install paths
-        for dir in COMMON_LOL_PATHS {
-            let lockfile = Path::new(dir).join("lockfile");
-            if lockfile.exists() {
-                if let Ok(content) = fs::read_to_string(&lockfile) {
-                    if let Some(creds) = Self::parse_lockfile(&content) {
-                        return Some(creds);
+            for dir in COMMON_LOL_PATHS {
+                let lockfile = Path::new(dir).join("lockfile");
+                if lockfile.exists() {
+                    if let Ok(content) = fs::read_to_string(&lockfile) {
+                        if let Some(creds) = Self::parse_lockfile(&content) {
+                            return Some(creds);
+                        }
                     }
                 }
             }
+            None
         }
+    }
 
-        None
+    /// Async helper that executes credential sniffing on a blocking thread pool
+    pub async fn sniff_credentials_async() -> Option<LcuCredentials> {
+        tokio::task::spawn_blocking(Self::sniff_credentials).await.ok().flatten()
     }
 
     pub fn parse_lockfile(content: &str) -> Option<LcuCredentials> {
@@ -250,6 +274,12 @@ impl LcuConnector {
             let mut candidate_pids = ux_pids;
             candidate_pids.extend(client_pids);
 
+            // If neither LeagueClientUx.exe nor LeagueClient.exe PID is found in the snapshot,
+            // return None immediately. Do NOT fall back to sniff_from_commandline_win32()!
+            if candidate_pids.is_empty() {
+                return None;
+            }
+
             for pid in candidate_pids {
                 // PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
                 let proc_handle = OpenProcess(0x1000, 0, pid);
@@ -277,6 +307,25 @@ impl LcuConnector {
                     }
                 }
             }
+
+            // Only if League processes were confirmed to exist in the snapshot,
+            // but the lockfile could not be read directly from their directory,
+            // fall back to command line sniffing:
+            if let Some(creds) = Self::sniff_from_commandline_win32() {
+                return Some(creds);
+            }
+
+            // Also check known install paths if process is confirmed running
+            for dir in COMMON_LOL_PATHS {
+                let lockfile = Path::new(dir).join("lockfile");
+                if lockfile.exists() {
+                    if let Ok(content) = fs::read_to_string(&lockfile) {
+                        if let Some(creds) = Self::parse_lockfile(&content) {
+                            return Some(creds);
+                        }
+                    }
+                }
+            }
         }
         None
     }
@@ -285,6 +334,15 @@ impl LcuConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sniff_credentials_cooldown() {
+        LcuConnector::reset_cooldown();
+        let _ = LcuConnector::sniff_credentials();
+        let second = LcuConnector::sniff_credentials();
+        assert!(second.is_none());
+        LcuConnector::reset_cooldown();
+    }
 
     #[test]
     fn test_parse_commandline_unquoted() {

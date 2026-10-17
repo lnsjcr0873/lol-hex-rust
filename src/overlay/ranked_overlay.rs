@@ -191,6 +191,38 @@ pub async fn update_ranked_draft_overlay(
     let local_slot = d.state.my_team.iter().find(|s| s.is_local_player).cloned();
     let local_pos = local_slot.as_ref().map(|s| s.position.clone()).unwrap_or_default();
 
+    // Concurrently fetch counter & synergy data for all slots to eliminate serial network latency
+    async fn fetch_slot(
+        opgg: &crate::crawler::OpggClient,
+        db: &crate::data::loader::Database,
+        slot_opt: Option<&crate::engine::ranked_draft::DraftSlot>,
+    ) -> (Vec<super::win32_hud::CounterHeroItem>, Vec<super::win32_hud::CounterHeroItem>) {
+        if let Some(s) = slot_opt {
+            if !s.champion_id.is_empty() {
+                return fetch_slot_counters_and_synergies(opgg, db, &s.champion_id, &s.position).await;
+            }
+        }
+        (Vec::new(), Vec::new())
+    }
+
+    let (my_c0, my_c1, my_c2, my_c3, my_c4) = tokio::join!(
+        fetch_slot(opgg, db, d.state.my_team.get(0)),
+        fetch_slot(opgg, db, d.state.my_team.get(1)),
+        fetch_slot(opgg, db, d.state.my_team.get(2)),
+        fetch_slot(opgg, db, d.state.my_team.get(3)),
+        fetch_slot(opgg, db, d.state.my_team.get(4)),
+    );
+    let my_counters = vec![my_c0, my_c1, my_c2, my_c3, my_c4];
+
+    let (th_c0, th_c1, th_c2, th_c3, th_c4) = tokio::join!(
+        fetch_slot(opgg, db, d.state.their_team.get(0)),
+        fetch_slot(opgg, db, d.state.their_team.get(1)),
+        fetch_slot(opgg, db, d.state.their_team.get(2)),
+        fetch_slot(opgg, db, d.state.their_team.get(3)),
+        fetch_slot(opgg, db, d.state.their_team.get(4)),
+    );
+    let their_counters = vec![th_c0, th_c1, th_c2, th_c3, th_c4];
+
     let mut my_slots = Vec::new();
     for (idx, s) in d.state.my_team.iter().enumerate() {
         let prof = profiles.get(idx).cloned().flatten();
@@ -205,11 +237,7 @@ pub async fn update_ranked_draft_overlay(
             } else { None }
         } else { None };
 
-        let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
-            fetch_slot_counters_and_synergies(opgg, db, &s.champion_id, &s.position).await
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let (c_heroes, s_heroes) = my_counters.get(idx).cloned().unwrap_or_default();
 
         my_slots.push(super::win32_hud::RankedSlotView {
             slot_index: idx,
@@ -244,11 +272,7 @@ pub async fn update_ranked_draft_overlay(
             } else { None }
         } else { None };
 
-        let (c_heroes, s_heroes) = if !s.champion_id.is_empty() {
-            fetch_slot_counters_and_synergies(opgg, db, &s.champion_id, &s.position).await
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let (c_heroes, s_heroes) = their_counters.get(idx).cloned().unwrap_or_default();
 
         their_slots.push(super::win32_hud::RankedSlotView {
             slot_index: idx,

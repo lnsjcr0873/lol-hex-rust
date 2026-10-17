@@ -191,6 +191,8 @@ pub struct OngoingPlayerCard {
     pub premade_color: Option<String>,
     pub premade_bg: Option<String>,
     pub premade_text: Option<String>,
+    #[serde(default)]
+    pub queue_id: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -219,6 +221,7 @@ pub struct PlayerHistoryManager {
     cached_local_name: Arc<RwLock<Option<String>>>,
     database: Arc<RwLock<Option<Arc<Database>>>>,
     sgp_client: Arc<RwLock<Option<Arc<crate::sgp::SgpClient>>>>,
+    pub unlinked_candidates: Arc<RwLock<Vec<(String, String)>>>,
 }
 
 impl Default for PlayerHistoryManager {
@@ -464,23 +467,40 @@ pub fn compute_radar(matches: &[ParsedMatchRecord]) -> HashMap<String, i32> {
     map
 }
 
-pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
+fn get_combinations(indices: &[usize], k: usize) -> Vec<Vec<usize>> {
+    let mut result = Vec::new();
+    if k == 0 || k > indices.len() {
+        return result;
+    }
+    fn backtrack(indices: &[usize], start: usize, k: usize, current: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
+        if current.len() == k {
+            result.push(current.clone());
+            return;
+        }
+        for i in start..indices.len() {
+            current.push(indices[i]);
+            backtrack(indices, i + 1, k, current, result);
+            current.pop();
+        }
+    }
+    let mut current = Vec::new();
+    backtrack(indices, 0, k, &mut current, &mut result);
+    result
+}
+
+pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_id: i32) {
     if players.len() < 2 {
         return;
     }
     let n = players.len();
-    let mut adj: Vec<std::collections::HashSet<usize>> = vec![std::collections::HashSet::new(); n];
+    let mut weight: Vec<Vec<usize>> = vec![vec![0; n]; n];
 
     for i in 0..n {
         let matches_i = &players[i].matches;
-        let mut game_ids_i = std::collections::HashSet::new();
         let mut teammate_counts_i: HashMap<String, usize> = HashMap::new();
         let has_teammates_i = matches_i.iter().any(|m| !m.teammate_puuids.is_empty());
 
         for m in matches_i {
-            if m.game_id > 0 {
-                game_ids_i.insert(m.game_id);
-            }
             let mut seen_in_match = std::collections::HashSet::new();
             for t in &m.teammate_puuids {
                 if seen_in_match.insert(t) {
@@ -519,49 +539,105 @@ pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
                 shared_as_teammates
             } else {
                 // Fallback for synthetic/canned test fixtures where teammate_puuids is omitted
-                let game_ids_j: std::collections::HashSet<i64> = matches_j.iter().filter(|m| m.game_id > 0).map(|m| m.game_id).collect();
-                if !game_ids_i.is_empty() && !game_ids_j.is_empty() {
-                    game_ids_i.intersection(&game_ids_j).count()
-                } else {
-                    0
+                // Strictly verify players were on the SAME team in past matches
+                let mut map_j: HashMap<i64, i32> = HashMap::new();
+                for m in matches_j {
+                    if m.game_id > 0 {
+                        map_j.insert(m.game_id, m.team_id);
+                    }
                 }
+                let mut count = 0;
+                for m in matches_i {
+                    if m.game_id > 0 {
+                        if let Some(&tid_j) = map_j.get(&m.game_id) {
+                            if (m.team_id == 0 && tid_j == 0) || (m.team_id > 0 && m.team_id == tid_j) {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                count
             };
 
             // STRICT REQUIREMENT: >= 2 games together to eliminate 1-game accidental matchmaking false positive!
             if total_shared >= 2 {
-                adj[i].insert(j);
-                adj[j].insert(i);
+                weight[i][j] = total_shared;
+                weight[j][i] = total_shared;
             }
         }
     }
 
-    let mut visited = std::collections::HashSet::new();
-    let mut components = Vec::new();
+    // Party size limit: Solo/Duo queue (420) strictly caps premade size at 2 (maximum duo)
+    let max_party_size = if queue_id == 420 { 2 } else { 5 };
+
+    // Group player indices by team_id
+    let mut team_groups: HashMap<i32, Vec<usize>> = HashMap::new();
     for i in 0..n {
-        if !visited.contains(&i) {
-            let mut comp = Vec::new();
-            let mut queue = vec![i];
-            visited.insert(i);
-            while let Some(curr) = queue.pop() {
-                comp.push(curr);
-                let mut nbrs: Vec<usize> = adj[curr].iter().copied().collect();
-                nbrs.sort_unstable();
-                for nbr in nbrs {
-                    if !visited.contains(&nbr) {
-                        visited.insert(nbr);
-                        queue.push(nbr);
+        team_groups.entry(players[i].team_id).or_default().push(i);
+    }
+
+    let mut sorted_teams: Vec<i32> = team_groups.keys().copied().collect();
+    sorted_teams.sort_unstable();
+
+    struct CandidateClique {
+        size: usize,
+        total_weight: usize,
+        members: Vec<usize>,
+    }
+
+    let mut components = Vec::new();
+
+    for tid in sorted_teams {
+        let indices = team_groups.remove(&tid).unwrap_or_default();
+        if indices.len() < 2 {
+            continue;
+        }
+
+        let max_k = indices.len().min(max_party_size);
+        let mut candidate_cliques = Vec::new();
+
+        for s in (2..=max_k).rev() {
+            let combs = get_combinations(&indices, s);
+            for comb in combs {
+                let mut is_clique = true;
+                let mut total_w = 0;
+                for a in 0..comb.len() {
+                    for b in (a + 1)..comb.len() {
+                        let w = weight[comb[a]][comb[b]];
+                        if w < 2 {
+                            is_clique = false;
+                            break;
+                        }
+                        total_w += w;
+                    }
+                    if !is_clique {
+                        break;
                     }
                 }
-            }
-            if comp.len() >= 2 {
-                comp.sort_unstable();
-                let comp_team_ids: std::collections::HashSet<i32> = comp.iter()
-                    .map(|&idx| players[idx].team_id)
-                    .filter(|&tid| tid > 0)
-                    .collect();
-                if comp_team_ids.len() <= 1 {
-                    components.push(comp);
+                if is_clique {
+                    candidate_cliques.push(CandidateClique {
+                        size: s,
+                        total_weight: total_w,
+                        members: comb,
+                    });
                 }
+            }
+        }
+
+        // Sort candidates: larger size first, then higher co-play weight, then deterministic member ordering
+        candidate_cliques.sort_by(|a, b| {
+            b.size.cmp(&a.size)
+                .then_with(|| b.total_weight.cmp(&a.total_weight))
+                .then_with(|| a.members.cmp(&b.members))
+        });
+
+        let mut used = std::collections::HashSet::new();
+        for cand in candidate_cliques {
+            if cand.members.iter().all(|m| !used.contains(m)) {
+                for &m in &cand.members {
+                    used.insert(m);
+                }
+                components.push(cand.members);
             }
         }
     }
@@ -606,6 +682,11 @@ pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
     }
 }
 
+pub fn detect_premade_teams(players: &mut [OngoingPlayerCard]) {
+    let queue_id = players.iter().map(|p| p.queue_id).find(|&q| q > 0).unwrap_or(0);
+    detect_premade_teams_with_queue(players, queue_id);
+}
+
 pub fn queue_id_to_mode_cn(queue_id: i32) -> &'static str {
     match queue_id {
         420 => "排位赛(单双)",
@@ -648,18 +729,8 @@ pub fn assign_team_positions(slots: &mut [GameflowSlotInfo]) {
     let mut assigned: Vec<Option<&'static str>> = vec![None; slots.len()];
     let mut used_positions: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
-    // Pass 1: Jungle with Smite (highest priority, spell 11)
+    // Pass 1: Explicit selectedPosition from LCU (HIGHEST PRIORITY)
     for (i, s) in slots.iter().enumerate() {
-        if s.spell1_id == 11 || s.spell2_id == 11 {
-            assigned[i] = Some("JUNGLE");
-            used_positions.insert("JUNGLE");
-            break;
-        }
-    }
-
-    // Pass 2: Explicit selectedPosition from LCU
-    for (i, s) in slots.iter().enumerate() {
-        if assigned[i].is_some() { continue; }
         let pos_candidate = match s.position.to_uppercase().as_str() {
             "TOP" => Some("TOP"),
             "JUNGLE" => Some("JUNGLE"),
@@ -672,6 +743,17 @@ pub fn assign_team_positions(slots: &mut [GameflowSlotInfo]) {
             if !used_positions.contains(pos) {
                 assigned[i] = Some(pos);
                 used_positions.insert(pos);
+            }
+        }
+    }
+
+    // Pass 2: Fallback for unassigned / blind pick modes: player carrying Smite (spell 11) gets JUNGLE if not yet taken
+    if !used_positions.contains("JUNGLE") {
+        for (i, s) in slots.iter().enumerate() {
+            if assigned[i].is_none() && (s.spell1_id == 11 || s.spell2_id == 11) {
+                assigned[i] = Some("JUNGLE");
+                used_positions.insert("JUNGLE");
+                break;
             }
         }
     }
@@ -712,6 +794,19 @@ pub fn assign_team_positions(slots: &mut [GameflowSlotInfo]) {
     }
 }
 
+pub fn is_valid_match_id(id: i64) -> bool {
+    // League game IDs must be within valid numeric boundaries (typically 7 to 11 digits)
+    if id < 1_000_000 || id > 99_999_999_999 {
+        return false;
+    }
+    // Filter out Unix second-level timestamps:
+    // e.g., 1_600_000_000 to 1_850_000_000 (covers 1_700_000_000..1_800_000_000)
+    if (1_600_000_000..=1_850_000_000).contains(&id) {
+        return false;
+    }
+    true
+}
+
 impl PlayerHistoryManager {
     pub fn new() -> Self {
         Self {
@@ -721,7 +816,13 @@ impl PlayerHistoryManager {
             cached_local_name: Arc::new(RwLock::new(None)),
             database: Arc::new(RwLock::new(None)),
             sgp_client: Arc::new(RwLock::new(None)),
+            unlinked_candidates: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    pub async fn get_unlinked_candidates(&self) -> Vec<(String, String)> {
+        let guard = self.unlinked_candidates.read().await;
+        guard.clone()
     }
 
     pub async fn set_database(&self, db: Arc<Database>) {
@@ -1197,8 +1298,12 @@ impl PlayerHistoryManager {
         }
     }
 
+    pub fn is_valid_match_id(id: i64) -> bool {
+        is_valid_match_id(id)
+    }
+
     pub fn record_game_id(&self, game_id: i64) {
-        if game_id <= 0 || game_id > 99_999_999_999 {
+        if !is_valid_match_id(game_id) {
             return;
         }
         static RECORD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1223,33 +1328,38 @@ impl PlayerHistoryManager {
     }
 
     pub async fn discover_game_ids(&self) -> Vec<i64> {
-        let mut gids = std::collections::BTreeSet::new();
+        tokio::task::spawn_blocking(|| {
+            let mut gids = std::collections::BTreeSet::new();
 
-        // 1. Read from local cache file
-        let cache_paths = ["data/cache/encountered_games.json", "cache/encountered_games.json"];
-        for cp in cache_paths {
-            if let Ok(content) = std::fs::read_to_string(cp) {
-                if let Ok(arr) = serde_json::from_str::<Vec<i64>>(&content) {
-                    for id in arr {
-                        if id > 0 && id <= 99_999_999_999 {
-                            gids.insert(id);
+            // 1. Read from local cache file
+            let cache_paths = ["data/cache/encountered_games.json", "cache/encountered_games.json"];
+            for cp in cache_paths {
+                if let Ok(content) = std::fs::read_to_string(cp) {
+                    if let Ok(arr) = serde_json::from_str::<Vec<i64>>(&content) {
+                        for id in arr {
+                            if is_valid_match_id(id) {
+                                gids.insert(id);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // 2. Scan %APPDATA%/league-akari/LeagueAkari.db
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let akari_db = std::path::Path::new(&appdata).join("league-akari").join("LeagueAkari.db");
-            if akari_db.exists() {
-                if let Ok(bytes) = std::fs::read(&akari_db) {
-                    let s = String::from_utf8_lossy(&bytes);
-                    if let Ok(re) = regex::Regex::new(r"(\d{7,11})") {
+            // 2. Scan %APPDATA%/league-akari/LeagueAkari.db with strict prefix pattern
+            static PREFIX_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let re = PREFIX_RE.get_or_init(|| {
+                regex::Regex::new(r#"(?i)(?:gameId|GameId|EndOfGameStats_GameId|/games/)[\"':\s=]*(\d{7,11})"#).unwrap()
+            });
+
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                let akari_db = std::path::Path::new(&appdata).join("league-akari").join("LeagueAkari.db");
+                if akari_db.exists() {
+                    if let Ok(bytes) = std::fs::read(&akari_db) {
+                        let s = String::from_utf8_lossy(&bytes);
                         for cap in re.captures_iter(&s) {
                             if let Some(m) = cap.get(1) {
                                 if let Ok(num) = m.as_str().parse::<i64>() {
-                                    if num > 0 && num <= 99_999_999_999 {
+                                    if is_valid_match_id(num) {
                                         gids.insert(num);
                                     }
                                 }
@@ -1258,17 +1368,15 @@ impl PlayerHistoryManager {
                     }
                 }
             }
-        }
 
-        // 3. Scan recent LeagueClient log files across common drives with lossy decoding (handles GBK/CP936 logs)
-        let potential_log_dirs = [
-            "F:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-            "D:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-            "C:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-            "E:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-            "G:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-        ];
-        if let Ok(game_re) = regex::Regex::new(r#"(?:"gameId":\s*|gameId\s*['":]\s*|/games/|EndOfGameStats_GameId:)(\d{7,11})"#) {
+            // 3. Scan recent LeagueClient log files across common drives with lossy decoding (handles GBK/CP936 logs)
+            let potential_log_dirs = [
+                "F:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+                "D:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+                "C:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+                "E:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+                "G:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+            ];
             for dir in potential_log_dirs {
                 let p = std::path::Path::new(dir);
                 if p.exists() {
@@ -1281,10 +1389,10 @@ impl PlayerHistoryManager {
                         for file in log_files.iter().rev().take(40) {
                             if let Ok(bytes) = std::fs::read(file.path()) {
                                 let content = String::from_utf8_lossy(&bytes);
-                                for cap in game_re.captures_iter(&content) {
+                                for cap in re.captures_iter(&content) {
                                     if let Some(m) = cap.get(1) {
                                         if let Ok(num) = m.as_str().parse::<i64>() {
-                                            if num > 0 && num <= 99_999_999_999 {
+                                            if is_valid_match_id(num) {
                                                 gids.insert(num);
                                             }
                                         }
@@ -1295,18 +1403,20 @@ impl PlayerHistoryManager {
                     }
                 }
             }
-        }
 
-        let mut sorted: Vec<i64> = gids.into_iter().collect();
-        sorted.sort_unstable_by(|a, b| b.cmp(a)); // Descending: newest IDs first
+            let mut sorted: Vec<i64> = gids.into_iter().collect();
+            sorted.sort_unstable_by(|a, b| b.cmp(a)); // Descending: newest IDs first
 
-        // Persist discovered valid game IDs to data/cache/encountered_games.json
-        if !sorted.is_empty() {
-            let _ = std::fs::create_dir_all("data/cache");
-            let _ = std::fs::write("data/cache/encountered_games.json", serde_json::to_string(&sorted).unwrap_or_default());
-        }
+            // Persist discovered valid game IDs to data/cache/encountered_games.json
+            if !sorted.is_empty() {
+                let _ = std::fs::create_dir_all("data/cache");
+                let _ = std::fs::write("data/cache/encountered_games.json", serde_json::to_string(&sorted).unwrap_or_default());
+            }
 
-        sorted
+            sorted
+        })
+        .await
+        .unwrap_or_default()
     }
 
     pub async fn fetch_and_cache_player(
@@ -1442,40 +1552,50 @@ impl PlayerHistoryManager {
         if raw_games.is_empty() {
             let discovered_gids = self.discover_game_ids().await;
             if !discovered_gids.is_empty() {
-                let mut candidate_iter = discovered_gids.into_iter();
+                // Filter candidate IDs with is_valid_match_id and cap candidates to at most 16 IDs to prevent 404 storms
+                let candidate_ids: Vec<i64> = discovered_gids
+                    .into_iter()
+                    .filter(|&id| is_valid_match_id(id))
+                    .take(16)
+                    .collect();
+
                 let target_needed = (beg_index + count).min(200);
-                while raw_games.len() < target_needed {
-                    let batch: Vec<i64> = candidate_iter.by_ref().take(8).collect();
-                    if batch.is_empty() {
-                        break;
-                    }
-                    let mut handles = Vec::new();
-                    for gid in batch {
-                        let lcu_c = lcu.clone();
-                        handles.push(tokio::spawn(async move {
-                            lcu_c.get_match_detail(&gid.to_string()).await
-                        }));
-                    }
-                    for h in handles {
-                        if let Ok(Some(g_val)) = h.await {
-                            if g_val.get("participants").is_some() {
-                                let in_match = g_val.get("participantIdentities")
-                                    .and_then(|pi| pi.as_array())
-                                    .map(|idents| {
-                                        idents.iter().any(|item| {
-                                            let p = item.get("player");
-                                            let p_puuid = p.and_then(|x| x.get("puuid")).or_else(|| item.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
-                                            p_puuid.eq_ignore_ascii_case(puuid)
+                // Bound the fallback scanning by a 3-second timeout
+                let _ = tokio::time::timeout(Duration::from_secs(3), async {
+                    let mut candidate_iter = candidate_ids.into_iter();
+                    while raw_games.len() < target_needed {
+                        let batch: Vec<i64> = candidate_iter.by_ref().take(8).collect();
+                        if batch.is_empty() {
+                            break;
+                        }
+                        let mut handles = Vec::new();
+                        for gid in batch {
+                            let lcu_c = lcu.clone();
+                            handles.push(tokio::spawn(async move {
+                                lcu_c.get_match_detail(&gid.to_string()).await
+                            }));
+                        }
+                        for h in handles {
+                            if let Ok(Some(g_val)) = h.await {
+                                if g_val.get("participants").is_some() {
+                                    let in_match = g_val.get("participantIdentities")
+                                        .and_then(|pi| pi.as_array())
+                                        .map(|idents| {
+                                            idents.iter().any(|item| {
+                                                let p = item.get("player");
+                                                let p_puuid = p.and_then(|x| x.get("puuid")).or_else(|| item.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
+                                                p_puuid.eq_ignore_ascii_case(puuid)
+                                            })
                                         })
-                                    })
-                                    .unwrap_or(false);
-                                if in_match {
-                                    raw_games.push(g_val);
+                                        .unwrap_or(false);
+                                    if in_match {
+                                        raw_games.push(g_val);
+                                    }
                                 }
                             }
                         }
                     }
-                }
+                }).await;
             }
         }
 
@@ -1985,6 +2105,7 @@ impl PlayerHistoryManager {
                     premade_color: None,
                     premade_bg: None,
                     premade_text: None,
+                    queue_id: 420,
                 }
             }).collect()
         };
@@ -2148,6 +2269,7 @@ impl PlayerHistoryManager {
                         premade_color: None,
                         premade_bg: None,
                         premade_text: None,
+                        queue_id,
                     });
                 }
             }
@@ -2208,12 +2330,13 @@ impl PlayerHistoryManager {
                         premade_color: None,
                         premade_bg: None,
                         premade_text: None,
+                        queue_id,
                     });
                 }
             }
 
-            detect_premade_teams(&mut my_cards);
-            detect_premade_teams(&mut their_cards);
+            detect_premade_teams_with_queue(&mut my_cards, queue_id);
+            detect_premade_teams_with_queue(&mut their_cards, queue_id);
 
             let is_blue = my_cards.first().map(|c| c.team_id == 100).unwrap_or(true);
             let (blue_team, red_team) = if is_blue {
@@ -2245,6 +2368,12 @@ impl PlayerHistoryManager {
             }
         } else if phase == "GameStart" || phase == "InProgress" {
             let gf_session = lcu.get_gameflow_session().await;
+            let queue_id = gf_session.get("gameData").and_then(|g| g.get("queue").and_then(|q| q.get("id")))
+                .or_else(|| gf_session.get("gameData").and_then(|g| g.get("queueId")))
+                .or_else(|| gf_session.get("queueId"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+
             if let Some((my_slots, their_slots)) = self.resolve_gameflow_10_players(&gf_session, lcu).await {
                 let mut my_cards = Vec::with_capacity(my_slots.len());
                 for (idx, s) in my_slots.into_iter().enumerate() {
@@ -2294,6 +2423,7 @@ impl PlayerHistoryManager {
                         premade_color: None,
                         premade_bg: None,
                         premade_text: None,
+                        queue_id,
                     });
                 }
 
@@ -2345,11 +2475,12 @@ impl PlayerHistoryManager {
                         premade_color: None,
                         premade_bg: None,
                         premade_text: None,
+                        queue_id,
                     });
                 }
 
-                detect_premade_teams(&mut my_cards);
-                detect_premade_teams(&mut their_cards);
+                detect_premade_teams_with_queue(&mut my_cards, queue_id);
+                detect_premade_teams_with_queue(&mut their_cards, queue_id);
 
                 let is_blue = my_cards.first().map(|c| c.team_id == 100).unwrap_or(true);
                 let (blue_team, red_team) = if is_blue {
@@ -2357,12 +2488,6 @@ impl PlayerHistoryManager {
                 } else {
                     (their_cards.clone(), my_cards.clone())
                 };
-
-                let queue_id = gf_session.get("gameData").and_then(|g| g.get("queue").and_then(|q| q.get("id")))
-                    .or_else(|| gf_session.get("gameData").and_then(|g| g.get("queueId")))
-                    .or_else(|| gf_session.get("queueId"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32;
 
                 let queue_name = match queue_id {
                     0 => if phase == "InProgress" { "游戏进行中" } else { "对局加载中" },
@@ -2473,7 +2598,7 @@ impl PlayerHistoryManager {
 
         // Build candidate list (STRICTLY EXCLUDING local player to prevent duplicate identity bug!)
         let mut candidate_teammates = Vec::new();
-        for p in participants {
+        for p in &participants {
             let p_id = p.get("id").or_else(|| p.get("puuid")).and_then(|v| v.as_str()).unwrap_or("");
             if p_id.is_empty() {
                 continue;
@@ -2490,35 +2615,122 @@ impl PlayerHistoryManager {
             candidate_teammates.push((p_id.to_string(), name.to_string()));
         }
 
-        // 3. Fallback: inspect session myTeam array for explicit puuids
+        // 3. Match candidate teammates to slots with explicit matching (summonerId, puuid, or exact name)
+        // NEVER sequentially assign chat candidates into slots 0..4!
+        let mut used_candidates = std::collections::HashSet::new();
+
         if let Some(my_arr) = session.get("myTeam").and_then(|v| v.as_array()) {
             for (idx, m) in my_arr.iter().enumerate() {
-                if idx < assigned_puuids.len() && assigned_puuids[idx].is_none() {
-                    if let Some(p) = m.get("puuid").and_then(|v| v.as_str()) {
-                        if !p.is_empty() && p != "0" {
-                            let is_local = my_team_is_locals.get(idx).copied().unwrap_or(false);
-                            if !is_local {
-                                if let Some(ref lp) = local_puuid_opt {
-                                    if p == lp {
-                                        continue;
-                                    }
-                                }
-                                assigned_puuids[idx] = Some((p.to_string(), String::new()));
-                            }
+                if idx >= assigned_puuids.len() || assigned_puuids[idx].is_some() {
+                    continue;
+                }
+                let is_local = my_team_is_locals.get(idx).copied().unwrap_or(false);
+                if is_local {
+                    continue;
+                }
+
+                let slot_puuid = m.get("puuid").and_then(|v| v.as_str()).unwrap_or("");
+                let slot_sum_id = m.get("summonerId")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| m.get("summonerId").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()))
+                    .unwrap_or(0);
+                let slot_name = m.get("summonerName")
+                    .or_else(|| m.get("gameName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+
+                let is_generic_placeholder = slot_name.is_empty()
+                    || slot_name.starts_with("Summoner ")
+                    || slot_name.starts_with("我方")
+                    || slot_name.starts_with("召唤师");
+
+                // Priority A: Slot has explicit non-zero puuid
+                if !slot_puuid.is_empty() && slot_puuid != "0" {
+                    if let Some(ref lp) = local_puuid_opt {
+                        if slot_puuid == lp {
+                            continue;
                         }
+                    }
+                    // Find if any chat participant matches this puuid to get name
+                    let matched_name = candidate_teammates.iter().enumerate().find_map(|(c_i, (cid, cname))| {
+                        if cid == slot_puuid {
+                            used_candidates.insert(c_i);
+                            Some(cname.clone())
+                        } else {
+                            None
+                        }
+                    }).unwrap_or_else(|| {
+                        if !is_generic_placeholder { slot_name.to_string() } else { String::new() }
+                    });
+                    assigned_puuids[idx] = Some((slot_puuid.to_string(), matched_name));
+                    continue;
+                }
+
+                // Priority B: Match by summonerId against chat participants
+                if slot_sum_id > 0 {
+                    let mut matched_cand = None;
+                    for (c_i, (cid, cname)) in candidate_teammates.iter().enumerate() {
+                        if used_candidates.contains(&c_i) {
+                            continue;
+                        }
+                        let part_sum_id = participants.get(c_i)
+                            .and_then(|p| p.get("summonerId").and_then(|v| v.as_i64()))
+                            .or_else(|| cid.parse::<i64>().ok());
+                        if part_sum_id == Some(slot_sum_id) {
+                            matched_cand = Some((c_i, cid.clone(), cname.clone()));
+                            break;
+                        }
+                    }
+                    if let Some((c_i, cid, cname)) = matched_cand {
+                        used_candidates.insert(c_i);
+                        assigned_puuids[idx] = Some((cid, cname));
+                        continue;
+                    }
+                }
+
+                // Priority C: Match by exact summonerName / gameName
+                if !is_generic_placeholder {
+                    let mut matched_cand = None;
+                    for (c_i, (cid, cname)) in candidate_teammates.iter().enumerate() {
+                        if used_candidates.contains(&c_i) {
+                            continue;
+                        }
+                        if cname.eq_ignore_ascii_case(slot_name) {
+                            matched_cand = Some((c_i, cid.clone(), cname.clone()));
+                            break;
+                        }
+                    }
+                    if let Some((c_i, cid, cname)) = matched_cand {
+                        used_candidates.insert(c_i);
+                        assigned_puuids[idx] = Some((cid, cname));
+                        continue;
                     }
                 }
             }
         }
 
-        // Distribute chat candidates into remaining empty non-local slots
-        let mut c_idx = 0;
-        for (idx, item) in assigned_puuids.iter_mut().enumerate() {
-            let is_local = my_team_is_locals.get(idx).copied().unwrap_or(false);
-            if !is_local && item.is_none() && c_idx < candidate_teammates.len() {
-                *item = Some(candidate_teammates[c_idx].clone());
-                c_idx += 1;
+        // Collect unlinked participants into unlinked pool and cache their tactical data
+        let mut unlinked = Vec::new();
+        for (c_i, (cid, cname)) in candidate_teammates.iter().enumerate() {
+            if !used_candidates.contains(&c_i) {
+                unlinked.push((cid.clone(), cname.clone()));
             }
+        }
+        {
+            let mut guard = self.unlinked_candidates.write().await;
+            *guard = unlinked.clone();
+        }
+
+        // Pre-fetch unlinked candidates in background with cur_cid = 0 to avoid false trial champion warning
+        for (cid, cname) in unlinked {
+            let mgr = self.clone();
+            let lcu_c = lcu.clone();
+            tokio::spawn(async move {
+                let sample_limit = mgr.sample_count.load(std::sync::atomic::Ordering::Relaxed) as usize;
+                let end_index = sample_limit.saturating_sub(1);
+                mgr.fetch_and_cache_player(&cid, &cname, &lcu_c, 0, end_index).await;
+            });
         }
 
         // 4. Concurrently fetch or compute tactical profiles
@@ -2770,9 +2982,35 @@ impl PlayerHistoryManager {
             (team_one, team_two)
         };
 
-        // Infer 5v5 distinct lane positions based on Smite, role and champion
-        assign_team_positions(&mut my_team);
-        assign_team_positions(&mut their_team);
+        let queue_id = game_data
+            .get("queue")
+            .and_then(|q| q.get("id"))
+            .and_then(|v| v.as_i64())
+            .or_else(|| game_data.get("queueId").and_then(|v| v.as_i64()))
+            .unwrap_or(0) as i32;
+        let game_mode = game_data
+            .get("gameMode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let is_aram = queue_id == 450 || queue_id == 860 || game_mode.eq_ignore_ascii_case("ARAM");
+        let is_arena = queue_id == 1700 || queue_id == 1710 || game_mode.eq_ignore_ascii_case("CHERRY");
+
+        if is_aram {
+            for s in my_team.iter_mut().chain(their_team.iter_mut()) {
+                s.position = "ARAM".to_string();
+                s.position_cn = "极地大乱斗".to_string();
+            }
+        } else if is_arena {
+            for s in my_team.iter_mut().chain(their_team.iter_mut()) {
+                s.position = "ARENA".to_string();
+                s.position_cn = "斗魂竞技场".to_string();
+            }
+        } else {
+            // Infer 5v5 distinct lane positions based on selectedPosition, Smite, and champion
+            assign_team_positions(&mut my_team);
+            assign_team_positions(&mut their_team);
+        }
 
         let mut inputs = Vec::new();
         for s in &my_team {

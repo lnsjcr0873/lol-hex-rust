@@ -54,10 +54,14 @@ where
         }
         NumOrStr::Int(i) => Ok(i as f64),
         NumOrStr::Str(s) => {
-            let cleaned = s.trim().trim_end_matches('%').replace(',', "");
-            let val = cleaned.parse::<f64>().unwrap_or(0.0);
+            let trimmed = s.trim();
+            let has_percent = trimmed.contains('%');
+            let cleaned = trimmed.replace('%', "").replace(',', "");
+            let val = cleaned.trim().parse::<f64>().unwrap_or(0.0);
             if val.is_nan() || val.is_infinite() {
                 Ok(0.0)
+            } else if has_percent {
+                Ok(val / 100.0)
             } else {
                 Ok(val)
             }
@@ -298,3 +302,45 @@ pub struct TerminalItemTrio {
     #[serde(default, deserialize_with = "deserialize_i64_lenient")]
     pub games: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct MetricTest {
+        #[serde(deserialize_with = "deserialize_f64_lenient")]
+        rate: f64,
+    }
+
+    #[test]
+    fn test_deserialize_f64_lenient_percentage_scale() {
+        // Percentage strings must scale to 0.0 ~ 1.0 (divided by 100.0)
+        let m1: MetricTest = serde_json::from_str(r#"{"rate": "54.2%"}"#).unwrap();
+        assert!((m1.rate - 0.542).abs() < 1e-4);
+
+        let m2: MetricTest = serde_json::from_str(r#"{"rate": " 100% "}"#).unwrap();
+        assert!((m2.rate - 1.0).abs() < 1e-4);
+
+        let m3: MetricTest = serde_json::from_str(r#"{"rate": "0.0%"}"#).unwrap();
+        assert!((m3.rate - 0.0).abs() < 1e-4);
+
+        // Plain numbers without % must not be divided
+        let m4: MetricTest = serde_json::from_str(r#"{"rate": "0.542"}"#).unwrap();
+        assert!((m4.rate - 0.542).abs() < 1e-4);
+
+        let m5: MetricTest = serde_json::from_str(r#"{"rate": 0.542}"#).unwrap();
+        assert!((m5.rate - 0.542).abs() < 1e-4);
+
+        // Commas and invalid values
+        let m6: MetricTest = serde_json::from_str(r#"{"rate": "1,250.5"}"#).unwrap();
+        assert!((m6.rate - 1250.5).abs() < 1e-4);
+
+        let m7: MetricTest = serde_json::from_str(r#"{"rate": null}"#).unwrap();
+        assert_eq!(m7.rate, 0.0);
+
+        let m8: MetricTest = serde_json::from_str(r#"{"rate": "NaN"}"#).unwrap();
+        assert_eq!(m8.rate, 0.0);
+    }
+}
+

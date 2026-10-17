@@ -221,12 +221,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_draft_sig = String::new();
         let mut cached_ranked_data: Option<crate::overlay::RankedOverlayData> = None;
         let mut last_applied_runes_cid = 0i64;
+        let mut swapped_bench_cids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let ready_check_accepting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
 
-            // 0. Auto-Accept Matchmaking Ready Check
+            // 0. Auto-Accept Matchmaking Ready Check (decoupled to avoid blocking main loop)
             if phase == "ReadyCheck" {
                 let cfg = config_bg.get().await;
                 if cfg.auto_accept_match {
@@ -235,27 +237,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let state = rc.get("state").and_then(|v| v.as_str()).unwrap_or("");
                         if player_resp != "Accepted" && player_resp != "Declined" && state == "InProgress" {
                             let delay = cfg.auto_accept_delay_seconds.clamp(0, 10);
-                            if delay > 0 {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
-                            }
-                            let cur_phase = lcu_bg.get_gameflow_phase().await;
-                            if cur_phase == "ReadyCheck" {
-                                let success = lcu_bg.accept_ready_check().await;
-                                if success {
-                                    tracing::info!("⚡ [HexBrain LCU] 对局已就绪！已自动为您确认接受对局 (延迟 {} 秒)", delay);
-                                    ws_bg.send_event("auto_accept", serde_json::json!({
-                                        "status": "accepted",
-                                        "delaySeconds": delay
-                                    }));
-                                }
+                            if !ready_check_accepting.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                                let lcu_c = lcu_bg.clone();
+                                let ws_c = ws_bg.clone();
+                                let flag = ready_check_accepting.clone();
+                                tokio::spawn(async move {
+                                    if delay > 0 {
+                                        tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                                    }
+                                    let cur_phase = lcu_c.get_gameflow_phase().await;
+                                    if cur_phase == "ReadyCheck" {
+                                        let success = lcu_c.accept_ready_check().await;
+                                        if success {
+                                            tracing::info!("⚡ [HexBrain LCU] 对局已就绪！已自动为您确认接受对局 (延迟 {} 秒)", delay);
+                                            ws_c.send_event("auto_accept", serde_json::json!({
+                                                "status": "accepted",
+                                                "delaySeconds": delay
+                                            }));
+                                        }
+                                    }
+                                    flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                                });
                             }
                         }
                     }
                 }
+            } else {
+                ready_check_accepting.store(false, std::sync::atomic::Ordering::SeqCst);
             }
 
             if phase != "ChampSelect" {
                 last_applied_runes_cid = 0;
+                swapped_bench_cids.clear();
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();
                 }
@@ -321,6 +334,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if !my_cid_str.is_empty() && my_cid_str == *pref_id {
                                         break;
                                     }
+                                    if swapped_bench_cids.contains(pref_id) {
+                                        continue;
+                                    }
                                     let on_bench = bench.iter().any(|b| {
                                         b.get("championId")
                                             .map(|v| match v {
@@ -332,6 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                     if on_bench {
                                         if lcu_bg.swap_bench_champion(pref_id).await {
+                                            swapped_bench_cids.insert(pref_id.clone());
                                             let pref_name = db_bg.resolve_hero_name(pref_id).unwrap_or_else(|| format!("英雄{}", pref_id));
                                             tracing::info!("⚡ [HexBrain ARAM] 心愿英雄已出现在待选席！已极速为您秒抢：{}", pref_name);
                                             ws_bg.send_event("auto_swap_bench", serde_json::json!({
@@ -374,7 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if let Ok(cid_i64) = local.champion_id.parse::<i64>() {
                                             if cid_i64 > 0 && cid_i64 != last_applied_runes_cid {
                                                 last_applied_runes_cid = cid_i64;
-                                                let (success, msg) = lcu_bg.do_apply_runes_and_spells(&db_bg, cid_i64).await;
+                                                let (success, msg) = lcu_bg.do_apply_runes_and_spells(&db_bg, cid_i64, &local.position).await;
                                                 if success {
                                                     tracing::info!("⚡ [HexBrain LCU] 已自动为【{}】配置版本推荐符文天赋与召唤师技能", local.champion_name);
                                                     ws_bg.send_event("auto_apply_runes", serde_json::json!({
@@ -535,10 +552,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         let current_lvl = live_stats.level;
-                        let is_milestone = if last_level == 0 {
-                            matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
-                        } else if current_lvl > 0 && current_lvl != last_level {
-                            matches!(current_lvl, 3 | 7 | 11 | 15)
+                        let is_hextech_mode = live_stats.game_mode.eq_ignore_ascii_case("CHERRY")
+                            || live_stats.game_mode.eq_ignore_ascii_case("KIWI")
+                            || live_stats.game_mode.eq_ignore_ascii_case("SWIFTPLAY")
+                            || live_stats.map_number == 30;
+
+                        let is_milestone = if is_hextech_mode {
+                            if last_level == 0 {
+                                matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
+                            } else if current_lvl > last_level {
+                                [3, 7, 11, 15].iter().any(|&m| last_level < m && current_lvl >= m)
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         };
@@ -574,7 +600,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &assigned_pos,
                         live_stats.gold,
                         &live_stats.current_items,
-                        &[],
+                        &live_stats.active_augments,
                         &live_stats.enemy_team,
                         live_stats.game_time,
                     ).await;
@@ -667,7 +693,7 @@ mod tests {
 
         let json1 = r#"{"rate": "54.2%", "count": "1,250"}"#;
         let s1: Sample = serde_json::from_str(json1).unwrap();
-        assert!((s1.rate - 54.2).abs() < 1e-4);
+        assert!((s1.rate - 0.542).abs() < 1e-4);
         assert_eq!(s1.count, 1250);
 
         let json2 = r#"{"rate": null, "count": "15.0"}"#;

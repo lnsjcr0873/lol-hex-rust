@@ -33,11 +33,45 @@ impl HexItemSynergyEngine {
             }
         }
 
-        let is_ap_synergy = aug_text.contains("法术") || aug_text.contains("珠光") || aug_text.contains("AP") || aug_text.contains("巫师");
-        let is_ad_crit_synergy = aug_text.contains("暴击") || aug_text.contains("无尽") || aug_text.contains("攻击力") || aug_text.contains("刃");
-        let is_as_onhit_synergy = aug_text.contains("攻速") || aug_text.contains("攻击特效") || aug_text.contains("双重");
-        let is_tank_synergy = aug_text.contains("生命值") || aug_text.contains("护甲") || aug_text.contains("魔抗") || aug_text.contains("巨像");
-        let is_haste_synergy = aug_text.contains("技能急速") || aug_text.contains("冷却");
+        let is_ap_synergy = aug_text.contains("法术")
+            || aug_text.contains("法强")
+            || aug_text.contains("法术强度")
+            || aug_text.contains("法穿")
+            || aug_text.contains("魔法伤害")
+            || aug_text.contains("珠光")
+            || aug_text.contains("AP")
+            || aug_text.contains("巫师")
+            || aug_text.contains("帽子")
+            || aug_text.contains("秘术");
+        let is_ad_crit_synergy = aug_text.contains("暴击")
+            || aug_text.contains("无尽")
+            || aug_text.contains("攻击力")
+            || aug_text.contains("刃")
+            || aug_text.contains("穿甲")
+            || aug_text.contains("物理伤害")
+            || aug_text.contains("暴伤")
+            || aug_text.contains("暴击率");
+        let is_as_onhit_synergy = aug_text.contains("攻速")
+            || aug_text.contains("攻击速度")
+            || aug_text.contains("攻击特效")
+            || aug_text.contains("特效")
+            || aug_text.contains("双重")
+            || aug_text.contains("附带")
+            || aug_text.contains("普攻");
+        let is_tank_synergy = aug_text.contains("生命值")
+            || aug_text.contains("护甲")
+            || aug_text.contains("魔抗")
+            || aug_text.contains("魔法抗性")
+            || aug_text.contains("巨像")
+            || aug_text.contains("减伤")
+            || aug_text.contains("最大生命")
+            || aug_text.contains("坦度")
+            || aug_text.contains("坚韧");
+        let is_haste_synergy = aug_text.contains("技能急速")
+            || aug_text.contains("冷却")
+            || aug_text.contains("急速")
+            || aug_text.contains("冷却缩减")
+            || aug_text.contains("CD");
 
         for it in candidate_items {
             let mut c = it.clone();
@@ -49,11 +83,11 @@ impl HexItemSynergyEngine {
             let tags = ENGINE_META.item_feature_tags.get(&iid).unwrap_or(&empty_tags);
 
             let mut synergy_bonus = 0.0;
-            if is_ap_synergy && tags.iter().any(|t| t == "AP" || t == "MAGIC_PEN") {
+            if is_ap_synergy && tags.iter().any(|t| t == "AP" || t == "MAGIC_PEN" || t == "ABILITY_POWER") {
                 synergy_bonus += 12.0 * weight;
                 c["hasAugmentSynergy"] = Value::Bool(true);
             }
-            if is_ad_crit_synergy && tags.iter().any(|t| t == "CRIT" || t == "AD") {
+            if is_ad_crit_synergy && tags.iter().any(|t| t == "CRIT" || t == "AD" || t == "ARMOR_PEN" || t == "LETHALITY") {
                 synergy_bonus += 12.0 * weight;
                 c["hasAugmentSynergy"] = Value::Bool(true);
             }
@@ -61,7 +95,7 @@ impl HexItemSynergyEngine {
                 synergy_bonus += 12.0 * weight;
                 c["hasAugmentSynergy"] = Value::Bool(true);
             }
-            if is_tank_synergy && tags.iter().any(|t| t == "TANK" || t == "ARMOR" || t == "MR" || t == "HEALTH" || t == "HEAVY_HP") {
+            if is_tank_synergy && tags.iter().any(|t| t == "TANK" || t == "ARMOR" || t == "MR" || t == "MAGIC_RESIST" || t == "HEALTH" || t == "HEAVY_HP" || t == "HP_STACK") {
                 synergy_bonus += 12.0 * weight;
                 c["hasAugmentSynergy"] = Value::Bool(true);
             }
@@ -129,5 +163,68 @@ mod tests {
         let cap = reranked.iter().find(|it| it["itemId"] == 3089).unwrap();
         assert_eq!(cap["hasAugmentSynergy"], true);
         assert!(cap["tacticalScore"].as_f64().unwrap() >= 62.0); // 50.0 + 12.0
+    }
+
+    #[test]
+    fn test_rerank_items_tank_synergy_with_chinese_description() {
+        let active_augments = vec![json!({
+            "name": "巨像之力",
+            "description": "提供大量生命值与护甲坦度，提升生存能力"
+        })];
+
+        // 3075 = Thornmail (has ARMOR, TANK)
+        let candidate_items = vec![
+            json!({ "itemId": "3075", "tacticalScore": 50.0 }),
+            json!({ "itemId": "3089", "tacticalScore": 50.0 }),
+        ];
+
+        let reranked = HexItemSynergyEngine::rerank_items_with_synergy(
+            &candidate_items,
+            &active_augments,
+            &HashSet::new(),
+            "14",
+            1.0,
+            true,
+        );
+
+        let thornmail = reranked.iter().find(|it| it["itemId"] == "3075").unwrap();
+        assert_eq!(thornmail["hasAugmentSynergy"], true);
+        assert!(thornmail["tacticalScore"].as_f64().unwrap() >= 62.0);
+    }
+
+    #[test]
+    fn test_rerank_items_ad_crit_and_haste_synergies() {
+        let active_augments = vec![
+            json!({
+                "name": "战争律动",
+                "description": "攻击力提升且暴击造成致命撕裂"
+            }),
+            json!({
+                "name": "极速流转",
+                "description": "获得额外技能急速与冷却缩减"
+            }),
+        ];
+
+        let candidate_items = vec![
+            json!({ "itemId": "3031", "tacticalScore": 50.0 }), // Infinity Edge (CRIT, AD)
+            json!({ "itemId": "3158", "tacticalScore": 50.0 }), // Ionian Boots (ABILITY_HASTE)
+        ];
+
+        let reranked = HexItemSynergyEngine::rerank_items_with_synergy(
+            &candidate_items,
+            &active_augments,
+            &HashSet::new(),
+            "238",
+            1.0,
+            true,
+        );
+
+        let ie = reranked.iter().find(|it| it["itemId"] == "3031").unwrap();
+        assert_eq!(ie["hasAugmentSynergy"], true);
+        assert!(ie["tacticalScore"].as_f64().unwrap() >= 62.0);
+
+        let boots = reranked.iter().find(|it| it["itemId"] == "3158").unwrap();
+        assert_eq!(boots["hasAugmentSynergy"], true);
+        assert!(boots["tacticalScore"].as_f64().unwrap() >= 58.0);
     }
 }

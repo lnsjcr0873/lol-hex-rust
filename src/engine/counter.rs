@@ -15,24 +15,38 @@ pub struct ThreatProfile {
     pub summary: String,
 }
 
+pub const TAG_ABILITY_POWER: &str = "ABILITY_POWER";
+pub const TAG_MAGIC_RESIST: &str = "MAGIC_RESIST";
+pub const TAG_ARMOR: &str = "ARMOR";
+pub const TAG_ATTACK_DAMAGE: &str = "AD";
+pub const TAG_CRIT: &str = "CRIT";
+pub const TAG_LETHALITY: &str = "LETHALITY";
+pub const TAG_ATTACK_SPEED: &str = "ATTACK_SPEED";
+pub const TAG_HEAVY_HP: &str = "HEAVY_HP";
+pub const TAG_ABILITY_HASTE: &str = "ABILITY_HASTE";
+
 pub struct CounterItemEngine;
 
 impl CounterItemEngine {
     pub fn find_tactical_traits(cname: &str) -> Option<&'static Value> {
-        let trimmed = cname.trim();
+        let mut trimmed = cname.trim();
         if trimmed.is_empty() {
             return None;
+        }
+        if let Some(stripped) = trimmed.strip_prefix("game_character_displayname_") {
+            trimmed = stripped;
         }
         if let Some(v) = ENGINE_META.champion_tactical_traits.get(trimmed) {
             return Some(v);
         }
         let clean = trimmed.replace([' ', '.', '\'', '_'], "").to_lowercase();
         for (k, v) in &ENGINE_META.champion_tactical_traits {
-            if k.to_lowercase() == clean || k.replace([' ', '.', '\'', '_'], "").to_lowercase() == clean {
+            let k_clean = k.replace([' ', '.', '\'', '_'], "").to_lowercase();
+            if k.eq_ignore_ascii_case(trimmed) || k_clean == clean {
                 return Some(v);
             }
             if let Some(n) = v.get("name").and_then(|v| v.as_str()) {
-                if n == trimmed || n.contains(trimmed) || trimmed.contains(n) {
+                if n == trimmed || n.eq_ignore_ascii_case(trimmed) {
                     return Some(v);
                 }
             }
@@ -78,13 +92,13 @@ impl CounterItemEngine {
                                         tank_names.push(disp_name);
                                     }
                                 }
-                                "SHIELD_HEAVY" => {
+                                "SHIELD_HEAVY" | "SHIELD" => {
                                     profile.has_shield_heavy = true;
                                     if !shield_names.contains(&disp_name) {
                                         shield_names.push(disp_name);
                                     }
                                 }
-                                "HIGH_CC" => profile.has_high_cc = true,
+                                "HIGH_CC" | "HARD_CC" => profile.has_high_cc = true,
                                 _ => {}
                             }
                         }
@@ -134,11 +148,17 @@ impl CounterItemEngine {
         threat: &ThreatProfile,
         arch: &ArchetypeInfo,
     ) -> HashSet<String> {
-        let is_ap_oriented = arch.favored_tags.iter().any(|t| t == "AP" || t == "MAGIC")
-            || arch.forbidden_tags.iter().any(|t| t == "AD" || t == "CRIT");
-        let is_ad_oriented = arch.favored_tags.iter().any(|t| t == "AD" || t == "CRIT" || t == "LETHALITY" || t == "ATTACK_SPEED")
-            || arch.forbidden_tags.iter().any(|t| t == "AP");
-        let is_tank_oriented = arch.favored_tags.iter().any(|t| t == "TANK" || t == "ARMOR" || t == "MAGIC_RESIST");
+        let is_ap_oriented = arch.favored_tags.iter().any(|t| {
+            t == TAG_ABILITY_POWER || t == "AP" || t == "MAGIC" || t == "AP_BURST"
+        }) || arch.forbidden_tags.iter().any(|t| t == TAG_ATTACK_DAMAGE || t == TAG_CRIT);
+
+        let is_ad_oriented = arch.favored_tags.iter().any(|t| {
+            t == TAG_ATTACK_DAMAGE || t == TAG_CRIT || t == TAG_LETHALITY || t == TAG_ATTACK_SPEED
+        }) || arch.forbidden_tags.iter().any(|t| t == TAG_ABILITY_POWER || t == "AP");
+
+        let is_tank_oriented = arch.favored_tags.iter().any(|t| {
+            t == "TANK" || t == TAG_ARMOR || t == TAG_MAGIC_RESIST || t == "MR" || t == TAG_HEAVY_HP
+        });
 
         let mut candidate_ids = Vec::new();
 
@@ -238,6 +258,32 @@ impl CounterItemEngine {
             out.push(c);
         }
 
+        // Actively inject urgent counter items that are not already present in the candidate pool
+        let mut sorted_urgent: Vec<String> = urgent.into_iter().collect();
+        sorted_urgent.sort();
+
+        for urgent_id in &sorted_urgent {
+            let already_present = out.iter().any(|it| {
+                let id = it.get("itemId")
+                    .or_else(|| it.get("id"))
+                    .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                    .unwrap_or_default();
+                &id == urgent_id
+            });
+
+            if !already_present && !_owned.contains(urgent_id) {
+                let item_name = crate::data::recipe_data::resolve_item_name(urgent_id);
+                out.push(serde_json::json!({
+                    "itemId": urgent_id,
+                    "itemName": item_name,
+                    "tacticalScore": ((60.0 + (15.0 * intensity)) * 10.0).round() / 10.0,
+                    "isCounterItem": true,
+                    "counterReason": threat.summary.clone(),
+                    "isUrgentInjected": true
+                }));
+            }
+        }
+
         out
     }
 }
@@ -303,5 +349,70 @@ mod tests {
         let morello = out.iter().find(|it| it["itemId"] == 3165).unwrap();
         assert_eq!(morello["isCounterItem"], true);
         assert_eq!(morello["tacticalScore"], 75.0); // 60.0 + 15.0
+    }
+
+    #[test]
+    fn test_find_tactical_traits_vi_exact_matching_avoids_substring_false_positives() {
+        // "Vi" should NOT match "Viktor", "Sivir", or "Anivia"
+        // In champion_tactical_traits, "Vi" is not explicitly defined, so it must return None
+        // rather than false-matching Viktor or another champion.
+        let vi_trait = CounterItemEngine::find_tactical_traits("Vi");
+        assert!(vi_trait.is_none(), "Short name 'Vi' must NOT substring-match Viktor or Sivir");
+
+        // Exact match for Soraka works
+        let soraka = CounterItemEngine::find_tactical_traits("Soraka");
+        assert!(soraka.is_some());
+        assert_eq!(soraka.unwrap().get("name").unwrap().as_str().unwrap(), "众星之子");
+    }
+
+    #[test]
+    fn test_analyze_enemy_threats_shen_shield_trait() {
+        let enemies = vec![json!({ "championName": "Shen" })];
+        let threat = CounterItemEngine::analyze_enemy_threats(&enemies);
+        assert!(threat.has_shield_heavy, "Shen's SHIELD trait must trigger has_shield_heavy");
+        assert!(threat.summary.contains("多重护盾"));
+    }
+
+    #[test]
+    fn test_apply_counter_recommendations_urgent_injection_when_missing() {
+        let threat = ThreatProfile {
+            has_shield_heavy: true,
+            summary: "多重护盾需巨蛇破盾".to_string(),
+            ..Default::default()
+        };
+
+        let arch = ArchetypeInfo {
+            favored_tags: vec!["AD".to_string(), "LETHALITY".to_string()],
+            forbidden_tags: vec!["AP".to_string()],
+            ..Default::default()
+        };
+
+        // Candidates lack Serpent's Fang (6695)
+        let candidate_items = vec![
+            json!({
+                "itemId": "3142", // Youmuu's
+                "itemName": "幽梦之灵",
+                "tacticalScore": 60.0
+            }),
+        ];
+
+        let out = CounterItemEngine::apply_counter_recommendations(
+            &candidate_items,
+            &threat,
+            &arch,
+            &HashSet::new(),
+            1.0,
+            true,
+        );
+
+        // Serpent's Fang (6695) should be injected
+        let serpent = out.iter().find(|it| {
+            it.get("itemId").and_then(|v| v.as_str()) == Some("6695")
+        });
+        assert!(serpent.is_some(), "Serpent's Fang (6695) must be actively injected into candidates");
+        let serpent = serpent.unwrap();
+        assert_eq!(serpent["isCounterItem"], true);
+        assert_eq!(serpent["isUrgentInjected"], true);
+        assert_eq!(serpent["tacticalScore"], 75.0);
     }
 }

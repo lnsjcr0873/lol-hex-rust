@@ -93,6 +93,8 @@ pub struct LcuClient {
     in_flight_details: Arc<std::sync::Mutex<HashSet<u64>>>,
     in_flight_timelines: Arc<std::sync::Mutex<HashSet<u64>>>,
     cache_notify: Arc<tokio::sync::Notify>,
+    negative_match_details: Arc<std::sync::Mutex<HashMap<u64, std::time::Instant>>>,
+    negative_match_timelines: Arc<std::sync::Mutex<HashMap<u64, std::time::Instant>>>,
     opgg: Arc<RwLock<Option<Arc<crate::crawler::OpggClient>>>>,
 }
 
@@ -117,6 +119,23 @@ impl Default for LcuClient {
     }
 }
 
+/// Percent-encodes a path segment (such as chat room ID) in compliance with RFC 3986
+fn percent_encode_path_segment(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len() * 3);
+    for b in input.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(encoded, "%{:02X}", b);
+            }
+        }
+    }
+    encoded
+}
+
 impl LcuClient {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
@@ -137,6 +156,8 @@ impl LcuClient {
             in_flight_details: Arc::new(std::sync::Mutex::new(HashSet::new())),
             in_flight_timelines: Arc::new(std::sync::Mutex::new(HashSet::new())),
             cache_notify: Arc::new(tokio::sync::Notify::new()),
+            negative_match_details: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            negative_match_timelines: Arc::new(std::sync::Mutex::new(HashMap::new())),
             opgg: Arc::new(RwLock::new(None)),
         }
     }
@@ -162,6 +183,26 @@ impl LcuClient {
         self.cache_notify.notify_waiters();
     }
 
+    pub fn is_negative_cached_detail(&self, game_id: u64) -> bool {
+        if let Ok(mut map) = self.negative_match_details.lock() {
+            if let Some(timestamp) = map.get(&game_id) {
+                if timestamp.elapsed() < std::time::Duration::from_secs(30) {
+                    return true;
+                } else {
+                    map.remove(&game_id);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn insert_negative_cached_detail(&self, game_id: u64) {
+        if let Ok(mut map) = self.negative_match_details.lock() {
+            map.insert(game_id, std::time::Instant::now());
+        }
+        self.cache_notify.notify_waiters();
+    }
+
     pub fn get_cached_match_timeline(&self, game_id: u64) -> Option<Value> {
         self.match_timeline_cache.lock().ok()?.get(&game_id)
     }
@@ -173,11 +214,37 @@ impl LcuClient {
         self.cache_notify.notify_waiters();
     }
 
+    pub fn is_negative_cached_timeline(&self, game_id: u64) -> bool {
+        if let Ok(mut map) = self.negative_match_timelines.lock() {
+            if let Some(timestamp) = map.get(&game_id) {
+                if timestamp.elapsed() < std::time::Duration::from_secs(30) {
+                    return true;
+                } else {
+                    map.remove(&game_id);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn insert_negative_cached_timeline(&self, game_id: u64) {
+        if let Ok(mut map) = self.negative_match_timelines.lock() {
+            map.insert(game_id, std::time::Instant::now());
+        }
+        self.cache_notify.notify_waiters();
+    }
+
     pub fn clear_lru_caches(&self) {
         if let Ok(mut c) = self.match_detail_cache.lock() {
             c.clear();
         }
         if let Ok(mut c) = self.match_timeline_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.negative_match_details.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.negative_match_timelines.lock() {
             c.clear();
         }
     }
@@ -195,7 +262,7 @@ impl LcuClient {
                 return true;
             }
         }
-        if let Some(creds) = LcuConnector::sniff_credentials() {
+        if let Some(creds) = LcuConnector::sniff_credentials_async().await {
             let mut guard = self.creds.write().await;
             *guard = Some(creds);
             self.consecutive_failures.store(0, Ordering::Relaxed);
@@ -272,13 +339,17 @@ impl LcuClient {
     }
 
     /// Handles an HTTP/HTTPS response candidate when an HTTP fallback will immediately follow.
-    /// Does not increment consecutive_failures or invalidate credentials on error, ensuring
-    /// failures are only recorded if both HTTPS and HTTP fallback fail.
+    /// Invalidates credentials on 401 Unauthorized so that restarted/expired sessions trigger re-auth.
+    /// Does not increment consecutive_failures on connection error, ensuring failures are only recorded
+    /// if all fallback candidates fail.
     async fn handle_response_fallback_candidate(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
         match res_result {
             Ok(res) => {
                 let status = res.status();
-                if status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    self.invalidate_credentials().await;
+                    None
+                } else if status.is_success() {
                     self.record_success();
                     Some(res)
                 } else {
@@ -582,18 +653,38 @@ impl LcuClient {
         &self,
         db: &crate::data::loader::Database,
         champion_id: i64,
+        position: &str,
     ) -> (bool, String) {
         if !self.is_connected().await {
             return (false, "英雄联盟客户端未连接，无法应用符文与技能".to_string());
         }
 
         let cid_str = champion_id.to_string();
+        let target_pos = match position.to_uppercase().as_str() {
+            "TOP" => "top",
+            "JUNGLE" => "jungle",
+            "MID" | "MIDDLE" => "mid",
+            "ADC" | "BOT" | "BOTTOM" => "adc",
+            "SUPPORT" | "SUP" | "UTILITY" => "support",
+            _ => "all",
+        };
+
         let cached_opgg = self.get_opgg().await;
         let detail = if let Some(ref client) = cached_opgg {
-            client.get_champion_detail(&cid_str, "all").await
+            let res = client.get_champion_detail(&cid_str, target_pos).await;
+            if res.is_none() && target_pos != "all" {
+                client.get_champion_detail(&cid_str, "all").await
+            } else {
+                res
+            }
         } else {
             let local_client = crate::crawler::OpggClient::new();
-            local_client.get_champion_detail(&cid_str, "all").await
+            let res = local_client.get_champion_detail(&cid_str, target_pos).await;
+            if res.is_none() && target_pos != "all" {
+                local_client.get_champion_detail(&cid_str, "all").await
+            } else {
+                res
+            }
         };
         let mut perk_applied = false;
         let mut spells_applied = false;
@@ -626,7 +717,12 @@ impl LcuClient {
             if let Some(spells) = detail.get("summonerSpells").and_then(|s| s.as_array()) {
                 if let Some(first_pair) = spells.first().and_then(|p| p.as_array()) {
                     if first_pair.len() >= 2 {
-                        if let (Some(s1), Some(s2)) = (first_pair[0].as_i64(), first_pair[1].as_i64()) {
+                        if let (Some(s1), Some(mut s2)) = (first_pair[0].as_i64(), first_pair[1].as_i64()) {
+                            let is_jungle = position.eq_ignore_ascii_case("JUNGLE") || target_pos == "jungle";
+                            // Protect Smite (spell 11) for junglers:
+                            if is_jungle && s1 != 11 && s2 != 11 {
+                                s2 = 11;
+                            }
                             if s1 > 0 && s2 > 0 {
                                 spells_applied = self.apply_summoner_spells(s1, s2).await;
                             }
@@ -656,9 +752,10 @@ impl LcuClient {
             None => return Vec::new(),
         };
 
+        let encoded_room_id = percent_encode_path_segment(chat_room_id);
         let url = format!(
             "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/participants",
-            port, chat_room_id
+            port, encoded_room_id
         );
         if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
             if let Ok(list) = res.json::<Vec<Value>>().await {
@@ -695,7 +792,14 @@ impl LcuClient {
             "https://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
             port, puuid, beg_index, end_index
         );
-        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&https_url).headers(headers.clone()).send().await).await {
+        let mut any_connect_err = false;
+        let https_res = self.client.get(&https_url).headers(headers.clone()).send().await;
+        if let Err(ref e) = https_res {
+            if e.is_connect() {
+                any_connect_err = true;
+            }
+        }
+        if let Some(res) = self.handle_response_fallback_candidate(https_res).await {
             if let Ok(val) = res.json::<Value>().await {
                 if val.get("games").is_some() || val.get("matches").is_some() {
                     return Some(val);
@@ -707,7 +811,14 @@ impl LcuClient {
             "http://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
             port, puuid, beg_index, end_index
         );
-        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&http_url).headers(headers.clone()).send().await).await {
+        let mut http_connect_err = false;
+        let http_res = self.client.get(&http_url).headers(headers.clone()).send().await;
+        if let Err(ref e) = http_res {
+            if e.is_connect() {
+                http_connect_err = true;
+            }
+        }
+        if let Some(res) = self.handle_response_fallback_candidate(http_res).await {
             if let Ok(val) = res.json::<Value>().await {
                 if val.get("games").is_some() || val.get("matches").is_some() {
                     return Some(val);
@@ -746,6 +857,8 @@ impl LcuClient {
                     }
                 }
             }
+        } else if any_connect_err && http_connect_err {
+            self.record_failure().await;
         }
         None
     }
@@ -901,6 +1014,9 @@ impl LcuClient {
 
         let parsed_id = game_id.parse::<u64>().ok();
         if let Some(gid) = parsed_id {
+            if self.is_negative_cached_detail(gid) {
+                return None;
+            }
             if let Some(cached) = self.get_cached_match_detail(gid) {
                 return Some(cached);
             }
@@ -908,6 +1024,9 @@ impl LcuClient {
 
         let _in_flight_guard = if let Some(gid) = parsed_id {
             loop {
+                if self.is_negative_cached_detail(gid) {
+                    return None;
+                }
                 if let Some(cached) = self.get_cached_match_detail(gid) {
                     return Some(cached);
                 }
@@ -922,6 +1041,9 @@ impl LcuClient {
                 };
                 if is_in_flight {
                     let notified = self.cache_notify.notified();
+                    if self.is_negative_cached_detail(gid) {
+                        return None;
+                    }
                     if let Some(cached) = self.get_cached_match_detail(gid) {
                         return Some(cached);
                     }
@@ -938,12 +1060,39 @@ impl LcuClient {
             None
         };
 
-        let port = self.get_port().await?;
-        let headers = self.get_auth_header().await?;
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => {
+                if let Some(gid) = parsed_id {
+                    self.insert_negative_cached_detail(gid);
+                }
+                return None;
+            }
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => {
+                if let Some(gid) = parsed_id {
+                    self.insert_negative_cached_detail(gid);
+                }
+                return None;
+            }
+        };
 
-        let _permit = self.concurrency_limiter.acquire().await.ok()?;
+        let _permit = match self.concurrency_limiter.acquire().await {
+            Ok(p) => p,
+            Err(_) => {
+                if let Some(gid) = parsed_id {
+                    self.insert_negative_cached_detail(gid);
+                }
+                return None;
+            }
+        };
 
         if let Some(gid) = parsed_id {
+            if self.is_negative_cached_detail(gid) {
+                return None;
+            }
             if let Some(cached) = self.get_cached_match_detail(gid) {
                 return Some(cached);
             }
@@ -953,7 +1102,7 @@ impl LcuClient {
             "https://127.0.0.1:{}/lol-match-history/v1/games/{}",
             port, game_id
         );
-        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
             Some(r) => Some(r),
             None => {
                 let http_url = format!(
@@ -962,8 +1111,26 @@ impl LcuClient {
                 );
                 self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
             }
-        }?;
-        let val = res.json::<Value>().await.ok()?;
+        };
+
+        let res = match res_opt {
+            Some(r) => r,
+            None => {
+                if let Some(gid) = parsed_id {
+                    self.insert_negative_cached_detail(gid);
+                }
+                return None;
+            }
+        };
+        let val = match res.json::<Value>().await {
+            Ok(v) => v,
+            Err(_) => {
+                if let Some(gid) = parsed_id {
+                    self.insert_negative_cached_detail(gid);
+                }
+                return None;
+            }
+        };
         if let Some(gid) = parsed_id {
             self.insert_cached_match_detail(gid, val.clone());
         }
@@ -979,11 +1146,18 @@ impl LcuClient {
             return None;
         }
 
+        if self.is_negative_cached_timeline(game_id) {
+            return None;
+        }
+
         if let Some(cached) = self.get_cached_match_timeline(game_id) {
             return Some(cached);
         }
 
         let _in_flight_guard = loop {
+            if self.is_negative_cached_timeline(game_id) {
+                return None;
+            }
             if let Some(cached) = self.get_cached_match_timeline(game_id) {
                 return Some(cached);
             }
@@ -998,6 +1172,9 @@ impl LcuClient {
             };
             if is_in_flight {
                 let notified = self.cache_notify.notified();
+                if self.is_negative_cached_timeline(game_id) {
+                    return None;
+                }
                 if let Some(cached) = self.get_cached_match_timeline(game_id) {
                     return Some(cached);
                 }
@@ -1011,11 +1188,32 @@ impl LcuClient {
             }
         };
 
-        let port = self.get_port().await?;
-        let headers = self.get_auth_header().await?;
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => {
+                self.insert_negative_cached_timeline(game_id);
+                return None;
+            }
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => {
+                self.insert_negative_cached_timeline(game_id);
+                return None;
+            }
+        };
 
-        let _permit = self.concurrency_limiter.acquire().await.ok()?;
+        let _permit = match self.concurrency_limiter.acquire().await {
+            Ok(p) => p,
+            Err(_) => {
+                self.insert_negative_cached_timeline(game_id);
+                return None;
+            }
+        };
 
+        if self.is_negative_cached_timeline(game_id) {
+            return None;
+        }
         if let Some(cached) = self.get_cached_match_timeline(game_id) {
             return Some(cached);
         }
@@ -1024,7 +1222,7 @@ impl LcuClient {
             "https://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
             port, game_id
         );
-        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
             Some(r) => Some(r),
             None => {
                 let http_url = format!(
@@ -1033,8 +1231,21 @@ impl LcuClient {
                 );
                 self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
             }
-        }?;
-        let val = res.json::<Value>().await.ok()?;
+        };
+        let res = match res_opt {
+            Some(r) => r,
+            None => {
+                self.insert_negative_cached_timeline(game_id);
+                return None;
+            }
+        };
+        let val = match res.json::<Value>().await {
+            Ok(v) => v,
+            Err(_) => {
+                self.insert_negative_cached_timeline(game_id);
+                return None;
+            }
+        };
         self.insert_cached_match_timeline(game_id, val.clone());
         Some(val)
     }
@@ -1129,9 +1340,10 @@ impl LcuClient {
             None => return false,
         };
 
+        let encoded_room_id = percent_encode_path_segment(chat_room_id);
         let url = format!(
             "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/messages",
-            port, chat_room_id
+            port, encoded_room_id
         );
         let payload = json!({
             "body": message,
@@ -1358,6 +1570,74 @@ mod tests {
         assert!(!client.is_connected().await);
         assert_eq!(*client.current_phase.read().await, "None");
         assert_eq!(*client.current_session.read().await, Value::Null);
+    }
+
+    #[test]
+    fn test_percent_encode_path_segment() {
+        assert_eq!(percent_encode_path_segment("simple"), "simple");
+        assert_eq!(percent_encode_path_segment("room#123"), "room%23123");
+        assert_eq!(percent_encode_path_segment("room?key=val"), "room%3Fkey%3Dval");
+        assert_eq!(percent_encode_path_segment("hello world"), "hello%20world");
+        assert_eq!(
+            percent_encode_path_segment("champ-select-123@champ-select.lol.riotgames.com"),
+            "champ-select-123%40champ-select.lol.riotgames.com"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_negative_caching_detail_and_timeline() {
+        let client = LcuClient::new();
+        assert!(!client.is_negative_cached_detail(12345));
+        assert!(!client.is_negative_cached_timeline(12345));
+
+        client.insert_negative_cached_detail(12345);
+        client.insert_negative_cached_timeline(12345);
+
+        assert!(client.is_negative_cached_detail(12345));
+        assert!(client.is_negative_cached_timeline(12345));
+
+        // When cleared, negative caches are emptied
+        client.clear_lru_caches();
+        assert!(!client.is_negative_cached_detail(12345));
+        assert!(!client.is_negative_cached_timeline(12345));
+    }
+
+    #[tokio::test]
+    async fn test_fallback_candidate_unauthorized_invalidates() {
+        let app = axum::Router::new().route("/test-401", axum::routing::get(|| async {
+            axum::http::StatusCode::UNAUTHORIZED
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = LcuClient::new();
+        client.set_credentials(port, "token").await;
+        assert!(client.is_connected().await);
+
+        let url = format!("http://127.0.0.1:{}/test-401", port);
+        let res = client.client.get(&url).send().await;
+        let candidate_res = client.handle_response_fallback_candidate(res).await;
+        assert!(candidate_res.is_none());
+        assert!(!client.is_connected().await);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_match_history_batch_connection_failure_records_failure() {
+        let client = LcuClient::new();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        client.set_credentials(dead_port, "dummy_token").await;
+        assert_eq!(client.get_consecutive_failures(), 0);
+
+        let headers = client.get_auth_header().await.unwrap();
+        let result = client.fetch_match_history_batch(dead_port, &headers, "some-other-puuid", 0, 10).await;
+        assert!(result.is_none());
+        assert!(client.get_consecutive_failures() > 0);
     }
 }
 

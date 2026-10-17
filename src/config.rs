@@ -144,9 +144,13 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         }
     }
 
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let pid = std::process::id();
+    let cnt = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let tmp_path = match path.file_name() {
-        Some(fname) => path.with_file_name(format!("{}.tmp", fname.to_string_lossy())),
-        None => path.with_extension("tmp"),
+        Some(fname) => path.with_file_name(format!("{}.tmp_{}_{}", fname.to_string_lossy(), pid, cnt)),
+        None => path.with_extension(format!("tmp_{}_{}", pid, cnt)),
     };
 
     {
@@ -339,9 +343,13 @@ mod tests {
         assert_eq!(parsed.auto_accept_match, true);
         assert_eq!(parsed.auto_accept_delay_seconds, 5);
 
-        // Ensure temp file was cleaned up / renamed
-        let tmp_path = temp_dir.join("config.json.tmp");
-        assert!(!tmp_path.exists());
+        // Ensure temp files were cleaned up / renamed
+        if let Ok(entries) = fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                assert!(!fname.contains(".tmp"), "Temp file was not cleaned up: {}", fname);
+            }
+        }
 
         // Test corrupted 0-byte file recovery
         let corrupt_path = temp_dir.join("corrupt.json");

@@ -649,31 +649,27 @@ pub async fn get_match_history(
     };
     let resolved_end = resolved_end.min(resolved_beg.saturating_add(199));
 
-    let record = match state
+    let full_record = match state
         .history
         .fetch_and_cache_player(&target_puuid, &sum_name, &state.lcu, resolved_beg, resolved_end)
         .await
     {
-        Some(mut r) => {
-            let count = (resolved_end.saturating_add(1)).saturating_sub(resolved_beg);
-            r.matches = r.matches.into_iter().skip(resolved_beg).take(count).collect();
-            Some(r)
-        }
+        Some(r) => Some(r),
         None => {
-            if let Some(mut cached) = state.history.get_player_data_fresh(&target_puuid, std::time::Duration::from_secs(600)).await {
-                let count = (resolved_end.saturating_add(1)).saturating_sub(resolved_beg);
-                cached.matches = cached.matches.into_iter().skip(resolved_beg).take(count).collect();
-                Some(cached)
-            } else {
-                None
-            }
+            state.history.get_player_data_fresh(&target_puuid, std::time::Duration::from_secs(600)).await
         }
     };
-    let matches = record.map(|r| r.matches).unwrap_or_default();
-
-    let filtered: Vec<Value> = matches
+    let all_matches = full_record.map(|r| r.matches).unwrap_or_default();
+    let queue_matches: Vec<_> = all_matches
         .into_iter()
         .filter(|m| queue_id.map_or(true, |qid| qid == 0 || m.queue_id as i64 == qid))
+        .collect();
+
+    let count = (resolved_end.saturating_add(1)).saturating_sub(resolved_beg);
+    let paginated_matches: Vec<_> = queue_matches.into_iter().skip(resolved_beg).take(count).collect();
+
+    let filtered: Vec<Value> = paginated_matches
+        .into_iter()
         .map(|m| {
             let role_cn = match m.queue_id {
                 450 => "乱斗",
@@ -939,7 +935,7 @@ pub async fn do_apply_runes_and_spells(
     db: &lol_hex_rust::data::loader::Database,
     champion_id: i64,
 ) -> (bool, String) {
-    lcu.do_apply_runes_and_spells(db, champion_id).await
+    lcu.do_apply_runes_and_spells(db, champion_id, "all").await
 }
 
 #[tauri::command]

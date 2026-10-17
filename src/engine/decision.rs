@@ -269,7 +269,7 @@ impl DecisionEngine {
         }))
     }
 
-    fn classify_augments(raw_augments: &Value, hero_win_rate: f64) -> Value {
+    pub fn classify_augments(raw_augments: &Value, hero_win_rate: f64) -> Value {
         let mut aug_list = Vec::new();
         if let Some(arr) = raw_augments.as_array() {
             aug_list.extend(arr.clone());
@@ -297,11 +297,11 @@ impl DecisionEngine {
                 });
             let games = a.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
 
-            if delta < -0.005 && games >= 100 {
+            if delta < -0.005 {
                 traps.push(a);
-            } else if delta >= 0.035 {
+            } else if delta >= 0.035 && games >= 30 {
                 s_tier.push(a);
-            } else if delta >= 0.012 {
+            } else if delta >= 0.012 && games >= 30 {
                 a_tier.push(a);
             } else {
                 b_tier.push(a);
@@ -497,14 +497,14 @@ impl DecisionEngine {
                 score += 15.0;
             }
 
-            let is_destiny = delta >= 0.035;
+            let is_destiny = delta >= 0.035 && games >= 30;
             let is_trap = delta < -0.005;
 
             let (tier_badge, badge_label, badge_color) = if is_trap {
                 ("TRAP", "🚫 避雷陷阱 (负收益)", "rose")
             } else if is_destiny {
                 ("S", "👑 英雄天命 S 级", "emerald")
-            } else if delta >= 0.012 {
+            } else if delta >= 0.012 && games >= 30 {
                 ("A", "✨ 强势 A 级优选", "blue")
             } else {
                 ("B", "⚖️ 常规 B 级可用", "slate")
@@ -550,7 +550,7 @@ impl DecisionEngine {
         let all_traps = !candidates.is_empty()
             && candidates
                 .iter()
-                .all(|c| c.get("deltaWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0) < 0.0);
+                .all(|c| c.get("isTrap").and_then(|v| v.as_bool()).unwrap_or(false));
 
         let rationale = if let Some(ref best) = best_candidate {
             let bname = best.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -613,6 +613,7 @@ impl DecisionEngine {
             },
             "currentStage": current_stage,
             "allTrapsAlert": all_traps,
+            "allTrapsMessage": if all_traps { Some(rationale.clone()) } else { None },
             "bestChoiceId": best_candidate.as_ref().and_then(|b| b.get("augmentId").cloned()),
             "recommendationRationale": rationale,
             "rerollDecision": reroll_decision,
@@ -712,10 +713,21 @@ impl DecisionEngine {
 
         let owned_set: HashSet<String> = current_items.iter().cloned().collect();
 
-        // 1. Archetype Engine
+        // 1. Archetype Engine & Active Augment Hydration
         let active_aug_values: Vec<Value> = existing_augments
             .iter()
-            .map(|a| json!({ "name": a }))
+            .map(|a| {
+                let resolved_id = db.resolve_augment_id(a);
+                let summary = resolved_id.as_ref().and_then(|id| db.augments_map.get(id));
+                let name = summary.map(|s| s.name.clone()).unwrap_or_else(|| a.clone());
+                let description = summary.map(|s| s.description.clone()).unwrap_or_default();
+                let aug_id = resolved_id.unwrap_or_else(|| a.clone());
+                json!({
+                    "id": aug_id,
+                    "name": name,
+                    "description": description,
+                })
+            })
             .collect();
 
         let archetype_info = ArchetypeEngine::detect_archetype(
@@ -853,3 +865,134 @@ impl DecisionEngine {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_classify_augments_sample_threshold_enforcement() {
+        let augments = json!([
+            // High delta but very low sample -> must NOT be S or A tier!
+            {
+                "id": "1001",
+                "name": "极速狂暴",
+                "deltaWinRate": 0.15,
+                "games": 10
+            },
+            // High delta with sufficient sample (>= 30) -> S tier
+            {
+                "id": "1002",
+                "name": "巨像体魄",
+                "deltaWinRate": 0.04,
+                "games": 100
+            },
+            // Solid delta with sufficient sample (>= 30) -> A tier
+            {
+                "id": "1003",
+                "name": "秘术之盾",
+                "deltaWinRate": 0.02,
+                "games": 50
+            },
+            // Terrible delta but low sample (< 100) -> must NOT fall into B tier! Must be TRAP!
+            {
+                "id": "1004",
+                "name": "自戕诅咒",
+                "deltaWinRate": -0.08,
+                "games": 20
+            },
+            // Average delta -> B tier
+            {
+                "id": "1005",
+                "name": "平平无奇",
+                "deltaWinRate": 0.005,
+                "games": 200
+            }
+        ]);
+
+        let result = DecisionEngine::classify_augments(&augments, 0.50);
+
+        let s_tier = result["sTier"].as_array().unwrap();
+        let a_tier = result["aTier"].as_array().unwrap();
+        let b_tier = result["bTier"].as_array().unwrap();
+        let traps = result["traps"].as_array().unwrap();
+
+        // 1002 is S tier
+        assert!(s_tier.iter().any(|a| a["id"] == "1002"));
+        // 1001 (games = 10) must NOT be S tier
+        assert!(!s_tier.iter().any(|a| a["id"] == "1001"));
+        assert!(b_tier.iter().any(|a| a["id"] == "1001"));
+
+        // 1003 is A tier
+        assert!(a_tier.iter().any(|a| a["id"] == "1003"));
+
+        // 1004 (delta = -0.08, games = 20) must be in traps, NOT bTier
+        assert!(traps.iter().any(|a| a["id"] == "1004"));
+        assert!(!b_tier.iter().any(|a| a["id"] == "1004"));
+    }
+
+    #[test]
+    fn test_compare_augments_trap_consistency_eliminates_ui_contradiction() {
+        let db = Database::load_from_dir("data");
+
+        // When all candidates have negative delta < -0.005, all_traps is true and all cards have TRAP badge
+        // Using hero 103 (Ahri)
+        let candidates = vec!["1001".to_string(), "1002".to_string()];
+        let comp = DecisionEngine::compare_augments(&db, "103", &candidates, None, &[]);
+
+        let cards = comp.get("candidates").and_then(|v| v.as_array()).expect("candidates array missing");
+        let all_traps_flag = comp.get("allTrapsAlert").and_then(|v| v.as_bool()).expect("allTrapsAlert field missing");
+        assert_eq!(all_traps_flag, true, "Expected allTrapsAlert to be true when all candidates are negative delta");
+        assert!(comp.get("allTrapsMessage").is_some(), "Expected allTrapsMessage to be present when allTrapsAlert is true");
+        let msg = comp.get("allTrapsMessage").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(msg.contains("全陷阱警告"), "allTrapsMessage should contain full-trap warning: {}", msg);
+
+        for card in cards {
+            assert_eq!(card["isTrap"], true, "When all_traps is true, each card must have isTrap = true");
+            assert_eq!(card["tierBadge"], "TRAP", "When all_traps is true, each card must have TRAP badge");
+        }
+    }
+
+    #[test]
+    fn test_classify_augments_thresholds_and_traps() {
+        let db = Database::load_from_dir("data");
+        let candidates = vec!["1001".to_string(), "1002".to_string()];
+        let comp = DecisionEngine::compare_augments(&db, "103", &candidates, None, &[]);
+
+        let cards = comp.get("candidates").and_then(|v| v.as_array()).expect("candidates array missing");
+        assert_eq!(comp.get("allTrapsAlert").and_then(|v| v.as_bool()), Some(true));
+        assert!(comp.get("allTrapsMessage").is_some());
+        for card in cards {
+            assert_eq!(card["isTrap"], true);
+            assert_eq!(card["tierBadge"], "TRAP");
+        }
+    }
+
+    #[test]
+    fn test_get_item_recommendation_hydrates_augment_name_and_description() {
+        let db = Database::load_from_dir("data");
+        // Annie with active augment "2001" or an augment present in data
+        let existing = if let Some(first_aug) = db.augments_summary.first() {
+            vec![first_aug.id.clone()]
+        } else {
+            vec!["2001".to_string()]
+        };
+
+        let cfg = RecommendationConfig::default();
+        let rec = DecisionEngine::get_item_recommendation(
+            &db,
+            "1",
+            &[],
+            1000.0,
+            1,
+            &existing,
+            &[],
+            &cfg,
+        );
+
+        assert!(rec.get("archetype").is_some());
+        assert!(rec.get("buildPath").is_some());
+    }
+}
+

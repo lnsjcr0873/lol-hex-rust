@@ -110,21 +110,43 @@ pub fn normalize_item_id(item_id: &str) -> String {
     if tid.is_empty() {
         return "".to_string();
     }
-    if RECIPE_META.total_costs.contains_key(tid) || RECIPE_META.recipes.contains_key(tid) {
+
+    let is_known = |id: &str| -> bool {
+        RECIPE_META.total_costs.contains_key(id)
+            || RECIPE_META.recipes.contains_key(id)
+            || RECIPE_META.component_prices.contains_key(id)
+            || RECIPE_META.component_names.contains_key(id)
+    };
+
+    if is_known(tid) {
         return tid.to_string();
     }
+
     let digits: String = tid.chars().filter(|c| c.is_ascii_digit()).collect();
-    if !digits.is_empty() && (RECIPE_META.total_costs.contains_key(&digits) || RECIPE_META.recipes.contains_key(&digits)) {
-        return digits;
-    }
-    for pfx_len in [2, 3] {
-        if tid.len() > pfx_len {
-            let sub = &tid[pfx_len..];
-            if RECIPE_META.total_costs.contains_key(sub) {
-                return sub.to_string();
+    if !digits.is_empty() {
+        if is_known(&digits) {
+            return digits;
+        }
+
+        // Mode-prefixed component handling (e.g. Arena "221052" -> "1052").
+        // We only strip prefix when the remainder is an authentic component (in component_prices
+        // or component_names without being a canyon composite item), avoiding unconditional
+        // truncation of 6-digit mode items that falsely aliases canyon items (e.g. "223089").
+        if digits.len() >= 5 {
+            for pfx_len in [2, 3] {
+                if digits.len() > pfx_len && digits.is_char_boundary(pfx_len) {
+                    let sub = &digits[pfx_len..];
+                    if RECIPE_META.component_prices.contains_key(sub)
+                        || (RECIPE_META.component_names.contains_key(sub)
+                            && !RECIPE_META.total_costs.contains_key(sub))
+                    {
+                        return sub.to_string();
+                    }
+                }
             }
         }
     }
+
     tid.to_string()
 }
 
@@ -140,6 +162,8 @@ pub fn calculate_item_net_cost(
         .total_costs
         .get(&tid)
         .or_else(|| RECIPE_META.total_costs.get(raw_tid))
+        .or_else(|| RECIPE_META.component_prices.get(&tid))
+        .or_else(|| RECIPE_META.component_prices.get(raw_tid))
         .unwrap_or(&0)).max(0);
 
     let cur_gold_int = if current_gold.is_nan() || current_gold.is_infinite() {
@@ -341,6 +365,50 @@ mod tests {
         assert_eq!(res_unknown.total_cost, 0);
         assert_eq!(res_unknown.net_cost, 0);
         assert_eq!(res_unknown.remaining_diff, 0);
+    }
+
+    #[test]
+    fn test_normalize_item_id_utf8_chinese_safety() {
+        // Multi-byte Chinese names and symbols must never trigger char boundary panics
+        assert_eq!(normalize_item_id("灭世者的死亡之帽"), "灭世者的死亡之帽");
+        assert_eq!(normalize_item_id("多兰之刃"), "多兰之刃");
+        assert_eq!(normalize_item_id("中娅沙漏"), "中娅沙漏");
+        assert_eq!(normalize_item_id("⚔️暴风之剑"), "⚔️暴风之剑");
+        assert_eq!(normalize_item_id(""), "");
+        assert_eq!(normalize_item_id("   "), "");
+    }
+
+    #[test]
+    fn test_normalize_item_id_mode_prefixed_components() {
+        // Mode-prefixed 6-digit components should normalize to canonical component IDs
+        // 1052 is Amplifying Tome (400g)
+        assert_eq!(normalize_item_id("221052"), "1052");
+        assert_eq!(normalize_item_id("Item_221052"), "1052");
+        assert_eq!(normalize_item_id(" 221052 "), "1052");
+        // 1036 is Long Sword (350g)
+        assert_eq!(normalize_item_id("221036"), "1036");
+        // 3802 is Lost Chapter (1200g)
+        assert_eq!(normalize_item_id("223802"), "3802");
+        // Canonical components directly recognized
+        assert_eq!(normalize_item_id("1052"), "1052");
+        assert_eq!(normalize_item_id("Item_1052"), "1052");
+    }
+
+    #[test]
+    fn test_normalize_item_id_avoid_false_canyon_aliasing() {
+        // 6-digit mode items that are not components must NOT be truncated to canyon items
+        assert_eq!(normalize_item_id("223089"), "223089");
+        assert_eq!(normalize_item_id("223031"), "223031");
+    }
+
+    #[test]
+    fn test_prefixed_component_net_cost_deduction() {
+        // Target: 6657 requires 3802 (Lost Chapter) + 3108 (Fiendish Codex)
+        // If player has mode-prefixed 221052 (Amplifying Tome), it should normalize and deduct 400g
+        let owned = vec!["221052".to_string()];
+        let res = calculate_item_net_cost("6657", &owned, 1000.0, "NET_DEDUCT");
+        assert!(res.deducted_gold >= 400);
+        assert!(res.matched_components.iter().any(|c| c.item_id == "1052"));
     }
 }
 

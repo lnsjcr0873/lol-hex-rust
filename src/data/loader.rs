@@ -70,6 +70,7 @@ impl Database {
         // 2. Heroes Summary
         if let Some(val) = crawler.fetch_heroes_summary().await {
             if let Ok(list) = serde_json::from_value::<Vec<HeroSummary>>(val) {
+                self.heroes_summary.clear();
                 self.populate_heroes(list);
             }
         }
@@ -77,6 +78,7 @@ impl Database {
         // 3. Augments Summary
         if let Some(val) = crawler.fetch_augments_summary().await {
             if let Ok(list) = serde_json::from_value::<Vec<AugmentSummary>>(val) {
+                self.augments_summary.clear();
                 self.populate_augments(list);
             }
         }
@@ -430,5 +432,66 @@ impl Database {
             return Some(id.clone());
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_anti_duplication_on_repeated_ingestion() {
+        let mut db = Database::load_from_dir("data");
+        let initial_heroes_len = db.heroes_summary.len();
+        let initial_augments_len = db.augments_summary.len();
+        assert!(initial_heroes_len > 0, "Initial heroes summary must not be empty");
+        assert!(initial_augments_len > 0, "Initial augments summary must not be empty");
+
+        let heroes_clone = db.heroes_summary.clone();
+        let augments_clone = db.augments_summary.clone();
+
+        // Simulate 1st sync (clearing before populating)
+        db.heroes_summary.clear();
+        db.populate_heroes(heroes_clone.clone());
+        assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+
+        db.augments_summary.clear();
+        db.populate_augments(augments_clone.clone());
+        assert_eq!(db.augments_summary.len(), initial_augments_len);
+
+        // Simulate 2nd sync (repeated sync must NOT double count)
+        db.heroes_summary.clear();
+        db.populate_heroes(heroes_clone.clone());
+        assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+
+        db.augments_summary.clear();
+        db.populate_augments(augments_clone.clone());
+        assert_eq!(db.augments_summary.len(), initial_augments_len);
+
+        // Simulate 3rd sync
+        db.heroes_summary.clear();
+        db.populate_heroes(heroes_clone.clone());
+        assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+
+        db.augments_summary.clear();
+        db.populate_augments(augments_clone.clone());
+        assert_eq!(db.augments_summary.len(), initial_augments_len);
+    }
+
+    #[tokio::test]
+    async fn test_sync_from_api_graceful_offline_no_multiplier() {
+        let mut db = Database::load_from_dir("data");
+        let initial_heroes_len = db.heroes_summary.len();
+        let initial_augments_len = db.augments_summary.len();
+
+        let crawler = crate::crawler::HexdataCrawler::new();
+
+        // Multiple successive sync_from_api calls
+        db.sync_from_api(&crawler).await;
+        db.sync_from_api(&crawler).await;
+
+        // Count must not multiply or leak
+        assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+        assert_eq!(db.augments_summary.len(), initial_augments_len);
     }
 }
