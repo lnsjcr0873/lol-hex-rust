@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm --prefix ../frontend run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": "npm --prefix ../frontend run build",
     "frontendDist": "../frontend/dist"
   },
   "app": {
@@ -15,6 +15,7 @@
       {
         "label": "main",
         "title": "HexBrain - 英雄联盟海克斯极客辅助",
+        "url": "index.html",
         "width": 1280,
         "height": 820,
         "minWidth": 1024,

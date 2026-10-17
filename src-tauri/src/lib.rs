@@ -24,15 +24,7 @@ pub struct TauriAppState {
 pub fn run() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    // Set Per-Monitor V2 DPI Awareness for desktop Win32 overlay compatibility
-    #[cfg(windows)]
-    unsafe {
-        #[link(name = "user32")]
-        extern "system" {
-            fn SetProcessDpiAwarenessContext(value: isize) -> i32;
-        }
-        let _ = SetProcessDpiAwarenessContext(-4);
-    }
+    // Note: Tauri and WRY configure DPI awareness natively; manual SetProcessDpiAwarenessContext causes WebView2 E_INVALIDARG (0x80070057)
 
     // 1. Initialize DB and Subsystems
     let mut initial_db = Database::load_from_dir("data");
