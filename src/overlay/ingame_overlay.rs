@@ -60,7 +60,7 @@ impl InGameOverlay {
         db: Arc<crate::data::loader::Database>,
         live_client: Arc<crate::lcu::LiveClientDataReader>,
         lcu_client: Arc<crate::lcu::LcuClient>,
-        is_aram_active: Arc<std::sync::atomic::AtomicBool>,
+        is_hextech_active: Arc<std::sync::atomic::AtomicBool>,
     ) {
         let overlay = self.clone();
         tokio::spawn(async move {
@@ -99,9 +99,9 @@ impl InGameOverlay {
                     continue;
                 }
 
-                // 2. 模式门禁：必须是 ARAM / Mayhem / 娱乐模式，召唤师峡谷排位/普通彻底静默
-                let is_aram = is_aram_active.load(Ordering::SeqCst) || stats.is_aram;
-                if !is_aram {
+                // 2. 模式门禁：必须是具有海克斯强化的模式 (Arena / Mayhem / Kiwi / Cherry 等)，普通 ARAM 与召唤师峡谷彻底静默
+                let is_hextech = is_hextech_active.load(Ordering::SeqCst) || stats.has_hextech;
+                if !is_hextech {
                     if showing_cards {
                         GLOBAL_HUD.hide();
                         showing_cards = false;

@@ -64,7 +64,7 @@ pub fn run() {
     let lcu_clone = lcu.clone();
     let opgg_clone = opgg.clone();
     tauri::async_runtime::spawn(async move {
-        let _ = lol_hex_rust::GLOBAL_TOKIO_HANDLE.set(tokio::runtime::Handle::current());
+        lol_hex_rust::init_tokio_handle(tokio::runtime::Handle::current());
         history_db.set_database(db_clone).await;
         history_db.set_sgp_client(sgp_clone).await;
         lcu_clone.set_opgg(opgg_clone).await;
@@ -85,37 +85,43 @@ pub fn run() {
         let mut last_swapped_champion_id: i64 = 0;
         let mut last_swap_instant = std::time::Instant::now();
         let mut last_draft_sig = String::new();
-        let mut cached_ranked_data: Option<win32_hud::RankedOverlayData> = None;
+        let mut accepting_ready_check = false;
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
             let phase = lcu_bg.get_gameflow_phase().await;
 
-            // 2.1 ReadyCheck: Auto-Accept Match
+            // 2.1 ReadyCheck: Auto-Accept Match (non-blocking async task to never stall main loop)
             if phase == "ReadyCheck" {
                 let cfg = config_bg.get().await;
-                if cfg.auto_accept_match {
+                if cfg.auto_accept_match && !accepting_ready_check {
                     if let Some(rc) = lcu_bg.get_ready_check().await {
                         let player_resp = rc.get("playerResponse").and_then(|v| v.as_str()).unwrap_or("");
                         let state = rc.get("state").and_then(|v| v.as_str()).unwrap_or("");
                         if player_resp != "Accepted" && player_resp != "Declined" && state == "InProgress" {
-                            let delay = cfg.auto_accept_delay_seconds;
-                            if delay > 0 {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
-                            }
-                            if let Some(rc_after) = lcu_bg.get_ready_check().await {
-                                let resp_after = rc_after.get("playerResponse").and_then(|v| v.as_str()).unwrap_or("");
-                                let state_after = rc_after.get("state").and_then(|v| v.as_str()).unwrap_or("");
-                                if resp_after != "Accepted" && resp_after != "Declined" && state_after == "InProgress" {
-                                    let ok = lcu_bg.accept_ready_check().await;
-                                    if ok {
-                                        tracing::info!("⚡ [HexBrain Tauri] 自动接受对局成功 (延迟 {}s)", delay);
+                            accepting_ready_check = true;
+                            let lcu_accept = lcu_bg.clone();
+                            let delay = cfg.auto_accept_delay_seconds.clamp(0, lol_hex_rust::config::MAX_AUTO_ACCEPT_DELAY_SECONDS);
+                            tauri::async_runtime::spawn(async move {
+                                if delay > 0 {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                                }
+                                if let Some(rc_after) = lcu_accept.get_ready_check().await {
+                                    let resp_after = rc_after.get("playerResponse").and_then(|v| v.as_str()).unwrap_or("");
+                                    let state_after = rc_after.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                                    if resp_after != "Accepted" && resp_after != "Declined" && state_after == "InProgress" {
+                                        let ok = lcu_accept.accept_ready_check().await;
+                                        if ok {
+                                            tracing::info!("⚡ [HexBrain Tauri] 自动接受对局成功 (延迟 {}s)", delay);
+                                        }
                                     }
                                 }
-                            }
+                            });
                         }
                     }
                 }
+            } else {
+                accepting_ready_check = false;
             }
 
             // 2.2 ChampSelect: Win32 Overlay HUD, Auto-Swap Bench & Auto-Apply Runes
@@ -196,7 +202,10 @@ pub fn run() {
                                 .collect();
 
                             for pref_str in &cfg.bench_preferred_champions {
-                                if let Ok(pref_id) = pref_str.parse::<i64>() {
+                                let pref_id_opt = pref_str.parse::<i64>().ok().or_else(|| {
+                                    db_bg.resolve_hero_id(pref_str).and_then(|s| s.parse::<i64>().ok())
+                                });
+                                if let Some(pref_id) = pref_id_opt {
                                     if my_champion_id == pref_id {
                                         break;
                                     }

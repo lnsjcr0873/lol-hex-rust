@@ -711,7 +711,17 @@ impl DecisionEngine {
             it["tacticalScore"] = Value::from((hex_score * 0.5 + wr * 50.0).round());
         }
 
-        let owned_set: HashSet<String> = current_items.iter().cloned().collect();
+        let mut owned_set: HashSet<String> = HashSet::new();
+        for it in current_items {
+            let clean = it.trim();
+            if !clean.is_empty() {
+                owned_set.insert(clean.to_string());
+                let norm = crate::data::recipe_data::normalize_item_id(clean);
+                if !norm.is_empty() {
+                    owned_set.insert(norm);
+                }
+            }
+        }
 
         // 1. Archetype Engine & Active Augment Hydration
         let active_aug_values: Vec<Value> = existing_augments
@@ -783,7 +793,8 @@ impl DecisionEngine {
         // Next item recommendation
         let next_item = build_path.iter().find(|it| {
             let iid = extract_item_id(it);
-            !iid.is_empty() && !owned_set.contains(&iid)
+            let norm_iid = crate::data::recipe_data::normalize_item_id(&iid);
+            !iid.is_empty() && !owned_set.contains(&iid) && !owned_set.contains(&norm_iid)
         }).cloned();
 
         let safe_gold = if gold.is_finite() && gold >= 0.0 { gold } else { 0.0 };
@@ -832,25 +843,35 @@ impl DecisionEngine {
         let mut ap_count = 0;
         let mut ad_count = 0;
         let mut tank_count = 0;
+        let mut fighter_count = 0;
+        let mut support_count = 0;
 
         for h in &resolved_heroes {
             for role in &h.roles {
-                match role.as_str() {
-                    "法师" => ap_count += 1,
-                    "射手" | "刺客" => ad_count += 1,
-                    "坦克" => tank_count += 1,
+                match role.trim().to_lowercase().as_str() {
+                    "法师" | "mage" => ap_count += 1,
+                    "射手" | "marksman" | "刺客" | "assassin" => ad_count += 1,
+                    "坦克" | "tank" => tank_count += 1,
+                    "战士" | "fighter" => {
+                        fighter_count += 1;
+                        ad_count += 1;
+                    }
+                    "辅助" | "support" => support_count += 1,
                     _ => {}
                 }
             }
         }
 
-        let is_balanced = ap_count >= 1 && ad_count >= 1 && tank_count >= 1;
+        let frontline_count = tank_count + fighter_count;
+        let is_balanced = ap_count >= 1 && ad_count >= 1 && frontline_count >= 1;
         let advice = if is_balanced {
             "阵容攻守兼备，前后排结构合理"
-        } else if tank_count == 0 {
-            "缺乏前排承伤核心，建议通过骰子补足重装坦克"
+        } else if frontline_count == 0 {
+            "缺乏前排承伤核心，建议通过骰子补足重装坦克或重装战士"
         } else if ap_count == 0 {
             "纯菜刀队易被敌方叠护甲克制，建议补足 AP 法系输出"
+        } else if ad_count == 0 {
+            "纯法系输出易被敌方叠魔抗克制，建议补足 AD 物理输出"
         } else {
             "阵容整体偏软，注意前中期抱团"
         };
@@ -860,6 +881,9 @@ impl DecisionEngine {
             "apCount": ap_count,
             "adCount": ad_count,
             "tankCount": tank_count,
+            "fighterCount": fighter_count,
+            "supportCount": support_count,
+            "frontlineCount": frontline_count,
             "isBalanced": is_balanced,
             "synergyAdvice": advice
         })
@@ -993,6 +1017,69 @@ mod tests {
 
         assert!(rec.get("archetype").is_some());
         assert!(rec.get("buildPath").is_some());
+    }
+
+    #[test]
+    fn test_analyze_team_synergy_with_fighters_and_supports() {
+        let mut db = Database::new();
+        db.heroes_map.insert("86".to_string(), crate::data::HeroSummary {
+            id: "86".to_string(),
+            name: "盖伦".to_string(),
+            roles: vec!["战士".to_string()],
+            win_rate: 0.52,
+            tier: Some(1),
+            ..Default::default()
+        });
+        db.heroes_map.insert("103".to_string(), crate::data::HeroSummary {
+            id: "103".to_string(),
+            name: "阿狸".to_string(),
+            roles: vec!["法师".to_string()],
+            win_rate: 0.51,
+            tier: Some(1),
+            ..Default::default()
+        });
+        db.heroes_map.insert("40".to_string(), crate::data::HeroSummary {
+            id: "40".to_string(),
+            name: "迦娜".to_string(),
+            roles: vec!["辅助".to_string()],
+            win_rate: 0.50,
+            tier: Some(2),
+            ..Default::default()
+        });
+
+        let res = DecisionEngine::analyze_team_synergy(&db, &["86".to_string(), "103".to_string(), "40".to_string()]);
+        assert_eq!(res["fighterCount"], 1);
+        assert_eq!(res["supportCount"], 1);
+        assert_eq!(res["frontlineCount"], 1);
+        assert_eq!(res["apCount"], 1);
+        assert_eq!(res["adCount"], 1);
+        assert_eq!(res["isBalanced"], true);
+    }
+
+    #[test]
+    fn test_owned_item_id_normalization_in_decision() {
+        let db = Database::new();
+        let cfg = RecommendationConfig::default();
+
+        // Pass owned items with "Item_" prefix and "22" mode prefix
+        let owned = vec!["Item_3089".to_string(), " 221052 ".to_string()];
+        let rec = DecisionEngine::get_item_recommendation(
+            &db,
+            "103",
+            &owned,
+            3000.0,
+            1,
+            &[],
+            &[],
+            &cfg,
+        );
+
+        if let Some(next) = rec.get("nextItem") {
+            let next_id = next.get("itemId").and_then(|v| v.as_str()).unwrap_or("");
+            // Must not recommend 3089 or 1052 as next item since they are already owned
+            assert_ne!(next_id, "3089");
+            assert_ne!(next_id, "1052");
+        }
     }
 }
 

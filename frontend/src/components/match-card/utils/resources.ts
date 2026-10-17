@@ -182,7 +182,8 @@ export function getChampionIconUrl(champId: number): string {
 }
 
 export function getChampionIconFallbackUrl(champId: number): string {
-  return `https://game.gtimg.cn/images/lol/act/img/champion/${champId}.png`
+  if (!champId || champId <= 0) return 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg'
+  return `https://game.gtimg.cn/images/lol/act/img/skinloading/${champId}000.jpg`
 }
 
 export function getProfileIconUrl(iconId: number): string {
@@ -191,12 +192,12 @@ export function getProfileIconUrl(iconId: number): string {
 
 export function getItemIconUrl(itemId: number): string {
   if (!itemId || itemId <= 0) return ''
-  return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/item-icons/${itemId}.png`
+  return `https://game.gtimg.cn/images/lol/act/img/item/${itemId}.png`
 }
 
 export function getItemFallbackUrl(itemId: number): string {
   if (!itemId || itemId <= 0) return ''
-  return `https://ddragon.leagueoflegends.com/cdn/14.24.1/img/item/${itemId}.png`
+  return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/item-icons/${itemId}.png`
 }
 
 export const SPELL_NAME_MAP: Record<number, { name: string; iconKey: string }> = {

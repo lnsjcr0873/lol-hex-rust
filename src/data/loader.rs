@@ -19,6 +19,8 @@ pub struct Database {
     pub name_to_hero_id: HashMap<String, String>,
     pub name_to_augment_id: HashMap<String, String>,
     pub norm_name_to_augment_id: HashMap<String, String>,
+    pub hero_id_to_file: HashMap<String, PathBuf>,
+    pub missed_hero_details: Arc<std::sync::RwLock<HashMap<String, std::time::Instant>>>,
 
     // Optional Local Disk Paths (Optional fallback only)
     pub base_dir: PathBuf,
@@ -38,6 +40,8 @@ impl Default for Database {
             name_to_hero_id: HashMap::new(),
             name_to_augment_id: HashMap::new(),
             norm_name_to_augment_id: HashMap::new(),
+            hero_id_to_file: HashMap::new(),
+            missed_hero_details: Arc::new(std::sync::RwLock::new(HashMap::new())),
             base_dir: PathBuf::from("data"),
             detail_dir: PathBuf::from("data/json/heroes_detail"),
         }
@@ -56,21 +60,51 @@ impl Database {
         db
     }
 
+    pub fn clear_heroes(&mut self) {
+        self.heroes_summary.clear();
+        self.heroes_map.clear();
+        self.name_to_hero_id.clear();
+    }
+
+    pub fn clear_augments(&mut self) {
+        self.augments_summary.clear();
+        self.augments_map.clear();
+        self.name_to_augment_id.clear();
+        self.norm_name_to_augment_id.clear();
+    }
+
+    pub fn clear_cached_details(&self) {
+        if let Ok(mut map) = self.heroes_detail.write() {
+            map.clear();
+        }
+        if let Ok(mut map) = self.missed_hero_details.write() {
+            map.clear();
+        }
+    }
+
     /// Fetch latest meta, heroes summary, and augments summary from Hexdata cloud API
     pub async fn sync_from_api(&mut self, crawler: &crate::crawler::HexdataCrawler) {
         info!("Connecting to Hexdata cloud API for latest esports big data...");
 
         // 1. Meta
+        let mut patch_changed = false;
         if let Some(val) = crawler.fetch_meta().await {
             if let Ok(meta) = serde_json::from_value::<MetaInfo>(val) {
+                if !self.meta.report_patch.is_empty() && self.meta.report_patch != meta.report_patch {
+                    patch_changed = true;
+                }
                 self.meta = meta;
             }
+        }
+
+        if patch_changed {
+            self.clear_cached_details();
         }
 
         // 2. Heroes Summary
         if let Some(val) = crawler.fetch_heroes_summary().await {
             if let Ok(list) = serde_json::from_value::<Vec<HeroSummary>>(val) {
-                self.heroes_summary.clear();
+                self.clear_heroes();
                 self.populate_heroes(list);
             }
         }
@@ -78,7 +112,7 @@ impl Database {
         // 3. Augments Summary
         if let Some(val) = crawler.fetch_augments_summary().await {
             if let Ok(list) = serde_json::from_value::<Vec<AugmentSummary>>(val) {
-                self.augments_summary.clear();
+                self.clear_augments();
                 self.populate_augments(list);
             }
         }
@@ -145,6 +179,11 @@ impl Database {
                 json_dir = Path::new("data/json").to_path_buf();
             } else if Path::new("../data/json").exists() {
                 json_dir = Path::new("../data/json").to_path_buf();
+            } else if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                let candidate = Path::new(&manifest_dir).join("data").join("json");
+                if candidate.exists() {
+                    json_dir = candidate;
+                }
             } else if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(parent) = exe_path.parent() {
                     let candidate = parent.join("data").join("json");
@@ -170,6 +209,12 @@ impl Database {
                 }
             }
         }
+        if db.meta.report_patch.is_empty() {
+            const EMBEDDED_META: &str = include_str!("../../data/json/meta.json");
+            if let Ok(meta) = serde_json::from_str::<MetaInfo>(EMBEDDED_META) {
+                db.meta = meta;
+            }
+        }
 
         // 2. Heroes Summary
         if heroes_file.exists() {
@@ -179,6 +224,12 @@ impl Database {
                 }
             }
         }
+        if db.heroes_summary.is_empty() {
+            const EMBEDDED_HEROES: &str = include_str!("../../data/json/heroes_summary.json");
+            if let Ok(list) = serde_json::from_str::<Vec<HeroSummary>>(EMBEDDED_HEROES) {
+                db.populate_heroes(list);
+            }
+        }
 
         // 3. Augments Summary
         if augments_file.exists() {
@@ -186,6 +237,12 @@ impl Database {
                 if let Ok(list) = serde_json::from_str::<Vec<AugmentSummary>>(&content) {
                     db.populate_augments(list);
                 }
+            }
+        }
+        if db.augments_summary.is_empty() {
+            const EMBEDDED_AUGMENTS: &str = include_str!("../../data/json/augments_summary.json");
+            if let Ok(list) = serde_json::from_str::<Vec<AugmentSummary>>(EMBEDDED_AUGMENTS) {
+                db.populate_augments(list);
             }
         }
 
@@ -208,6 +265,7 @@ impl Database {
                         let stem_parts: Vec<&str> = stem.split('_').collect();
                         let stem_id = stem_parts.first().copied().unwrap_or("").to_string();
                         if !stem_id.is_empty() {
+                            db.hero_id_to_file.insert(stem_id.clone(), path.clone());
                             db.name_to_hero_id.insert(stem.clone(), stem_id.clone());
                             if stem_parts.len() > 1 {
                                 let stem_name = stem_parts[1..].join("_");
@@ -243,6 +301,12 @@ impl Database {
         }
         if let Some(id) = self.name_to_hero_id.get(raw) {
             return Some(id.clone());
+        }
+        // Substring / alias search (e.g. "剑魔" -> "暗裔剑魔", "卡莎" -> "虚空之女")
+        for (name, id) in &self.name_to_hero_id {
+            if name.contains(&lower) || (!lower.is_empty() && lower.contains(name)) {
+                return Some(id.clone());
+            }
         }
         None
     }
@@ -281,7 +345,16 @@ impl Database {
             }
         }
 
-        // 2. Check local disk fallback if present
+        // 2. Negative cache check to prevent repeated disk scanning for missing heroes
+        if let Ok(missed) = self.missed_hero_details.read() {
+            if let Some(instant) = missed.get(&hid) {
+                if instant.elapsed() < std::time::Duration::from_secs(10) {
+                    return None;
+                }
+            }
+        }
+
+        // 3. Check local disk fallback if present
         if let Some(detail) = self.load_hero_detail_from_disk(&hid) {
             let detail_arc = Arc::new(detail);
             if let Ok(mut map) = self.heroes_detail.write() {
@@ -293,6 +366,11 @@ impl Database {
             return Some(detail_arc);
         }
 
+        // Record miss in negative cache
+        if let Ok(mut missed) = self.missed_hero_details.write() {
+            missed.insert(hid, std::time::Instant::now());
+        }
+
         None
     }
 
@@ -300,7 +378,42 @@ impl Database {
         let target_prefix = format!("{}_", hero_id);
         let target_exact = format!("{}.json", hero_id);
 
-        // 1. Check self.detail_dir (e.g. data/json/heroes_detail)
+        // 0. Indexed file fast path (O(1) direct lookup from load_from_dir indexing)
+        if let Some(indexed_path) = self.hero_id_to_file.get(hero_id) {
+            if let Ok(content) = fs::read_to_string(indexed_path) {
+                if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
+                    if detail.hero_name.is_empty() {
+                        if let Some(h) = self.heroes_map.get(hero_id) {
+                            detail.hero_name = h.name.clone();
+                        }
+                    }
+                    if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
+                        detail.hero_id = serde_json::Value::String(hero_id.to_string());
+                    }
+                    return Some(detail);
+                }
+            }
+        }
+
+        // 1. Direct file fast path in detail_dir
+        let direct_file = self.detail_dir.join(&target_exact);
+        if direct_file.is_file() {
+            if let Ok(content) = fs::read_to_string(&direct_file) {
+                if let Ok(mut detail) = serde_json::from_str::<HeroDetail>(&content) {
+                    if detail.hero_name.is_empty() {
+                        if let Some(h) = self.heroes_map.get(hero_id) {
+                            detail.hero_name = h.name.clone();
+                        }
+                    }
+                    if detail.hero_id.is_null() || detail.hero_id == serde_json::Value::String(String::new()) {
+                        detail.hero_id = serde_json::Value::String(hero_id.to_string());
+                    }
+                    return Some(detail);
+                }
+            }
+        }
+
+        // 2. Check self.detail_dir with prefix matching (e.g. data/json/heroes_detail)
         if self.detail_dir.exists() {
             if let Ok(entries) = fs::read_dir(&self.detail_dir) {
                 for entry in entries.flatten() {
@@ -324,7 +437,7 @@ impl Database {
             }
         }
 
-        // 2. Check data/cache/*/heroes_detail/{hero_id}.json
+        // 3. Check data/cache/*/heroes_detail/{hero_id}.json
         let cache_root = Path::new("data/cache");
         if cache_root.exists() {
             if let Ok(patch_dirs) = fs::read_dir(cache_root) {
@@ -388,7 +501,7 @@ impl Database {
                     }
                 }
 
-                // Persist to local disk cache (data/cache/{patch}/heroes_detail/{hid}.json)
+                // Persist to local disk cache asynchronously without blocking Tokio worker threads
                 let patch = if !self.meta.report_patch.is_empty() {
                     self.meta.report_patch.clone()
                 } else {
@@ -396,10 +509,14 @@ impl Database {
                 };
                 let clean_patch = patch.replace(['/', '\\'], "_");
                 let cache_dir = Path::new("data/cache").join(&clean_patch).join("heroes_detail");
-                if let Ok(()) = fs::create_dir_all(&cache_dir) {
-                    let cache_file = cache_dir.join(format!("{}.json", hid));
-                    let _ = fs::write(cache_file, serde_json::to_string(&val).unwrap_or_default());
-                }
+                let json_val = val.clone();
+                let hid_for_disk = hid.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(()) = fs::create_dir_all(&cache_dir) {
+                        let cache_file = cache_dir.join(format!("{}.json", hid_for_disk));
+                        let _ = fs::write(cache_file, serde_json::to_string(&json_val).unwrap_or_default());
+                    }
+                });
 
                 info!("⚡ Loaded hero detail from Hexdata Cloud API for {} ({})", hid, detail_arc.hero_name);
                 return Some(detail_arc);
@@ -451,31 +568,46 @@ mod tests {
         let augments_clone = db.augments_summary.clone();
 
         // Simulate 1st sync (clearing before populating)
-        db.heroes_summary.clear();
+        db.clear_heroes();
         db.populate_heroes(heroes_clone.clone());
         assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+        assert_eq!(db.heroes_map.len(), initial_heroes_len);
+        let initial_name_to_hero = db.name_to_hero_id.len();
 
-        db.augments_summary.clear();
+        db.clear_augments();
         db.populate_augments(augments_clone.clone());
         assert_eq!(db.augments_summary.len(), initial_augments_len);
+        assert_eq!(db.augments_map.len(), initial_augments_len);
+        let initial_name_to_aug = db.name_to_augment_id.len();
+        let initial_norm_aug = db.norm_name_to_augment_id.len();
 
-        // Simulate 2nd sync (repeated sync must NOT double count)
-        db.heroes_summary.clear();
+        // Simulate 2nd sync (repeated sync must NOT double count or leak reverse indices)
+        db.clear_heroes();
         db.populate_heroes(heroes_clone.clone());
         assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+        assert_eq!(db.heroes_map.len(), initial_heroes_len);
+        assert_eq!(db.name_to_hero_id.len(), initial_name_to_hero);
 
-        db.augments_summary.clear();
+        db.clear_augments();
         db.populate_augments(augments_clone.clone());
         assert_eq!(db.augments_summary.len(), initial_augments_len);
+        assert_eq!(db.augments_map.len(), initial_augments_len);
+        assert_eq!(db.name_to_augment_id.len(), initial_name_to_aug);
+        assert_eq!(db.norm_name_to_augment_id.len(), initial_norm_aug);
 
         // Simulate 3rd sync
-        db.heroes_summary.clear();
+        db.clear_heroes();
         db.populate_heroes(heroes_clone.clone());
         assert_eq!(db.heroes_summary.len(), initial_heroes_len);
+        assert_eq!(db.heroes_map.len(), initial_heroes_len);
+        assert_eq!(db.name_to_hero_id.len(), initial_name_to_hero);
 
-        db.augments_summary.clear();
+        db.clear_augments();
         db.populate_augments(augments_clone.clone());
         assert_eq!(db.augments_summary.len(), initial_augments_len);
+        assert_eq!(db.augments_map.len(), initial_augments_len);
+        assert_eq!(db.name_to_augment_id.len(), initial_name_to_aug);
+        assert_eq!(db.norm_name_to_augment_id.len(), initial_norm_aug);
     }
 
     #[tokio::test]
@@ -493,5 +625,13 @@ mod tests {
         // Count must not multiply or leak
         assert_eq!(db.heroes_summary.len(), initial_heroes_len);
         assert_eq!(db.augments_summary.len(), initial_augments_len);
+    }
+
+    #[test]
+    fn test_load_from_dir_fallback_when_path_not_exists() {
+        let db = Database::load_from_dir("__non_existent_dir_for_test__");
+        assert!(!db.heroes_summary.is_empty(), "Embedded fallback should populate heroes_summary");
+        assert!(!db.augments_summary.is_empty(), "Embedded fallback should populate augments_summary");
+        assert!(!db.meta.report_patch.is_empty(), "Embedded fallback should populate meta");
     }
 }

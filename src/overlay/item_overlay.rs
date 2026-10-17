@@ -586,7 +586,17 @@ impl ItemOverlay {
         }
 
         // 3. 签名变动：执行完整分流推演
-        let owned_set: std::collections::HashSet<String> = owned_item_ids.iter().cloned().collect();
+        let mut owned_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for it in owned_item_ids {
+            let clean = it.trim();
+            if !clean.is_empty() {
+                owned_set.insert(clean.to_string());
+                let norm = crate::data::recipe_data::normalize_item_id(clean);
+                if !norm.is_empty() {
+                    owned_set.insert(norm);
+                }
+            }
+        }
         let mut next_item_view: Option<NextItemView> = None;
         let mut alternative_views = Vec::new();
         let mut trio_item_views = Vec::new();
@@ -628,7 +638,8 @@ impl ItemOverlay {
                             .or_else(|| it.get("id"))
                             .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
                             .unwrap_or_default();
-                        !iid.is_empty() && !owned_set.contains(&iid)
+                        let norm = crate::data::recipe_data::normalize_item_id(&iid);
+                        !iid.is_empty() && !owned_set.contains(&iid) && !owned_set.contains(&norm)
                     }).cloned();
                 }
             }
@@ -688,7 +699,8 @@ impl ItemOverlay {
                         .or_else(|| item_val.get("id"))
                         .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
                         .unwrap_or_default();
-                    if iid.is_empty() || owned_set.contains(&iid) { continue; }
+                    let norm = crate::data::recipe_data::normalize_item_id(&iid);
+                    if iid.is_empty() || owned_set.contains(&iid) || owned_set.contains(&norm) { continue; }
                     if let Some(ref next) = next_item_view {
                         if next.id == iid { continue; }
                     }

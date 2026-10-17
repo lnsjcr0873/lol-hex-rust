@@ -21,3 +21,4 @@ src-tauri/gen/
 dist-new/
 scratch/
 *.dll
+downloaded_latest/

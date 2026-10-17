@@ -16,6 +16,7 @@ pub struct LiveGameStats {
     pub game_mode: String,
     pub map_number: i32,
     pub is_aram: bool,
+    pub has_hextech: bool,
     pub game_time: f64,
 }
 
@@ -64,6 +65,7 @@ impl LiveClientDataReader {
             let gm = game_data.get("gameMode").and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
             let mn = game_data.get("mapNumber").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             stats.is_aram = mn == 12 || mn == 30 || gm == "ARAM" || gm == "CHERRY" || gm == "KIWI";
+            stats.has_hextech = mn == 30 || gm == "CHERRY" || gm == "KIWI" || gm == "MAYHEM" || gm == "SWIFTPLAY";
             stats.game_mode = gm;
             stats.map_number = mn;
             stats.game_time = game_data.get("gameTime").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -111,6 +113,10 @@ impl LiveClientDataReader {
                     stats.active_augments = Self::parse_augments_array(arr);
                 }
             }
+        }
+
+        if !stats.has_hextech && !stats.active_augments.is_empty() {
+            stats.has_hextech = true;
         }
 
         stats
@@ -176,7 +182,14 @@ impl LiveClientDataReader {
             for it in items {
                 if let Some(iid) = it.get("itemID").and_then(|v| v.as_i64()) {
                     if iid > 0 {
-                        stats.current_items.push(iid.to_string());
+                        let count = it
+                            .get("count")
+                            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                            .unwrap_or(1)
+                            .clamp(1, 100);
+                        for _ in 0..count {
+                            stats.current_items.push(iid.to_string());
+                        }
                     }
                 }
             }
@@ -326,7 +339,7 @@ mod tests {
         assert_eq!(team, "ORDER");
         assert_eq!(stats.hero_name, "Aatrox");
         assert_eq!(stats.hero_id, "266");
-        assert_eq!(stats.current_items, vec!["1055", "2003"]);
+        assert_eq!(stats.current_items, vec!["1055", "2003", "2003"]);
     }
 
     #[test]

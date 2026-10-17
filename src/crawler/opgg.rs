@@ -6,11 +6,61 @@ use tracing::{info, warn};
 
 pub struct OpggClient {
     client: reqwest::Client,
-    region: String,
+    region: RwLock<String>,
     tier_list_cache: RwLock<Option<(Instant, Value)>>,
     champion_details_cache: RwLock<HashMap<String, (Instant, Value)>>,
     synergies_cache: RwLock<HashMap<String, (Instant, Value)>>,
     cooldown_until: RwLock<Option<Instant>>,
+    in_flight_tier_list: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
+    in_flight_details: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Option<Value>>>>>,
+    in_flight_synergies: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
+}
+
+/// Normalizes LCU region and platform ID into an OP.GG API region parameter.
+pub fn map_lcu_region_to_opgg(region: &str, platform_id: Option<&str>) -> &'static str {
+    let p = platform_id.map(|s| s.trim().to_uppercase()).unwrap_or_default();
+    match p.as_str() {
+        "NA1" => return "na",
+        "EUW1" => return "euw",
+        "EUN1" => return "eune",
+        "KR" => return "kr",
+        "JP1" => return "jp",
+        "OC1" => return "oce",
+        "BR1" => return "br",
+        "LA1" => return "lan",
+        "LA2" => return "las",
+        "RU" => return "ru",
+        "TR1" => return "tr",
+        "SG2" => return "sg",
+        "PH2" => return "ph",
+        "TW2" => return "tw",
+        "VN2" => return "vn",
+        "TH2" => return "th",
+        _ => {}
+    }
+
+    let r = region.trim().to_uppercase();
+    match r.as_str() {
+        "NA" | "NA1" => "na",
+        "EUW" | "EUW1" => "euw",
+        "EUN" | "EUNE" | "EUN1" => "eune",
+        "KR" => "kr",
+        "JP" | "JP1" => "jp",
+        "OCE" | "OC1" => "oce",
+        "BR" | "BR1" => "br",
+        "LAS" | "LA2" => "las",
+        "LAN" | "LA1" => "lan",
+        "RU" | "RU1" => "ru",
+        "TR" | "TR1" => "tr",
+        "SG" | "SG2" => "sg",
+        "PH" | "PH2" => "ph",
+        "TW" | "TW2" => "tw",
+        "VN" | "VN2" => "vn",
+        "TH" | "TH2" => "th",
+        "GLOBAL" => "global",
+        "TENCENT" => "kr",
+        _ => "kr",
+    }
 }
 
 impl Default for OpggClient {
@@ -63,12 +113,44 @@ impl OpggClient {
 
         Self {
             client,
-            region: "kr".to_string(),
+            region: RwLock::new("kr".to_string()),
             tier_list_cache: RwLock::new(None),
             champion_details_cache: RwLock::new(HashMap::new()),
             synergies_cache: RwLock::new(HashMap::new()),
             cooldown_until: RwLock::new(None),
+            in_flight_tier_list: tokio::sync::Mutex::new(HashMap::new()),
+            in_flight_details: tokio::sync::Mutex::new(HashMap::new()),
+            in_flight_synergies: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn get_region(&self) -> String {
+        self.region.read().map(|r| r.clone()).unwrap_or_else(|_| "kr".to_string())
+    }
+
+    pub fn set_region(&self, region: &str) {
+        let mapped = map_lcu_region_to_opgg(region, None);
+        if let Ok(mut lock) = self.region.write() {
+            if *lock != mapped {
+                info!("OpggClient region updated from {} to {}", *lock, mapped);
+                *lock = mapped.to_string();
+            }
+        }
+    }
+
+    pub fn set_region_from_lcu(&self, region: &str, platform_id: Option<&str>) {
+        let mapped = map_lcu_region_to_opgg(region, platform_id);
+        if let Ok(mut lock) = self.region.write() {
+            if *lock != mapped {
+                info!("OpggClient region dynamically mapped from LCU ({}, {:?}) to {}", region, platform_id, mapped);
+                *lock = mapped.to_string();
+            }
+        }
+    }
+
+    pub fn with_region(self, region: &str) -> Self {
+        self.set_region(region);
+        self
     }
 
     pub fn get_cached_stats(&self, champion_id: &str, position: &str) -> Option<(f64, i32)> {
@@ -118,8 +200,9 @@ impl OpggClient {
         if cid.is_empty() || cid == "0" {
             return None;
         }
+        let region = self.get_region();
         let pos_upper = position.to_uppercase();
-        let cache_key = format!("{}_{}_{}", self.region, cid, pos_upper);
+        let cache_key = format!("{}_{}_{}", region, cid, pos_upper);
         if let Ok(lock) = self.champion_details_cache.read() {
             if let Some((instant, ref val)) = lock.get(&cache_key) {
                 if instant.elapsed() < Duration::from_secs(12 * 3600) {
@@ -127,7 +210,7 @@ impl OpggClient {
                 }
             }
             if let Some(primary) = self.get_primary_position(cid) {
-                let prim_key = format!("{}_{}_{}", self.region, cid, primary.to_uppercase());
+                let prim_key = format!("{}_{}_{}", region, cid, primary.to_uppercase());
                 if let Some((instant, ref val)) = lock.get(&prim_key) {
                     if instant.elapsed() < Duration::from_secs(12 * 3600) {
                         return Some(val.clone());
@@ -135,7 +218,7 @@ impl OpggClient {
                 }
             }
             for (k, (instant, v)) in lock.iter() {
-                if k.starts_with(&format!("{}_{}_", self.region, cid)) {
+                if k.starts_with(&format!("{}_{}_", region, cid)) {
                     if instant.elapsed() < Duration::from_secs(12 * 3600) {
                         return Some(v.clone());
                     }
@@ -146,6 +229,8 @@ impl OpggClient {
     }
 
     pub async fn get_ranked_tier_list(&self, force_refresh: bool) -> Value {
+        let region = self.get_region();
+
         // 1. Check in-memory cache with 6 hours TTL
         if !force_refresh {
             if let Ok(lock) = self.tier_list_cache.read() {
@@ -166,14 +251,42 @@ impl OpggClient {
                             return val.clone();
                         }
                     }
-                    return json!({ "region": self.region, "champions": {} });
+                    return json!({ "region": region, "champions": {} });
                 }
             }
         }
 
+        // In-flight deduplication: merge concurrent tier list requests
+        let mut rx_opt = None;
+        let mut tx_opt = None;
+        {
+            let mut in_flight = self.in_flight_tier_list.lock().await;
+            if let Some(rx) = in_flight.get(&region) {
+                rx_opt = Some(rx.clone());
+            } else {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                in_flight.insert(region.clone(), rx);
+                tx_opt = Some(tx);
+            }
+        }
+
+        if let Some(mut rx) = rx_opt {
+            if rx.changed().await.is_ok() {
+                if let Some(ref val) = *rx.borrow() {
+                    return val.clone();
+                }
+            }
+            if let Ok(lock) = self.tier_list_cache.read() {
+                if let Some((_, ref val)) = *lock {
+                    return val.clone();
+                }
+            }
+            return json!({ "region": region, "champions": {} });
+        }
+
         let url = format!(
             "https://lol-api-champion.op.gg/api/{}/champions/ranked?tier=all",
-            self.region
+            region
         );
         info!("Fetching OP.GG ranked tier list: {}", url);
 
@@ -237,13 +350,19 @@ impl OpggClient {
                     }
 
                     let result = json!({
-                        "region": self.region,
+                        "region": region,
                         "champions": parsed_champs
                     });
 
                     // Store in memory cache ONLY (zero disk clutter)
                     if let Ok(mut lock) = self.tier_list_cache.write() {
                         *lock = Some((Instant::now(), result.clone()));
+                    }
+
+                    if let Some(tx) = tx_opt {
+                        let mut in_flight = self.in_flight_tier_list.lock().await;
+                        in_flight.remove(&region);
+                        let _ = tx.send(Some(result.clone()));
                     }
 
                     return result;
@@ -272,13 +391,23 @@ impl OpggClient {
         }
 
         // Return fallback cache if available
-        if let Ok(lock) = self.tier_list_cache.read() {
+        let fallback_val = if let Ok(lock) = self.tier_list_cache.read() {
             if let Some((_, ref val)) = *lock {
-                return val.clone();
+                val.clone()
+            } else {
+                json!({ "region": region, "champions": {} })
             }
+        } else {
+            json!({ "region": region, "champions": {} })
+        };
+
+        if let Some(tx) = tx_opt {
+            let mut in_flight = self.in_flight_tier_list.lock().await;
+            in_flight.remove(&region);
+            let _ = tx.send(Some(fallback_val.clone()));
         }
 
-        json!({ "region": self.region, "champions": {} })
+        fallback_val
     }
 
     pub async fn get_champion_detail_exact(&self, champion_id: &str, position: &str) -> Option<Value> {
@@ -286,27 +415,33 @@ impl OpggClient {
             return None;
         }
 
-        // Check if currently under rate-limit cooldown
-        if let Ok(lock) = self.cooldown_until.read() {
-            if let Some(until) = *lock {
-                if Instant::now() < until {
-                    return None;
-                }
-            }
-        }
-
+        let region = self.get_region();
         let pos_upper = position.to_uppercase();
         let pos_lower = match pos_upper.as_str() {
             "TOP" => "top",
             "JUNGLE" => "jungle",
-            "MID" => "mid",
-            "ADC" => "adc",
-            "SUPPORT" => "support",
-            _ => "mid",
+            "MID" | "MIDDLE" => "mid",
+            "ADC" | "BOT" | "BOTTOM" => "adc",
+            "SUPPORT" | "SUP" | "UTILITY" => "support",
+            _ => {
+                // If position is unspecified ("all", "", etc.), use champion's primary position instead of blindly defaulting to "mid"
+                if let Some(prim) = self.get_primary_position(champion_id) {
+                    match prim.to_uppercase().as_str() {
+                        "TOP" => "top",
+                        "JUNGLE" => "jungle",
+                        "MID" | "MIDDLE" => "mid",
+                        "ADC" | "BOT" | "BOTTOM" => "adc",
+                        "SUPPORT" | "SUP" | "UTILITY" => "support",
+                        _ => "mid",
+                    }
+                } else {
+                    "mid"
+                }
+            }
         };
-        let cache_key = format!("{}_{}_{}", self.region, champion_id, pos_upper);
+        let cache_key = format!("{}_{}_{}", region, champion_id, pos_upper);
 
-        // 1. Check in-memory cache with 12 hours TTL
+        // 1. Check in-memory cache with 12 hours TTL first (never drop valid cached data due to cooldown)
         if let Ok(lock) = self.champion_details_cache.read() {
             if let Some((instant, ref val)) = lock.get(&cache_key) {
                 if instant.elapsed() < Duration::from_secs(12 * 3600) {
@@ -315,10 +450,47 @@ impl OpggClient {
             }
         }
 
-        // 2. Fetch directly from OP.GG API
+        // 2. Check if currently under rate-limit cooldown
+        if let Ok(lock) = self.cooldown_until.read() {
+            if let Some(until) = *lock {
+                if Instant::now() < until {
+                    return None;
+                }
+            }
+        }
+
+        // In-flight deduplication: merge concurrent detail requests for the same champion & position
+        let mut rx_opt = None;
+        let mut tx_opt = None;
+        {
+            let mut in_flight = self.in_flight_details.lock().await;
+            if let Some(rx) = in_flight.get(&cache_key) {
+                rx_opt = Some(rx.clone());
+            } else {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                in_flight.insert(cache_key.clone(), rx);
+                tx_opt = Some(tx);
+            }
+        }
+
+        if let Some(mut rx) = rx_opt {
+            if rx.changed().await.is_ok() {
+                if let Some(ref val) = *rx.borrow() {
+                    return val.clone();
+                }
+            }
+            if let Ok(lock) = self.champion_details_cache.read() {
+                if let Some((_, ref val)) = lock.get(&cache_key) {
+                    return Some(val.clone());
+                }
+            }
+            return None;
+        }
+
+        // 3. Fetch directly from OP.GG API
         let url = format!(
             "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}",
-            self.region, champion_id, pos_lower
+            region, champion_id, pos_lower
         );
         info!("Fetching OP.GG champion detail: {}", url);
 
@@ -506,7 +678,13 @@ impl OpggClient {
                     // Store in memory cache ONLY (zero disk clutter, bounded LRU)
                     if let Ok(mut lock) = self.champion_details_cache.write() {
                         prune_timed_cache(&mut lock, 300, Duration::from_secs(12 * 3600));
-                        lock.insert(cache_key, (Instant::now(), detail_result.clone()));
+                        lock.insert(cache_key.clone(), (Instant::now(), detail_result.clone()));
+                    }
+
+                    if let Some(tx) = tx_opt {
+                        let mut in_flight = self.in_flight_details.lock().await;
+                        in_flight.remove(&cache_key);
+                        let _ = tx.send(Some(Some(detail_result.clone())));
                     }
 
                     return Some(detail_result);
@@ -532,6 +710,12 @@ impl OpggClient {
                     *lock = Some(Instant::now() + Duration::from_secs(10));
                 }
             }
+        }
+
+        if let Some(tx) = tx_opt {
+            let mut in_flight = self.in_flight_details.lock().await;
+            in_flight.remove(&cache_key);
+            let _ = tx.send(Some(None));
         }
 
         None
@@ -692,7 +876,28 @@ impl OpggClient {
             });
         }
 
-        // Check if currently under rate-limit cooldown
+        let region = self.get_region();
+        let pos_upper = position.to_uppercase();
+        let pos_lower = match pos_upper.as_str() {
+            "TOP" => "top",
+            "JUNGLE" => "jungle",
+            "MID" => "mid",
+            "ADC" => "adc",
+            "SUPPORT" => "support",
+            _ => "mid",
+        };
+        let cache_key = format!("{}_{}_{}", region, champion_id, pos_upper);
+
+        // 1. Check in-memory cache with 12 hours TTL first (never drop valid cached data due to cooldown)
+        if let Ok(lock) = self.synergies_cache.read() {
+            if let Some((instant, ref val)) = lock.get(&cache_key) {
+                if instant.elapsed() < Duration::from_secs(12 * 3600) {
+                    return val.clone();
+                }
+            }
+        }
+
+        // 2. Check if currently under rate-limit cooldown
         if let Ok(lock) = self.cooldown_until.read() {
             if let Some(until) = *lock {
                 if Instant::now() < until {
@@ -705,29 +910,41 @@ impl OpggClient {
             }
         }
 
-        let pos_upper = position.to_uppercase();
-        let pos_lower = match pos_upper.as_str() {
-            "TOP" => "top",
-            "JUNGLE" => "jungle",
-            "MID" => "mid",
-            "ADC" => "adc",
-            "SUPPORT" => "support",
-            _ => "mid",
-        };
-        let cache_key = format!("{}_{}_{}", self.region, champion_id, pos_upper);
+        // In-flight deduplication: merge concurrent synergy requests for the same champion & position
+        let mut rx_opt = None;
+        let mut tx_opt = None;
+        {
+            let mut in_flight = self.in_flight_synergies.lock().await;
+            if let Some(rx) = in_flight.get(&cache_key) {
+                rx_opt = Some(rx.clone());
+            } else {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                in_flight.insert(cache_key.clone(), rx);
+                tx_opt = Some(tx);
+            }
+        }
 
-        // 1. Check in-memory cache with 12 hours TTL
-        if let Ok(lock) = self.synergies_cache.read() {
-            if let Some((instant, ref val)) = lock.get(&cache_key) {
-                if instant.elapsed() < Duration::from_secs(12 * 3600) {
+        if let Some(mut rx) = rx_opt {
+            if rx.changed().await.is_ok() {
+                if let Some(ref val) = *rx.borrow() {
                     return val.clone();
                 }
             }
+            if let Ok(lock) = self.synergies_cache.read() {
+                if let Some((_, ref val)) = lock.get(&cache_key) {
+                    return val.clone();
+                }
+            }
+            return json!({
+                "championId": champion_id,
+                "position": pos_upper,
+                "synergies": []
+            });
         }
 
         let url = format!(
             "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}/synergies",
-            self.region, champion_id, pos_lower
+            region, champion_id, pos_lower
         );
         info!("Fetching OP.GG champion synergies: {}", url);
 
@@ -776,8 +993,15 @@ impl OpggClient {
                     // Store in memory cache ONLY (zero disk clutter, bounded LRU)
                     if let Ok(mut lock) = self.synergies_cache.write() {
                         prune_timed_cache(&mut lock, 300, Duration::from_secs(12 * 3600));
-                        lock.insert(cache_key, (Instant::now(), res.clone()));
+                        lock.insert(cache_key.clone(), (Instant::now(), res.clone()));
                     }
+
+                    if let Some(tx) = tx_opt {
+                        let mut in_flight = self.in_flight_synergies.lock().await;
+                        in_flight.remove(&cache_key);
+                        let _ = tx.send(Some(res.clone()));
+                    }
+
                     return res;
                 }
             }
@@ -803,11 +1027,19 @@ impl OpggClient {
             }
         }
 
-        json!({
+        let fallback = json!({
             "championId": champion_id,
             "position": pos_upper,
             "synergies": []
-        })
+        });
+
+        if let Some(tx) = tx_opt {
+            let mut in_flight = self.in_flight_synergies.lock().await;
+            in_flight.remove(&cache_key);
+            let _ = tx.send(Some(fallback.clone()));
+        }
+
+        fallback
     }
 
     pub async fn get_champion_synergies(&self, champion_id: &str, position: &str) -> Value {
@@ -871,5 +1103,46 @@ mod tests {
         let (wr, tier) = stats.unwrap();
         assert_eq!(wr, 0.531);
         assert_eq!(tier, 1);
+    }
+
+    #[test]
+    fn test_opgg_region_mapping() {
+        let opgg = OpggClient::new();
+        assert_eq!(opgg.get_region(), "kr");
+
+        opgg.set_region("na");
+        assert_eq!(opgg.get_region(), "na");
+
+        opgg.set_region("EUW1");
+        assert_eq!(opgg.get_region(), "euw");
+
+        opgg.set_region_from_lcu("TENCENT", Some("HN1"));
+        assert_eq!(opgg.get_region(), "kr");
+
+        opgg.set_region_from_lcu("", Some("NA1"));
+        assert_eq!(opgg.get_region(), "na");
+
+        let custom = OpggClient::new().with_region("jp");
+        assert_eq!(custom.get_region(), "jp");
+    }
+
+    #[test]
+    fn test_jungle_primary_position_protects_smite() {
+        let opgg = OpggClient::new();
+        // Lee Sin (64) must have primary position JUNGLE
+        assert_eq!(opgg.get_primary_position("64"), Some("JUNGLE".to_string()));
+        let prim = opgg.get_primary_position("64").unwrap();
+        let target_pos = match "all".to_uppercase().as_str() {
+            "TOP" => "top",
+            "JUNGLE" => "jungle",
+            "MID" | "MIDDLE" => "mid",
+            "ADC" | "BOT" | "BOTTOM" => "adc",
+            "SUPPORT" | "SUP" | "UTILITY" => "support",
+            _ => match prim.to_uppercase().as_str() {
+                "JUNGLE" => "jungle",
+                _ => "mid",
+            },
+        };
+        assert_eq!(target_pos, "jungle");
     }
 }

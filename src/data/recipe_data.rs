@@ -2,11 +2,15 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RecipeMetadata {
+    #[serde(default)]
     pub total_costs: HashMap<String, i64>,
+    #[serde(default)]
     pub recipes: HashMap<String, Vec<String>>,
+    #[serde(default)]
     pub component_prices: HashMap<String, i64>,
+    #[serde(default)]
     pub component_names: HashMap<String, String>,
 }
 
@@ -21,15 +25,59 @@ pub struct ItemSummaryEntry {
     pub cdn_icon_url: Option<String>,
 }
 
+fn load_recipe_metadata() -> RecipeMetadata {
+    let mut candidates = vec![
+        std::path::PathBuf::from("data/recipe_metadata.json"),
+        std::path::PathBuf::from("../data/recipe_metadata.json"),
+        std::path::PathBuf::from("../../data/recipe_metadata.json"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("data/recipe_metadata.json"));
+            candidates.push(parent.join("../data/recipe_metadata.json"));
+        }
+    }
+    for p in &candidates {
+        if p.exists() && p.is_file() {
+            if let Ok(content) = std::fs::read_to_string(p) {
+                if let Ok(meta) = serde_json::from_str::<RecipeMetadata>(&content) {
+                    return meta;
+                }
+            }
+        }
+    }
+    const EMBEDDED_RECIPES: &str = include_str!("../../data/recipe_metadata.json");
+    serde_json::from_str(EMBEDDED_RECIPES).unwrap_or_default()
+}
+
+fn load_items_summary() -> HashMap<String, ItemSummaryEntry> {
+    let mut candidates = vec![
+        std::path::PathBuf::from("data/items_summary.json"),
+        std::path::PathBuf::from("../data/items_summary.json"),
+        std::path::PathBuf::from("../../data/items_summary.json"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("data/items_summary.json"));
+            candidates.push(parent.join("../data/items_summary.json"));
+        }
+    }
+    for p in &candidates {
+        if p.exists() && p.is_file() {
+            if let Ok(content) = std::fs::read_to_string(p) {
+                if let Ok(items) = serde_json::from_str::<HashMap<String, ItemSummaryEntry>>(&content) {
+                    return items;
+                }
+            }
+        }
+    }
+    const EMBEDDED_ITEMS: &str = include_str!("../../data/items_summary.json");
+    serde_json::from_str(EMBEDDED_ITEMS).unwrap_or_default()
+}
+
 lazy_static! {
-    pub static ref RECIPE_META: RecipeMetadata = {
-        let raw = include_str!("../../data/recipe_metadata.json");
-        serde_json::from_str(raw).expect("Failed to parse embedded recipe_metadata.json")
-    };
-    pub static ref ITEMS_SUMMARY: HashMap<String, ItemSummaryEntry> = {
-        let raw = include_str!("../../data/items_summary.json");
-        serde_json::from_str(raw).unwrap_or_default()
-    };
+    pub static ref RECIPE_META: RecipeMetadata = load_recipe_metadata();
+    pub static ref ITEMS_SUMMARY: HashMap<String, ItemSummaryEntry> = load_items_summary();
 }
 
 pub fn resolve_item_name(item_id: &str) -> String {

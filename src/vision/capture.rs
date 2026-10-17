@@ -8,6 +8,37 @@ pub struct ViewportRect {
 
 pub struct ScreenCapture;
 
+#[cfg(windows)]
+struct ThreadDpiGuard(isize);
+
+#[cfg(windows)]
+impl ThreadDpiGuard {
+    fn enter_per_monitor_v2() -> Self {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetThreadDpiAwarenessContext(dpi_context: isize) -> isize;
+        }
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        let old = unsafe { SetThreadDpiAwarenessContext(-4) };
+        Self(old)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ThreadDpiGuard {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            #[link(name = "user32")]
+            extern "system" {
+                fn SetThreadDpiAwarenessContext(dpi_context: isize) -> isize;
+            }
+            unsafe {
+                let _ = SetThreadDpiAwarenessContext(self.0);
+            }
+        }
+    }
+}
+
 static LEAGUE_CLIENT_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static LEAGUE_GAME_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -28,6 +59,9 @@ impl ScreenCapture {
         }
     }
     pub fn get_effective_viewport() -> ViewportRect {
+        #[cfg(windows)]
+        let _dpi_guard = ThreadDpiGuard::enter_per_monitor_v2();
+
         #[cfg(windows)]
         {
             if let Some(rect) = Self::get_lol_window_rect() {
@@ -418,6 +452,8 @@ impl ScreenCapture {
 
     #[cfg(windows)]
     pub fn capture_rect_with_pad_as_bmp(rect: &ViewportRect, pad: i32) -> Option<Vec<u8>> {
+        let _dpi_guard = ThreadDpiGuard::enter_per_monitor_v2();
+
         use windows::Win32::Foundation::{COLORREF, HWND, RECT};
         use windows::Win32::Graphics::Gdi::{
             BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
@@ -507,6 +543,21 @@ impl ScreenCapture {
             let _ = ReleaseDC(HWND::default(), hdc_screen);
 
             if lines_copied == 0 {
+                return None;
+            }
+
+            // Detect exclusive fullscreen (pure black surface from GDI BitBlt)
+            let is_all_black = {
+                let sample_step = (pixels.len() / 200).max(4);
+                let non_zero_count = pixels.iter().step_by(sample_step).filter(|&&b| b > 15).count();
+                non_zero_count == 0
+            };
+
+            if is_all_black {
+                static WARNED_BLACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !WARNED_BLACK.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!("Screen capture returned all-black pixels (Exclusive Fullscreen detected). Please set League video setting to 'Borderless' for overlay and OCR support.");
+                }
                 return None;
             }
 

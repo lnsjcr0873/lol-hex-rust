@@ -299,6 +299,12 @@ pub struct NativeHud {
     pub hwnd: Arc<std::sync::Mutex<Option<isize>>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontKind {
+    Text,  // "Microsoft YaHei UI"
+    Emoji, // "Segoe UI Emoji"
+}
+
 lazy_static::lazy_static! {
     pub static ref GLOBAL_HUD: Arc<NativeHud> = Arc::new(NativeHud::new());
     pub static ref RANKED_INTERACTION: std::sync::RwLock<RankedInteractionState> = std::sync::RwLock::new(RankedInteractionState::default());
@@ -307,20 +313,24 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_HISTORY: std::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>> = std::sync::RwLock::new(None);
     pub static ref ACTIVE_ALGORITHM: std::sync::RwLock<String> = std::sync::RwLock::new("SMART".to_string());
     pub static ref GLOBAL_ITEM_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::ItemOverlay>>> = std::sync::RwLock::new(None);
-    static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
+    static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32, FontKind), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
 #[cfg(windows)]
-unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::Gdi::HFONT {
+unsafe fn get_cached_font_kind(size: i32, weight: i32, kind: FontKind) -> windows::Win32::Graphics::Gdi::HFONT {
     use windows::Win32::Graphics::Gdi::{
         CreateFontW, HFONT, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE,
     };
     if let Ok(mut cache) = FONT_CACHE.lock() {
-        if let Some(&handle) = cache.get(&(size, weight)) {
+        if let Some(&handle) = cache.get(&(size, weight, kind)) {
             return HFONT(handle as *mut core::ffi::c_void);
         }
-        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let font_face = match kind {
+            FontKind::Text => "Microsoft YaHei UI\0",
+            FontKind::Emoji => "Segoe UI Emoji\0",
+        };
+        let font_name: Vec<u16> = font_face.encode_utf16().collect();
         let hfont = CreateFontW(
             size,
             0, 0, 0,
@@ -333,10 +343,32 @@ unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::G
             DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
             windows::core::PCWSTR(font_name.as_ptr()),
         );
-        cache.insert((size, weight), hfont.0 as isize);
+        cache.insert((size, weight, kind), hfont.0 as isize);
         hfont
     } else {
         HFONT::default()
+    }
+}
+
+#[cfg(windows)]
+unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::Gdi::HFONT {
+    get_cached_font_kind(size, weight, FontKind::Text)
+}
+
+/// Frees all cached Win32 HFONT handles using DeleteObject and clears the cache map.
+pub fn cleanup_font_cache() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Graphics::Gdi::{DeleteObject, HGDIOBJ};
+        if let Ok(mut cache) = FONT_CACHE.lock() {
+            for (_, handle) in cache.drain() {
+                if handle != 0 {
+                    unsafe {
+                        let _ = DeleteObject(HGDIOBJ(handle as *mut core::ffi::c_void));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -508,12 +540,37 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
     // 4. Sample buttons
     for ((x1, y1, x2, y2), count) in &hotzones.sample_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            let new_sample = *count;
             if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                inter.sample_match_count = *count;
-                if let Ok(gh) = GLOBAL_HISTORY.try_read() {
-                    if let Some(history_mgr) = gh.as_ref() {
-                        history_mgr.sample_count.store(*count, Ordering::Relaxed);
+                inter.sample_match_count = new_sample;
+                let history_opt = GLOBAL_HISTORY.try_read().ok().and_then(|g| g.clone());
+                if let Some(ref history_mgr) = history_opt {
+                    history_mgr.sample_count.store(new_sample, Ordering::Relaxed);
+                }
+
+                // Immediately recompute tactical profiles for all players in current HUD state
+                if let Ok(mut st) = GLOBAL_HUD.state.write() {
+                    if let HudContent::Ranked(ref mut data) = st.content {
+                        if let Some(ref history_mgr) = history_opt {
+                            for slot in &mut data.my_team {
+                                if let Some(ref p) = slot.profile {
+                                    let puuid = p.puuid.clone();
+                                    if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
+                                        slot.profile = Some(new_prof);
+                                    }
+                                }
+                            }
+                            for slot in &mut data.their_team {
+                                if let Some(ref p) = slot.profile {
+                                    let puuid = p.puuid.clone();
+                                    if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
+                                        slot.profile = Some(new_prof);
+                                    }
+                                }
+                            }
+                        }
                     }
+                    st.dirty = true;
                 }
                 repaint_needed = true;
             }
@@ -676,8 +733,19 @@ impl NativeHud {
                     }
                 }
             }
+            cleanup_font_cache();
         }
     }
+}
+
+impl Drop for NativeHud {
+    fn drop(&mut self) {
+        self.stop();
+        cleanup_font_cache();
+    }
+}
+
+impl NativeHud {
 
     pub fn show_augments(&self, data: AugmentOverlayData, duration: Duration) {
         self.start();
@@ -899,6 +967,7 @@ fn run_win32_hud_loop(
             *guard = None;
         }
         let _ = DestroyWindow(hwnd);
+        cleanup_font_cache();
     }
 }
 
@@ -1005,6 +1074,7 @@ unsafe extern "system" fn overlay_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            cleanup_font_cache();
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -1112,10 +1182,10 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     let should_hide = match &content_type {
         HudContent::None => true,
         HudContent::Augment(_) | HudContent::Item(_) => {
-            target_rect.is_none()
+            target_rect.is_none() || (!is_test && !crate::overlay::WindowTracker::is_game_active())
         }
         HudContent::Ranked(_) | HudContent::Bench(_) => {
-            target_rect.is_none()
+            target_rect.is_none() || (!is_test && !crate::overlay::WindowTracker::is_league_active())
         }
     };
 
@@ -1517,7 +1587,9 @@ unsafe fn render_item_hud(
         ((252.0 * sy) as i32).clamp(240, height - 60)
     };
     let box_x = (18.0 * sx) as i32;
-    let box_y = height - box_h - (35.0 * sy) as i32;
+    // 避开游戏原生英雄属性面板 (左下角 0~260px) 与技能加点热区 (+ 号按钮，底部向上约 260px)
+    let bottom_clearance = (270.0 * sy) as i32;
+    let box_y = (height - box_h - bottom_clearance).max(10);
 
     // 1. Dark Hextech container: #0a101d, Hextech Gold border: #785a28
     draw_card_rect(hdc, box_x, box_y, box_w, box_h, rgb(10, 16, 29), rgb(120, 90, 40));
@@ -2855,20 +2927,119 @@ unsafe fn draw_card_rect(
     let _ = DeleteObject(pen);
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRun {
+    pub text: String,
+    pub kind: FontKind,
+}
+
+pub fn is_emoji_char(c: char) -> bool {
+    let u = c as u32;
+    // Plane 1 emojis and pictographs: U+1F000..=U+1FAFF
+    (0x1F000..=0x1FAFF).contains(&u)
+    // Miscellaneous symbols and arrows: U+2600..=U+27BF (e.g. ⚔, ⚙, ⚡, ⚠, ⏳, etc.)
+    || (0x2600..=0x27BF).contains(&u)
+    // Dingbats, Miscellaneous Technical: U+2300..=U+23FF
+    || (0x2300..=0x23FF).contains(&u)
+    // Supplemental arrows and symbols: U+2B00..=U+2BFF
+    || (0x2B00..=0x2BFF).contains(&u)
+}
+
+pub fn sanitize_for_gdi(text: &str) -> String {
+    text.chars()
+        .filter(|&c| {
+            let u = c as u32;
+            // Remove Variation Selectors (U+FE00..=U+FE0F) and Zero Width Joiners (U+200B..=U+200D)
+            // which produce black box .notdef glyphs in GDI TextOutW
+            !(0xFE00..=0xFE0F).contains(&u) && !(0x200B..=0x200D).contains(&u)
+        })
+        .collect()
+}
+
+pub fn split_text_runs(raw_text: &str) -> Vec<TextRun> {
+    let sanitized = sanitize_for_gdi(raw_text);
+    if sanitized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut current_text = String::new();
+    let mut current_kind = None;
+
+    for c in sanitized.chars() {
+        let kind = if is_emoji_char(c) {
+            FontKind::Emoji
+        } else {
+            FontKind::Text
+        };
+
+        match current_kind {
+            Some(k) if k == kind => {
+                current_text.push(c);
+            }
+            Some(k) => {
+                runs.push(TextRun {
+                    text: current_text,
+                    kind: k,
+                });
+                current_text = c.to_string();
+                current_kind = Some(kind);
+            }
+            None => {
+                current_text.push(c);
+                current_kind = Some(kind);
+            }
+        }
+    }
+
+    if let Some(k) = current_kind {
+        if !current_text.is_empty() {
+            runs.push(TextRun {
+                text: current_text,
+                kind: k,
+            });
+        }
+    }
+
+    runs
+}
+
+#[cfg(windows)]
+unsafe fn measure_text_custom(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    text: &str,
+    font_size: i32,
+    weight: i32,
+) -> (i32, i32) {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
+
+    let runs = split_text_runs(text);
+    let mut total_w = 0;
+    let mut max_h = 0;
+
+    for run in &runs {
+        let hfont = get_cached_font_kind(font_size, weight, run.kind);
+        let old_font = SelectObject(hdc, hfont);
+        let wide: Vec<u16> = run.text.encode_utf16().collect();
+        let mut sz = SIZE::default();
+        let _ = GetTextExtentPoint32W(hdc, &wide, &mut sz);
+        total_w += sz.cx;
+        if sz.cy > max_h {
+            max_h = sz.cy;
+        }
+        let _ = SelectObject(hdc, old_font);
+    }
+
+    (total_w, max_h)
+}
+
 #[cfg(windows)]
 unsafe fn measure_text_line(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     text: &str,
 ) -> (i32, i32) {
-    use windows::Win32::Foundation::SIZE;
-    use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
-    let hfont = get_cached_font(12, 400);
-    let old_font = SelectObject(hdc, hfont);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let mut size = SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
-    let _ = SelectObject(hdc, old_font);
-    (size.cx, size.cy)
+    measure_text_custom(hdc, text, 12, 400)
 }
 
 #[cfg(windows)]
@@ -2879,14 +3050,7 @@ unsafe fn draw_text_line(
     y: i32,
     color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{SelectObject, SetBkMode, SetTextColor, TextOutW, TRANSPARENT};
-    let hfont = get_cached_font(12, 400);
-    let old_font = SelectObject(hdc, hfont);
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, color);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let _ = TextOutW(hdc, x, y, &wide);
-    let _ = SelectObject(hdc, old_font);
+    draw_text_custom(hdc, text, x, y, 12, 400, color, false);
 }
 
 #[cfg(windows)]
@@ -2901,10 +3065,8 @@ unsafe fn draw_pill_badge(
     text_color: windows::Win32::Foundation::COLORREF,
     text: &str,
 ) {
-    use windows::Win32::Foundation::RECT;
     use windows::Win32::Graphics::Gdi::{
-        CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, RoundRect, SelectObject, SetBkMode,
-        SetTextColor, DT_CENTER, DT_SINGLELINE, DT_VCENTER, PS_SOLID, TRANSPARENT,
+        CreatePen, CreateSolidBrush, DeleteObject, RoundRect, SelectObject, PS_SOLID,
     };
 
     let pen = CreatePen(PS_SOLID, 1, border_color);
@@ -2919,20 +3081,10 @@ unsafe fn draw_pill_badge(
     let _ = DeleteObject(brush);
     let _ = DeleteObject(pen);
 
-    let hfont = get_cached_font(11, 600);
-    let old_font = SelectObject(hdc, hfont);
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, text_color);
-
-    let mut rect = RECT {
-        left: x,
-        top: y,
-        right: x + w,
-        bottom: y + h,
-    };
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-    let _ = DrawTextW(hdc, &mut wide, &mut rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    let _ = SelectObject(hdc, old_font);
+    let (total_w, text_h) = measure_text_custom(hdc, text, 11, 600);
+    let text_x = x + (w - total_w) / 2;
+    let text_y = y + (h - text_h) / 2;
+    draw_text_custom(hdc, text, text_x, text_y, 11, 600, text_color, false);
 }
 
 #[cfg(windows)]
@@ -2947,23 +3099,46 @@ unsafe fn draw_text_custom(
     shadow: bool,
 ) {
     use windows::Win32::Graphics::Gdi::{
-        SelectObject, SetBkMode, SetTextColor, TextOutW, TRANSPARENT,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, GetTextExtentPoint32W, TRANSPARENT,
     };
+    use windows::Win32::Foundation::SIZE;
 
-    let hfont = get_cached_font(font_size, weight);
-    let old_font = SelectObject(hdc, hfont);
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-
-    if shadow {
-        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-        let _ = TextOutW(hdc, x + 1, y + 1, &wide);
+    let runs = split_text_runs(text);
+    if runs.is_empty() {
+        return;
     }
 
-    SetTextColor(hdc, color);
-    let _ = TextOutW(hdc, x, y, &wide);
+    let _ = SetBkMode(hdc, TRANSPARENT);
 
-    let _ = SelectObject(hdc, old_font);
+    // Draw shadow if requested
+    if shadow {
+        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+        let mut cur_x = x + 1;
+        for run in &runs {
+            let hfont = get_cached_font_kind(font_size, weight, run.kind);
+            let old_font = SelectObject(hdc, hfont);
+            let wide: Vec<u16> = run.text.encode_utf16().collect();
+            let _ = TextOutW(hdc, cur_x, y + 1, &wide);
+            let mut sz = SIZE::default();
+            let _ = GetTextExtentPoint32W(hdc, &wide, &mut sz);
+            cur_x += sz.cx;
+            let _ = SelectObject(hdc, old_font);
+        }
+    }
+
+    // Draw foreground text
+    SetTextColor(hdc, color);
+    let mut cur_x = x;
+    for run in &runs {
+        let hfont = get_cached_font_kind(font_size, weight, run.kind);
+        let old_font = SelectObject(hdc, hfont);
+        let wide: Vec<u16> = run.text.encode_utf16().collect();
+        let _ = TextOutW(hdc, cur_x, y, &wide);
+        let mut sz = SIZE::default();
+        let _ = GetTextExtentPoint32W(hdc, &wide, &mut sz);
+        cur_x += sz.cx;
+        let _ = SelectObject(hdc, old_font);
+    }
 }
 
 #[cfg(windows)]
@@ -2977,28 +3152,38 @@ unsafe fn draw_text_centered(
     color: windows::Win32::Foundation::COLORREF,
     shadow: bool,
 ) {
-    use windows::Win32::Graphics::Gdi::{
-        SelectObject, SetBkMode, SetTextColor, TextOutW,
-        GetTextExtentPoint32W, TRANSPARENT,
-    };
-    use windows::Win32::Foundation::SIZE;
+    let (total_w, _) = measure_text_custom(hdc, text, font_size, weight);
+    let start_x = cx - total_w / 2;
+    draw_text_custom(hdc, text, start_x, y, font_size, weight, color, shadow);
+}
 
-    let hfont = get_cached_font(font_size, weight);
-    let old_font = SelectObject(hdc, hfont);
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let mut size = SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
-    let x = cx - size.cx / 2;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if shadow {
-        SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-        let _ = TextOutW(hdc, x + 1, y + 1, &wide);
+    #[test]
+    fn test_cleanup_font_cache() {
+        #[cfg(windows)]
+        {
+            unsafe {
+                let _f1 = get_cached_font(12, 400);
+                let _f2 = get_cached_font(14, 700);
+                let _f3 = get_cached_font_kind(12, 400, FontKind::Emoji);
+            }
+            assert!(!FONT_CACHE.lock().unwrap().is_empty());
+            cleanup_font_cache();
+            assert!(FONT_CACHE.lock().unwrap().is_empty());
+        }
     }
 
-    SetTextColor(hdc, color);
-    let _ = TextOutW(hdc, x, y, &wide);
-
-    let _ = SelectObject(hdc, old_font);
+    #[test]
+    fn test_split_text_runs() {
+        let runs = split_text_runs("🛡️ 我方战绩");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].kind, FontKind::Emoji);
+        assert_eq!(runs[0].text, "🛡");
+        assert_eq!(runs[1].kind, FontKind::Text);
+        assert_eq!(runs[1].text, " 我方战绩");
+    }
 }
 

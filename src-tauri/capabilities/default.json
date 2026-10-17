@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for HexBrain main window",
-  "windows": ["main"],
+  "description": "Default permissions for HexBrain windows",
+  "windows": ["main", "ongoing-overlay"],
   "permissions": [
     "core:default",
     "opener:default"

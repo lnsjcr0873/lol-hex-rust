@@ -284,6 +284,18 @@ impl CounterItemEngine {
             }
         }
 
+        // Sort descending by tacticalScore safely with deterministic secondary tie-breaker
+        out.sort_by(|a, b| {
+            let sa = a.get("tacticalScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+            let sb = b.get("tacticalScore").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.0);
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ida = a.get("itemId").or_else(|| a.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+                    let idb = b.get("itemId").or_else(|| b.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+                    ida.cmp(idb)
+                })
+        });
+
         out
     }
 }
@@ -414,5 +426,8 @@ mod tests {
         assert_eq!(serpent["isCounterItem"], true);
         assert_eq!(serpent["isUrgentInjected"], true);
         assert_eq!(serpent["tacticalScore"], 75.0);
+        // Verify out is sorted descending by tacticalScore
+        assert_eq!(out[0]["itemId"], "6695");
+        assert!(out[0]["tacticalScore"].as_f64().unwrap() >= out[1]["tacticalScore"].as_f64().unwrap());
     }
 }

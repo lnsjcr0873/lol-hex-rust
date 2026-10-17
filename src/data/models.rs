@@ -160,7 +160,7 @@ pub struct HeroSummary {
     pub kda: f64,
     #[serde(default, deserialize_with = "deserialize_f64_lenient")]
     pub avg_cs: f64,
-    #[serde(default)]
+    #[serde(default, alias = "imageUrl", alias = "image_url")]
     pub avatar_url: String,
     #[serde(default)]
     pub top_augments: Vec<Value>,

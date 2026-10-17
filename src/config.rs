@@ -27,6 +27,8 @@ pub struct RecommendationConfig {
     pub bench_preferred_champions: Vec<String>,
 }
 
+pub const MAX_AUTO_ACCEPT_DELAY_SECONDS: u64 = 10;
+
 fn default_auto_accept_delay() -> u64 {
     2
 }
@@ -153,6 +155,12 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         None => path.with_extension(format!("tmp_{}_{}", pid, cnt)),
     };
 
+    let bak_path = match path.file_name() {
+        Some(fname) => path.with_file_name(format!("{}.bak", fname.to_string_lossy())),
+        None => path.with_extension("bak"),
+    };
+
+    // 1. Write content to temporary file on the same volume and sync buffers
     {
         use std::io::Write;
         let mut file = fs::File::create(&tmp_path)?;
@@ -161,36 +169,148 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         file.sync_all()?;
     }
 
-    // Atomically rename tmp file to target path
-    if let Err(e) = fs::rename(&tmp_path, path) {
-        // Fallback for Windows if destination already exists or rename fails
-        if path.exists() {
-            let _ = fs::remove_file(path);
-            if let Err(e2) = fs::rename(&tmp_path, path) {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(e2);
-            }
-        } else {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(e);
+    // 2. Perform atomic replace with retries for Windows AV / indexer lock contention
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        let to_wide_null = |p: &Path| -> Vec<u16> {
+            p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        };
+
+        extern "system" {
+            fn MoveFileExW(lpexistingfilename: *const u16, lpnewfilename: *const u16, dwflags: u32) -> i32;
+            fn ReplaceFileW(
+                lpreplacedfilename: *const u16,
+                lpreplacementfilename: *const u16,
+                lpbackupfilename: *const u16,
+                dwreplaceflags: u32,
+                lpexclude: *mut core::ffi::c_void,
+                lpreserved: *mut core::ffi::c_void,
+            ) -> i32;
         }
+
+        const MOVEFILE_REPLACE_EXISTING: u32 = 0x00000001;
+        const MOVEFILE_WRITE_THROUGH: u32 = 0x00000008;
+
+        let wide_tmp = to_wide_null(&tmp_path);
+        let wide_dest = to_wide_null(path);
+        let wide_bak = to_wide_null(&bak_path);
+
+        let mut success = false;
+        let mut last_error = std::io::Error::last_os_error();
+
+        for attempt in 0..5 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(15 * attempt));
+            }
+
+            if path.exists() {
+                // If destination exists, try ReplaceFileW (creates backup & atomically replaces)
+                let res = unsafe {
+                    ReplaceFileW(
+                        wide_dest.as_ptr(),
+                        wide_tmp.as_ptr(),
+                        wide_bak.as_ptr(),
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                };
+                if res != 0 {
+                    success = true;
+                    break;
+                }
+
+                // If ReplaceFileW failed, fallback to MoveFileExW
+                let move_res = unsafe {
+                    MoveFileExW(
+                        wide_tmp.as_ptr(),
+                        wide_dest.as_ptr(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                    )
+                };
+                if move_res != 0 {
+                    success = true;
+                    break;
+                }
+            } else {
+                let move_res = unsafe {
+                    MoveFileExW(
+                        wide_tmp.as_ptr(),
+                        wide_dest.as_ptr(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                    )
+                };
+                if move_res != 0 {
+                    success = true;
+                    break;
+                }
+            }
+            last_error = std::io::Error::last_os_error();
+        }
+
+        if !success {
+            // Clean up temporary file, leaving original path completely untouched!
+            let _ = fs::remove_file(&tmp_path);
+            return Err(last_error);
+        }
+
+        return Ok(());
     }
 
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        let mut last_err = None;
+        for attempt in 0..5 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(15 * attempt));
+            }
+            if path.exists() {
+                let _ = fs::copy(path, &bak_path);
+            }
+            match fs::rename(&tmp_path, path) {
+                Ok(()) => return Ok(()),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let _ = fs::remove_file(&tmp_path);
+        Err(last_err.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Atomic save failed")))
+    }
 }
 
 impl ConfigManager {
     pub fn new(path: &str) -> Self {
         let mut initial = RecommendationConfig::default();
-        if Path::new(path).exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                if !content.trim().is_empty() {
-                    if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(&content) {
+        let p = Path::new(path);
+        let bak = p.with_extension("bak");
+        let mut loaded = false;
+
+        if p.exists() {
+            if let Ok(content) = fs::read_to_string(p) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(trimmed) {
                         initial = cfg;
+                        loaded = true;
                     }
                 }
             }
         }
+
+        // Fallback to backup file if primary file was corrupted or missing
+        if !loaded && bak.exists() {
+            if let Ok(content) = fs::read_to_string(&bak) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(trimmed) {
+                        initial = cfg;
+                        let _ = fs::copy(&bak, p);
+                    }
+                }
+            }
+        }
+
         Self {
             config: Arc::new(RwLock::new(initial)),
             config_file_path: path.to_string(),
@@ -261,7 +381,7 @@ impl ConfigManager {
             cfg.auto_accept_match = aam;
         }
         if let Some(aads) = auto_accept_delay_seconds {
-            cfg.auto_accept_delay_seconds = aads.clamp(0, 10);
+            cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
         }
 
         // Persist to disk safely via atomic rename
@@ -290,7 +410,7 @@ impl ConfigManager {
             cfg.auto_accept_match = aam;
         }
         if let Some(aads) = auto_accept_delay_seconds {
-            cfg.auto_accept_delay_seconds = aads.clamp(0, 10);
+            cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
         }
         if let Some(asb) = auto_swap_bench {
             cfg.auto_swap_bench = asb;

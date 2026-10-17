@@ -70,8 +70,13 @@ impl HotkeyManager {
                     fn PostThreadMessageW(idthread: u32, msg: u32, wparam: usize, lparam: isize) -> i32;
                 }
                 unsafe {
-                    // WM_QUIT = 0x0012
-                    let _ = PostThreadMessageW(tid, 0x0012, 0, 0);
+                    // Post WM_QUIT (0x0012), retrying if the message queue is initializing
+                    for _ in 0..5 {
+                        if PostThreadMessageW(tid, 0x0012, 0, 0) != 0 {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
                 }
             }
         }
@@ -187,6 +192,20 @@ fn run_keyboard_hook_loop(running: Arc<AtomicBool>) {
             wmsgfiltermin: u32,
             wmsgfiltermax: u32,
         ) -> i32;
+        fn PeekMessageW(
+            lpmsg: *mut Msg,
+            hwnd: *mut core::ffi::c_void,
+            wmsgfiltermin: u32,
+            wmsgfiltermax: u32,
+            wremovemsg: u32,
+        ) -> i32;
+        fn SetTimer(
+            hwnd: *mut core::ffi::c_void,
+            nidevent: usize,
+            uelapse: u32,
+            lptimerfunc: Option<unsafe extern "system" fn(*mut core::ffi::c_void, u32, usize, u32)>,
+        ) -> usize;
+        fn KillTimer(hwnd: *mut core::ffi::c_void, uidevent: usize) -> i32;
     }
 
     #[link(name = "kernel32")]
@@ -197,7 +216,15 @@ fn run_keyboard_hook_loop(running: Arc<AtomicBool>) {
 
     unsafe {
         let tid = GetCurrentThreadId();
+
+        // 1. Force message queue creation before storing tid so PostThreadMessage never fails with ERROR_INVALID_THREAD_ID
+        let mut dummy = std::mem::zeroed::<Msg>();
+        let _ = PeekMessageW(&mut dummy, std::ptr::null_mut(), 0, 0, 0);
+
         HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
+
+        // 2. Install a 200ms thread timer so GetMessageW wakes up periodically and never hangs if WM_QUIT is missed
+        let timer_id = SetTimer(std::ptr::null_mut(), 0, 200, None);
 
         let hmod = GetModuleHandleW(std::ptr::null());
         // WH_KEYBOARD_LL = 13
@@ -212,8 +239,16 @@ fn run_keyboard_hook_loop(running: Arc<AtomicBool>) {
         }
 
         let mut msg = std::mem::zeroed::<Msg>();
-        while running.load(Ordering::SeqCst) && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-            // Processing loop; WM_QUIT causes GetMessageW to return 0
+        while running.load(Ordering::SeqCst) {
+            let res = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+            if res <= 0 {
+                // WM_QUIT (0) or error (-1)
+                break;
+            }
+        }
+
+        if timer_id != 0 {
+            let _ = KillTimer(std::ptr::null_mut(), timer_id);
         }
 
         if let Ok(mut guard) = HOOK_HANDLE.lock() {

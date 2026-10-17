@@ -30,33 +30,82 @@ pub struct EngineMetadata {
     pub semantic_patterns: Vec<Value>,
 }
 
-lazy_static! {
-    pub static ref ENGINE_META: EngineMetadata = {
-        let raw = include_str!("../../data/engine_metadata.json");
-        serde_json::from_str(raw).expect("Failed to parse engine_metadata.json")
-    };
+fn load_engine_metadata() -> EngineMetadata {
+    let mut candidates = vec![
+        std::path::PathBuf::from("data/engine_metadata.json"),
+        std::path::PathBuf::from("../data/engine_metadata.json"),
+        std::path::PathBuf::from("../../data/engine_metadata.json"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("data/engine_metadata.json"));
+            candidates.push(parent.join("../data/engine_metadata.json"));
+        }
+    }
+    for p in &candidates {
+        if p.exists() && p.is_file() {
+            if let Ok(content) = std::fs::read_to_string(p) {
+                if let Ok(meta) = serde_json::from_str::<EngineMetadata>(&content) {
+                    return meta;
+                }
+            }
+        }
+    }
+    const EMBEDDED_ENGINE_META: &str = include_str!("../../data/engine_metadata.json");
+    serde_json::from_str(EMBEDDED_ENGINE_META).unwrap_or_default()
+}
 
-    pub static ref HERO_DEFAULT_ARCHETYPE_MAP: HashMap<String, &'static str> = {
-        let mut map: HashMap<String, &'static str> = HashMap::new();
-        let raw = include_str!("../../data/json/heroes_summary.json");
-        if let Ok(heroes) = serde_json::from_str::<Vec<Value>>(raw) {
-            for h in heroes {
-                let parse_role = |r: &str| -> Option<&'static str> {
-                    let r_low = r.trim().to_lowercase();
-                    match r_low.as_str() {
-                        "mage" | "法师" => Some("AP_POKE_BURST"),
-                        "marksman" | "射手" | "adc" => Some("CRIT_MARKSMAN"),
-                        "assassin" | "刺客" => Some("LETHALITY_ASSASSIN"),
-                        "tank" | "坦克" => Some("PURE_TANK"),
-                        "support" | "辅助" | "enchanter" => Some("ENCHANTER_SUPPORT"),
-                        "fighter" | "战士" | "bruiser" => Some("BRUISER_FIGHTER"),
-                        _ => None,
+fn load_hero_archetype_map() -> HashMap<String, &'static str> {
+    let mut map: HashMap<String, &'static str> = HashMap::new();
+    let mut candidates = vec![
+        std::path::PathBuf::from("data/json/heroes_summary.json"),
+        std::path::PathBuf::from("../data/json/heroes_summary.json"),
+        std::path::PathBuf::from("../../data/json/heroes_summary.json"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("data/json/heroes_summary.json"));
+            candidates.push(parent.join("../data/json/heroes_summary.json"));
+        }
+    }
+    let content_opt = candidates.iter().find_map(|p| {
+        if p.exists() && p.is_file() {
+            std::fs::read_to_string(p).ok()
+        } else {
+            None
+        }
+    });
+    const EMBEDDED_HEROES: &str = include_str!("../../data/json/heroes_summary.json");
+    let raw = content_opt.as_deref().unwrap_or(EMBEDDED_HEROES);
+    if let Ok(heroes) = serde_json::from_str::<Vec<Value>>(raw) {
+        for h in heroes {
+            let parse_role = |r: &str| -> Option<&'static str> {
+                let r_low = r.trim().to_lowercase();
+                match r_low.as_str() {
+                    "mage" | "法师" => Some("AP_POKE_BURST"),
+                    "marksman" | "射手" | "adc" => Some("CRIT_MARKSMAN"),
+                    "assassin" | "刺客" => Some("LETHALITY_ASSASSIN"),
+                    "tank" | "坦克" => Some("PURE_TANK"),
+                    "support" | "辅助" | "enchanter" => Some("ENCHANTER_SUPPORT"),
+                    "fighter" | "战士" | "bruiser" => Some("BRUISER_FIGHTER"),
+                    _ => None,
+                }
+            };
+
+            let mut resolved_arch: Option<&'static str> = None;
+            if let Some(roles_arr) = h.get("roles").and_then(|v| v.as_array()) {
+                for r in roles_arr {
+                    if let Some(s) = r.as_str() {
+                        if let Some(arch) = parse_role(s) {
+                            resolved_arch = Some(arch);
+                            break;
+                        }
                     }
-                };
-
-                let mut resolved_arch: Option<&'static str> = None;
-                if let Some(roles_arr) = h.get("roles").and_then(|v| v.as_array()) {
-                    for r in roles_arr {
+                }
+            }
+            if resolved_arch.is_none() {
+                if let Some(tags_arr) = h.get("roleTags").and_then(|v| v.as_array()) {
+                    for r in tags_arr {
                         if let Some(s) = r.as_str() {
                             if let Some(arch) = parse_role(s) {
                                 resolved_arch = Some(arch);
@@ -65,49 +114,42 @@ lazy_static! {
                         }
                     }
                 }
-                if resolved_arch.is_none() {
-                    if let Some(tags_arr) = h.get("roleTags").and_then(|v| v.as_array()) {
-                        for r in tags_arr {
-                            if let Some(s) = r.as_str() {
-                                if let Some(arch) = parse_role(s) {
-                                    resolved_arch = Some(arch);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+            }
 
-                let final_arch = resolved_arch.unwrap_or("CRIT_MARKSMAN");
+            let final_arch = resolved_arch.unwrap_or("CRIT_MARKSMAN");
 
-                if let Some(id) = h.get("id").and_then(|v| v.as_str()) {
-                    if !id.is_empty() {
-                        map.insert(id.to_string(), final_arch);
-                    }
+            if let Some(id) = h.get("id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    map.insert(id.to_string(), final_arch);
                 }
-                if let Some(id_num) = h.get("id").and_then(|v| v.as_i64()) {
-                    map.insert(id_num.to_string(), final_arch);
-                }
-                if let Some(name) = h.get("name").and_then(|v| v.as_str()) {
-                    map.insert(name.to_string(), final_arch);
-                    map.insert(name.to_lowercase(), final_arch);
-                }
-                if let Some(slug) = h.get("seoSlug").and_then(|v| v.as_str()) {
-                    map.insert(slug.to_string(), final_arch);
-                    map.insert(slug.to_lowercase(), final_arch);
-                }
-                if let Some(search_terms) = h.get("searchTerms").and_then(|v| v.as_array()) {
-                    for t in search_terms {
-                        if let Some(s) = t.as_str() {
-                            map.insert(s.to_string(), final_arch);
-                            map.insert(s.to_lowercase(), final_arch);
-                        }
+            }
+            if let Some(id_num) = h.get("id").and_then(|v| v.as_i64()) {
+                map.insert(id_num.to_string(), final_arch);
+            }
+            if let Some(name) = h.get("name").and_then(|v| v.as_str()) {
+                map.insert(name.to_string(), final_arch);
+                map.insert(name.to_lowercase(), final_arch);
+            }
+            if let Some(slug) = h.get("seoSlug").and_then(|v| v.as_str()) {
+                map.insert(slug.to_string(), final_arch);
+                map.insert(slug.to_lowercase(), final_arch);
+            }
+            if let Some(search_terms) = h.get("searchTerms").and_then(|v| v.as_array()) {
+                for t in search_terms {
+                    if let Some(s) = t.as_str() {
+                        map.insert(s.to_string(), final_arch);
+                        map.insert(s.to_lowercase(), final_arch);
                     }
                 }
             }
         }
-        map
-    };
+    }
+    map
+}
+
+lazy_static! {
+    pub static ref ENGINE_META: EngineMetadata = load_engine_metadata();
+    pub static ref HERO_DEFAULT_ARCHETYPE_MAP: HashMap<String, &'static str> = load_hero_archetype_map();
 }
 
 pub fn augment_matches_favored_tag(name: &str, desc: &str, fav_tag: &str) -> bool {

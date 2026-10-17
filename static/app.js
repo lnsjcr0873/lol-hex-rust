@@ -38,13 +38,47 @@ const app = createApp({
 
     // Meta Information
     const meta = ref({
-      patch: '16.17',
-      reportDate: '2026-08-29',
+      patch: '16.18',
+      reportDate: '2026-09-20',
       heroCount: 64,
       augmentCount: 213,
       totalMatches: '12.8w',
       comboCount: '8.7k'
     });
+
+    const getDdragonVersion = () => {
+      const p = (meta.value && meta.value.patch) ? String(meta.value.patch).trim() : '';
+      if (!p) return '16.18.1';
+      return p.split('.').length === 2 ? `${p}.1` : p;
+    };
+
+    const getItemIconUrl = (itemId) => {
+      if (!itemId || Number(itemId) <= 0) return '';
+      const ver = getDdragonVersion();
+      return `https://ddragon.leagueoflegends.com/cdn/${ver}/img/item/${itemId}.png`;
+    };
+
+    const getSpellIconUrl = (spellId) => {
+      const spellMap = {
+        1: 'SummonerBoost',
+        3: 'SummonerExhaust',
+        4: 'SummonerFlash',
+        6: 'SummonerHaste',
+        7: 'SummonerHeal',
+        11: 'SummonerSmite',
+        12: 'SummonerTeleport',
+        13: 'SummonerMana',
+        14: 'SummonerDot',
+        21: 'SummonerBarrier',
+        30: 'SummonerPoroRecall',
+        31: 'SummonerPoroThrow',
+        32: 'SummonerSnowball',
+        39: 'SummonerSnowURFSnowball_Mark'
+      };
+      const name = spellMap[Number(spellId)] || 'SummonerFlash';
+      const ver = getDdragonVersion();
+      return `https://ddragon.leagueoflegends.com/cdn/${ver}/img/spell/${name}.png`;
+    };
 
     // Default pre-populated heroes (Figma Arcane Design 100% Match)
     const defaultHeroes = [
@@ -141,13 +175,16 @@ const app = createApp({
         return;
       }
       e.target.dataset.failed = 'true';
-      if (rarity === '棱彩') {
-        e.target.src = 'https://raw.communitydragon.org/latest/game/assets/ux/cherry/augments/icons/transmuteprismatic_small.png';
-      } else if (rarity === '白银') {
-        e.target.src = 'https://raw.communitydragon.org/latest/game/assets/ux/cherry/augments/icons/transmutesilver_small.png';
-      } else {
-        e.target.src = 'https://raw.communitydragon.org/latest/game/assets/ux/cherry/augments/icons/transmutegold_small.png';
-      }
+      // Inline SVG data-uri fallback matching rarity theme, completely immune to network failures
+      const colors = rarity === '棱彩' ? { bg: '#3b0764', border: '#c084fc', text: '#e9d5ff', label: '👑 棱彩' }
+                   : rarity === '白银' ? { bg: '#1e293b', border: '#94a3b8', text: '#f1f5f9', label: '🌱 白银' }
+                   : { bg: '#451a03', border: '#f59e0b', text: '#fef3c7', label: '🌸 黄金' };
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
+        `<rect width="64" height="64" rx="12" fill="${colors.bg}"/>` +
+        `<rect x="2" y="2" width="60" height="60" rx="10" fill="none" stroke="${colors.border}" stroke-width="2"/>` +
+        `<text x="32" y="38" font-size="12" font-weight="bold" fill="${colors.text}" text-anchor="middle" font-family="sans-serif">${colors.label}</text>` +
+      `</svg>`;
+      e.target.src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     };
 
     const parsePctOrFloat = (val) => {
@@ -708,7 +745,7 @@ const app = createApp({
         const list = (shoes.bootsRank || []).map(b => {
           const deltaVal = parsePctOrFloat((b.coreDelta !== undefined && b.coreDelta !== null) ? b.coreDelta : (b.deltaWinRate || 0));
           const deltaSign = deltaVal >= 0 ? "+" : "";
-          const icon = b.cdnIconUrl || b.itemImageUrl || (b.itemId ? `https://ddragon.leagueoflegends.com/cdn/14.16.1/img/item/${b.itemId}.png` : '');
+          const icon = b.cdnIconUrl || b.itemImageUrl || (b.itemId ? getItemIconUrl(b.itemId) : '');
           return {
             itemId: b.itemId,
             name: b.itemName || '鞋子',
@@ -729,9 +766,9 @@ const app = createApp({
       }
       return {
         list: [
-          { itemId: '3020', name: '法师之靴', winRate: '46.7%', pickRate: '57.2%', delta: '-0.6%', hexLabel: '主流', hexScore: 59, cdnIconUrl: 'https://ddragon.leagueoflegends.com/cdn/14.16.1/img/item/3020.png' },
-          { itemId: '3158', name: '明朗之靴', winRate: '50.9%', pickRate: '6.8%', delta: '+3.6%', hexLabel: '顶级', hexScore: 82.5, cdnIconUrl: 'https://ddragon.leagueoflegends.com/cdn/14.16.1/img/item/3158.png' },
-          { itemId: '3009', name: '轻灵之靴', winRate: '49.5%', pickRate: '0.4%', delta: '+2.2%', hexLabel: '人上人', hexScore: 68.5, cdnIconUrl: 'https://ddragon.leagueoflegends.com/cdn/14.16.1/img/item/3009.png' }
+          { itemId: '3020', name: '法师之靴', winRate: '46.7%', pickRate: '57.2%', delta: '-0.6%', hexLabel: '主流', hexScore: 59, cdnIconUrl: getItemIconUrl('3020') },
+          { itemId: '3158', name: '明朗之靴', winRate: '50.9%', pickRate: '6.8%', delta: '+3.6%', hexLabel: '顶级', hexScore: 82.5, cdnIconUrl: getItemIconUrl('3158') },
+          { itemId: '3009', name: '轻灵之靴', winRate: '49.5%', pickRate: '0.4%', delta: '+2.2%', hexLabel: '人上人', hexScore: 68.5, cdnIconUrl: getItemIconUrl('3009') }
         ],
         advice: '大乱斗18级金币充裕时，可卖鞋换第六件神装',
         sellBootsAdvice: '大乱斗18级金币充裕时，可卖鞋换第六件神装'
@@ -1601,7 +1638,58 @@ const app = createApp({
     };
 
     const handleImgError = (e) => {
-      e.target.src = 'https://game.gtimg.cn/images/lol/act/img/champion/Zoe.png';
+      if (!e || !e.target) return;
+      const target = e.target;
+      const curSrc = target.src || '';
+
+      // Prevent infinite error loops
+      const errCount = parseInt(target.dataset.errCount || '0');
+      if (errCount >= 2) {
+        target.onerror = null;
+        target.style.opacity = '0.4';
+        return;
+      }
+      target.dataset.errCount = (errCount + 1).toString();
+
+      // 1. Item icon fallback (ddragon <-> Tencent official domestic CDN)
+      const itemMatch = curSrc.match(/\/item\/(\d+)\.png/) || curSrc.match(/\/item-icons\/(\d+)\.png/);
+      if (itemMatch && itemMatch[1]) {
+        const itemId = itemMatch[1];
+        if (curSrc.includes('ddragon.leagueoflegends.com') || curSrc.includes('communitydragon.org')) {
+          target.src = `https://game.gtimg.cn/images/lol/act/img/item/${itemId}.png`;
+          return;
+        } else {
+          const ver = getDdragonVersion();
+          target.src = `https://ddragon.leagueoflegends.com/cdn/${ver}/img/item/${itemId}.png`;
+          return;
+        }
+      }
+
+      // 2. Spell icon fallback (ddragon <-> Tencent official domestic CDN)
+      const spellMatch = curSrc.match(/\/spell\/([A-Za-z0-9_]+)\.png/);
+      if (spellMatch && spellMatch[1]) {
+        const spellName = spellMatch[1];
+        if (curSrc.includes('ddragon.leagueoflegends.com')) {
+          target.src = `https://game.gtimg.cn/images/lol/act/img/spell/${spellName}.png`;
+          return;
+        } else {
+          const ver = getDdragonVersion();
+          target.src = `https://ddragon.leagueoflegends.com/cdn/${ver}/img/spell/${spellName}.png`;
+          return;
+        }
+      }
+
+      // 3. Champion icon fallback (CommunityDragon -> Tencent domestic skinloading CDN)
+      const champMatch = curSrc.match(/\/champion-icons\/(\d+)\.png/) || curSrc.match(/\/champion\/(\d+)\.png/);
+      if (champMatch && champMatch[1]) {
+        const cid = champMatch[1];
+        target.src = `https://game.gtimg.cn/images/lol/act/img/skinloading/${cid}000.jpg`;
+        return;
+      }
+
+      // 4. Default safe fallback
+      target.onerror = null;
+      target.src = 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg';
     };
 
     // ---------------- Global Data Initialization ----------------
@@ -1615,11 +1703,11 @@ const app = createApp({
 
         if (metaRes) {
           meta.value = {
-            patch: metaRes.patch || '16.17',
-            reportDate: metaRes.reportDate || '2026-08-29',
-            heroCount: metaRes.heroCount || 173,
-            augmentCount: metaRes.augmentCount || 209,
-            totalMatches: metaRes.totalMatches ? `${(metaRes.totalMatches / 10000).toFixed(1)}w` : '1157.2w',
+            patch: metaRes.patch || metaRes.report_patch || '16.18',
+            reportDate: metaRes.reportDate || metaRes.report_date || '2026-09-20',
+            heroCount: metaRes.heroCount || metaRes.heroes_count || 173,
+            augmentCount: metaRes.augmentCount || metaRes.augments_count || 213,
+            totalMatches: metaRes.totalMatches ? `${(metaRes.totalMatches / 10000).toFixed(1)}w` : (metaRes.total_matches ? `${(metaRes.total_matches / 10000).toFixed(1)}w` : '12.8w'),
             comboCount: '8.7k'
           };
         }
@@ -1694,7 +1782,18 @@ const app = createApp({
       try {
         const res = await fetch('/api/license/status');
         if (res.ok) {
-          licenseInfo.value = await res.json();
+          const data = await res.json();
+          const info = (data && typeof data.status === 'object') ? data.status : data;
+          licenseInfo.value = {
+            licensed: Boolean(info?.licensed ?? info?.is_active ?? true),
+            hwid: info?.hwid || 'COMMUNITY_EDITION',
+            tier: info?.tier || 'ULTIMATE_PRO',
+            expiresAt: info?.expiresAt || 0,
+            expiresAtStr: info?.expiresAtStr || info?.expiration || '永久社区版',
+            remainingDays: info?.remainingDays || 99999,
+            isUniversal: Boolean(info?.isUniversal ?? true),
+            message: info?.message || ''
+          };
           if (!licenseInfo.value.licensed) {
             // 未激活时，延时 1.2 秒自动呼出激活弹窗
             setTimeout(() => {
@@ -1716,7 +1815,7 @@ const app = createApp({
     };
 
     const copyHWID = () => {
-      if (licenseInfo.value.hwid) {
+      if (licenseInfo.value && licenseInfo.value.hwid) {
         navigator.clipboard.writeText(licenseInfo.value.hwid);
         hwidCopied.value = true;
         showToast('设备机器码已成功复制到剪贴板！', '📋');
@@ -1738,7 +1837,17 @@ const app = createApp({
         activateSuccess.value = data.success;
         activateMsg.value = data.message;
         if (data.success) {
-          licenseInfo.value = data.status;
+          const info = (data && typeof data.status === 'object') ? data.status : (data.licenseInfo || data);
+          licenseInfo.value = {
+            licensed: true,
+            hwid: info?.hwid || 'COMMUNITY_EDITION',
+            tier: info?.tier || 'ULTIMATE_PRO',
+            expiresAt: info?.expiresAt || 0,
+            expiresAtStr: info?.expiresAtStr || '永久社区版',
+            remainingDays: info?.remainingDays || 99999,
+            isUniversal: Boolean(info?.isUniversal ?? true),
+            message: data.message || info?.message || '激活成功'
+          };
           inputLicenseKey.value = '';
           showToast(`🎉 激活成功！(${licenseInfo.value.tier})`, '👑');
           setTimeout(() => {
@@ -1899,32 +2008,6 @@ const app = createApp({
         return;
       }
       fetchMatchHistory(q, 0);
-    };
-
-    const getSpellIconUrl = (spellId) => {
-      const spellMap = {
-        1: 'SummonerBoost',
-        3: 'SummonerExhaust',
-        4: 'SummonerFlash',
-        6: 'SummonerHaste',
-        7: 'SummonerHeal',
-        11: 'SummonerSmite',
-        12: 'SummonerTeleport',
-        13: 'SummonerMana',
-        14: 'SummonerDot',
-        21: 'SummonerBarrier',
-        30: 'SummonerPoroRecall',
-        31: 'SummonerPoroThrow',
-        32: 'SummonerSnowball',
-        39: 'SummonerSnowURFSnowball_Mark'
-      };
-      const name = spellMap[Number(spellId)] || 'SummonerFlash';
-      return `https://ddragon.leagueoflegends.com/cdn/14.1.1/img/spell/${name}.png`;
-    };
-
-    const getItemIconUrl = (itemId) => {
-      if (!itemId || Number(itemId) <= 0) return '';
-      return `https://ddragon.leagueoflegends.com/cdn/14.1.1/img/item/${itemId}.png`;
     };
 
     const getTierBadgeColor = (tier) => {

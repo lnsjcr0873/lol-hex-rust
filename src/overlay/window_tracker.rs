@@ -170,6 +170,11 @@ impl WindowTracker {
                 return false;
             }
 
+            // 0. HexBrain Companion or Overlay Window itself
+            if class_name.contains("hexbrain") || class_name.contains("tauri") {
+                return true;
+            }
+
             // 1. Direct class check: RiotWindowClass is the unique class of League 3D game client
             if class_name.contains("riotwindowclass") {
                 return true;
@@ -187,7 +192,7 @@ impl WindowTracker {
                 if root_class.contains("rclient") {
                     return false;
                 }
-                if root_class.contains("riotwindowclass") {
+                if root_class.contains("riotwindowclass") || root_class.contains("hexbrain") {
                     return true;
                 }
             }
@@ -196,6 +201,10 @@ impl WindowTracker {
             let mut fg_pid = 0u32;
             GetWindowThreadProcessId(fg, Some(&mut fg_pid));
             if fg_pid != 0 {
+                let my_pid = std::process::id();
+                if fg_pid == my_pid {
+                    return true;
+                }
                 let game_pid = crate::vision::capture::ScreenCapture::get_league_game_pid();
                 if game_pid != 0 && fg_pid == game_pid {
                     return true;

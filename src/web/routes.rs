@@ -170,7 +170,29 @@ pub fn create_router(state: AppState) -> axum::Router {
         .route("/api/license/activate", axum::routing::post(activate_license))
         // Static file fallback
         .fallback(static_asset_handler)
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin([
+                    "http://127.0.0.1:8765".parse().unwrap(),
+                    "http://localhost:8765".parse().unwrap(),
+                    "http://127.0.0.1:5173".parse().unwrap(),
+                    "http://localhost:5173".parse().unwrap(),
+                    "tauri://localhost".parse().unwrap(),
+                    "https://tauri.localhost".parse().unwrap(),
+                ])
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::ACCEPT,
+                ])
+        )
         .with_state(state)
 }
 
@@ -274,6 +296,19 @@ async fn get_player_champion_mastery(
     Json(json!([]))
 }
 
+/// Helper to paginate matches safely without secondary truncation when the input slice is already paged.
+pub fn paginate_matches<T: Clone>(matches: &[T], resolved_beg: usize, resolved_end: usize) -> Vec<T> {
+    let count = (resolved_end + 1).saturating_sub(resolved_beg);
+    if matches.len() >= resolved_beg + count {
+        matches.iter().skip(resolved_beg).take(count).cloned().collect()
+    } else if matches.len() <= count {
+        matches.iter().take(count).cloned().collect()
+    } else {
+        let skip_count = resolved_beg.min(matches.len().saturating_sub(count));
+        matches.iter().skip(skip_count).take(count).cloned().collect()
+    }
+}
+
 async fn get_match_history(
     AxPath(puuid): AxPath<String>,
     Query(query): Query<HistoryQuery>,
@@ -312,8 +347,9 @@ async fn get_match_history(
         puuid.clone()
     };
 
-    // If query is not a standard UUID, check if it's a summoner name
-    let looks_like_puuid = resolved_puuid.len() >= 32 && (resolved_puuid.contains('-') || resolved_puuid.starts_with("mock_puuid_"));
+    // A Riot PUUID is 78 hex characters (modern CN/global LCU), a 36-char UUID with hyphens, 32-char hex, or mock_puuid_*
+    let looks_like_puuid = resolved_puuid.starts_with("mock_puuid_")
+        || (resolved_puuid.len() >= 32 && resolved_puuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
     if !looks_like_puuid {
         query_name = resolved_puuid.clone();
         if let Some(sum) = state.lcu.get_summoner_by_name(&query_name).await {
@@ -364,8 +400,7 @@ async fn get_match_history(
     };
 
     // 2. Paginated slice for the matches table/cards
-    let count = (resolved_end + 1).saturating_sub(resolved_beg);
-    let paginated_matches: Vec<ParsedMatchRecord> = queue_matches.iter().skip(resolved_beg).take(count).cloned().collect();
+    let paginated_matches: Vec<ParsedMatchRecord> = paginate_matches(&queue_matches, resolved_beg, resolved_end);
 
     // 3. Tactical profile evaluation MUST always evaluate against the player's full, globally newest merged match history
     let first_cid = queue_matches.first().map(|m| m.champion_id).unwrap_or(0);
@@ -529,18 +564,214 @@ async fn get_raw_match_detail(
 
 pub fn spell_meta(spell_id: i32) -> (&'static str, &'static str) {
     match spell_id {
-        1 => ("净化", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_boost.png"),
-        3 => ("虚弱", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_exhaust.png"),
-        4 => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
-        6 => ("幽灵疾步", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_haste.png"),
-        7 => ("治疗术", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_heal.png"),
-        11 => ("惩戒", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_smite.png"),
-        12 => ("传送", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_teleport.png"),
-        14 => ("引燃", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_ignite.png"),
-        21 => ("屏障", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_barrier.png"),
-        32 => ("雪球", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_mark.png"),
-        _ => ("闪现", "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/summoner_flash.png"),
+        1 => ("净化", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerBoost.png"),
+        3 => ("虚弱", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerExhaust.png"),
+        4 => ("闪现", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png"),
+        6 => ("幽灵疾步", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHaste.png"),
+        7 => ("治疗术", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHeal.png"),
+        11 => ("惩戒", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png"),
+        12 => ("传送", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerTeleport.png"),
+        14 => ("引燃", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerDot.png"),
+        21 => ("屏障", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerBarrier.png"),
+        32 => ("雪球", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSnowball.png"),
+        _ => ("", ""),
     }
+}
+
+#[allow(dead_code)]
+pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerCard, team_str: &'static str, db: &Database) -> Value {
+    let (s1_name, s1_icon) = spell_meta(card.spell1_id);
+    let (s2_name, s2_icon) = spell_meta(card.spell2_id);
+    let cname = if card.champion_id > 0 {
+        db.resolve_hero_name(&card.champion_id.to_string())
+            .unwrap_or_else(|| format!("英雄{}", card.champion_id))
+    } else {
+        "选择中...".to_string()
+    };
+    let cicon = if card.champion_id > 0 {
+        format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", card.champion_id)
+    } else {
+        "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+    };
+
+    let badges_json: Vec<Value> = card
+        .tactical_analysis
+        .badges
+        .iter()
+        .map(|b| {
+            let color = if b.fg.contains("38bdf8") || b.fg.contains("cyan") {
+                "cyan"
+            } else if b.fg.contains("f87171") || b.fg.contains("red") {
+                "red"
+            } else if b.fg.contains("fbbf24") || b.fg.contains("gold") || b.fg.contains("amber") {
+                "gold"
+            } else if b.fg.contains("a5b4fc") || b.fg.contains("purple") {
+                "purple"
+            } else {
+                "blue"
+            };
+            json!({
+                "id": format!("b_{}_{}", card.slot_index, b.text),
+                "label": b.text,
+                "icon": if b.text.contains("连胜") { "🔥" } else if b.text.contains("连败") { "❄️" } else if b.text.contains("绝活") { "👑" } else if b.text.contains("通天代") { "⚡" } else if b.text.contains("车队") { "🚗" } else { "🎯" },
+                "color": color,
+                "description": b.desc
+            })
+        })
+        .collect();
+
+    let premade_party = card.premade_group.map(|gid| {
+        json!({
+            "party_id": gid,
+            "label": card.premade_tag.clone().unwrap_or_else(|| "🚗 车队".to_string()),
+            "color_class": if gid == 1 { "party-border-pink" } else { "party-border-yellow" }
+        })
+    });
+
+    let recent_matches: Vec<&'static str> = card
+        .tactical_analysis
+        .recent_dots
+        .iter()
+        .map(|&w| if w { "win" } else { "loss" })
+        .collect();
+    let radar = &card.tactical_analysis.radar;
+
+    json!({
+        "puuid": card.puuid,
+        "summoner_id": card.puuid,
+        "game_name": if !card.summoner_name.is_empty() { card.summoner_name.clone() } else { cname.clone() },
+        "tag_line": card.full_name.split('#').nth(1).filter(|s| !s.is_empty()).unwrap_or(""),
+        "profile_icon_id": card.profile_icon_id,
+        "summoner_level": card.level,
+        "team": team_str,
+        "cell_id": card.slot_index,
+        "assigned_position": card.position,
+        "champion_id": card.champion_id,
+        "champion_name": cname,
+        "champion_title": "",
+        "champion_icon": cicon,
+        "is_locked": card.champion_id > 0,
+        "spell1_id": card.spell1_id,
+        "spell1_name": s1_name,
+        "spell1_icon": s1_icon,
+        "spell2_id": card.spell2_id,
+        "spell2_name": s2_name,
+        "spell2_icon": s2_icon,
+        "tier": card.tactical_analysis.tier,
+        "division": card.tactical_analysis.division,
+        "lp": card.tactical_analysis.lp,
+        "recent_kda": card.tactical_analysis.avg_kda_str,
+        "recent_kda_ratio": card.tactical_analysis.avg_kda_ratio,
+        "recent_win_rate": card.tactical_analysis.recent_win_rate_pct,
+        "recent_games_count": card.tactical_analysis.recent_count,
+        "champ_recent_games": card.tactical_analysis.cur_champ_games,
+        "champ_recent_win_rate": card.tactical_analysis.cur_champ_win_rate_pct,
+        "top_champs": card.tactical_analysis.top_champs.iter().map(|tc| {
+            json!({
+                "champion_id": tc.champion_id,
+                "champion_name": tc.champion_name,
+                "games": tc.games,
+                "win_rate": tc.win_rate,
+                "win_rate_pct": tc.win_rate_pct,
+                "kda": tc.kda,
+            })
+        }).collect::<Vec<Value>>(),
+        "recent_matches": recent_matches,
+        "matches": card.matches.iter().take(10).map(|m| {
+            json!({
+                "game_id": m.game_id,
+                "game_creation": m.game_creation,
+                "game_duration": m.game_duration,
+                "game_duration_str": m.game_duration_str,
+                "queue_id": m.queue_id,
+                "mode_cn": m.mode_cn,
+                "champion_id": m.champion_id,
+                "champion_name": m.champion_name,
+                "champion_avatar": m.champion_avatar,
+                "win": m.win,
+                "kills": m.kills,
+                "deaths": m.deaths,
+                "assists": m.assists,
+                "kda_str": m.kda_str,
+                "kda_ratio": m.kda_ratio,
+                "cs": m.cs,
+                "cs_per_min": m.cs_per_min,
+                "items": m.items,
+                "all_items": m.all_items
+            })
+        }).collect::<Vec<Value>>(),
+        "badges": badges_json,
+        "premade_party": premade_party,
+        "radar": {
+            "output": radar.get("damage").copied().unwrap_or(0),
+            "kda": radar.get("kda").copied().unwrap_or(0),
+            "join_rate": radar.get("kp").copied().unwrap_or(0),
+            "survival": radar.get("survival").copied().unwrap_or(0),
+            "gold": radar.get("economy").copied().unwrap_or(0),
+            "vision": radar.get("vision").copied().unwrap_or(0)
+        }
+    })
+}
+
+pub fn build_chat_broadcast_lines(
+    my_team: &[crate::engine::player_history::OngoingPlayerCard],
+    format: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if format == Some("concise") {
+        lines.push("⚡【HexBrain 战绩简报】".to_string());
+        let mut summaries = Vec::new();
+        for p in my_team.iter().take(5) {
+            let pos = match p.position.to_uppercase().as_str() {
+                "TOP" => "上",
+                "JUNGLE" => "野",
+                "MID" | "MIDDLE" => "中",
+                "BOTTOM" | "BOT" | "ADC" => "下",
+                "UTILITY" | "SUPPORT" => "辅",
+                _ => "",
+            };
+            let cname = if !p.champion_name.is_empty() && p.champion_name != "选择中..." {
+                p.champion_name.clone()
+            } else {
+                p.summoner_name.clone()
+            };
+            let prefix = if !pos.is_empty() { format!("{}:", pos) } else { String::new() };
+            if p.tactical_analysis.recent_count > 0 {
+                summaries.push(format!("{}{}({}%胜)", prefix, cname, p.tactical_analysis.recent_win_rate_pct));
+            } else {
+                summaries.push(format!("{}{}", prefix, cname));
+            }
+        }
+        lines.push(summaries.join(" | "));
+    } else {
+        lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
+
+        for (idx, p) in my_team.iter().take(5).enumerate() {
+            let pos = match p.position.to_uppercase().as_str() {
+                "TOP" => "上路",
+                "JUNGLE" => "打野",
+                "MID" | "MIDDLE" => "中路",
+                "BOTTOM" | "BOT" | "ADC" => "射手",
+                "UTILITY" | "SUPPORT" => "辅助",
+                _ => "",
+            };
+            let pos_str = if !pos.is_empty() { format!("{} ", pos) } else { String::new() };
+            let wr = p.tactical_analysis.recent_win_rate_pct;
+            let tag = p.premade_tag.as_deref().unwrap_or("");
+            let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
+            lines.push(format!(
+                "{}. {}[{}] {} (近{}场胜率{}%){}",
+                idx + 1,
+                pos_str,
+                p.summoner_name,
+                p.tactical_analysis.tier_str,
+                p.tactical_analysis.recent_count,
+                wr,
+                tag_suffix
+            ));
+        }
+    }
+    lines
 }
 
 fn resolve_participant_role(p: &Value, pid: i64) -> String {
@@ -570,7 +801,10 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())))
         .or_else(|| raw.get("id").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))))?;
     let game_creation = raw.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
-    let game_duration = raw.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+    let raw_duration = raw.get("gameDuration").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0).max(0);
+    let start_ts = raw.get("gameStartTimestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+    let end_ts = raw.get("gameEndTimestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+    let game_duration = crate::engine::player_history::normalize_game_duration(raw_duration, start_ts, end_ts);
     let game_duration_str = format!("{}:{:02}", game_duration / 60, game_duration % 60);
     let queue_id = raw.get("queueId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let game_mode = raw.get("gameMode").and_then(|v| v.as_str()).unwrap_or("CLASSIC").to_string();
@@ -839,7 +1073,11 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         }
 
         let item_trinket = p.items.get(6).copied().unwrap_or(0);
-        let cicon = format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", p.champion_id);
+        let cicon = if p.champion_id > 0 {
+            format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", p.champion_id)
+        } else {
+            "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+        };
 
         let p_val = json!({
             "participant_id": p.pid,
@@ -988,7 +1226,7 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
             "champion_id": cid,
             "champion_name": cname,
             "champion_title": "",
-            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid),
+            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid),
             "champion_level": 14 + (i as i32 % 3),
             "role": roles[i],
             "spell1_id": s1,
@@ -1053,7 +1291,7 @@ pub fn build_mock_match_detail(gid: i64, db: &Database) -> Value {
             "champion_id": cid,
             "champion_name": cname,
             "champion_title": "",
-            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid),
+            "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid),
             "champion_level": 13 + (i as i32 % 2),
             "role": roles[i],
             "spell1_id": s1,
@@ -1448,33 +1686,7 @@ async fn send_chat_records(
     }
 
     let ongoing = state.history.get_ongoing_match(&state.lcu, &state.db).await;
-    let mut lines = Vec::new();
-    lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
-
-    for (idx, p) in ongoing.my_team.iter().take(5).enumerate() {
-        let pos = match p.position.to_uppercase().as_str() {
-            "TOP" => "上路",
-            "JUNGLE" => "打野",
-            "MID" | "MIDDLE" => "中路",
-            "BOTTOM" | "BOT" | "ADC" => "射手",
-            "UTILITY" | "SUPPORT" => "辅助",
-            _ => "",
-        };
-        let pos_str = if !pos.is_empty() { format!("{} ", pos) } else { String::new() };
-        let wr = p.tactical_analysis.recent_win_rate_pct;
-        let tag = p.premade_tag.as_deref().unwrap_or("");
-        let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
-        lines.push(format!(
-            "{}. {}[{}] {} (近{}场胜率{}%){}",
-            idx + 1,
-            pos_str,
-            p.summoner_name,
-            p.tactical_analysis.tier_str,
-            p.tactical_analysis.recent_count,
-            wr,
-            tag_suffix
-        ));
-    }
+    let lines = build_chat_broadcast_lines(&ongoing.my_team, None);
 
     if !room_id.is_empty() {
         let mut any_success = false;
@@ -1797,16 +2009,42 @@ async fn team_synergy(Json(_payload): Json<Value>) -> Json<Value> {
 }
 
 async fn get_license_status() -> Json<Value> {
-    Json(json!({
+    let status_obj = json!({
+        "licensed": true,
         "is_active": true,
-        "status": "ACTIVE",
+        "hwid": "COMMUNITY_EDITION",
         "tier": "ULTIMATE_PRO",
-        "expiration": "PERMANENT_COMMUNITY_EDITION"
-    }))
+        "expiresAt": 4102444800000_i64,
+        "expiresAtStr": "永久社区版",
+        "remainingDays": 99999,
+        "isUniversal": true,
+        "status": "ACTIVE",
+        "expiration": "PERMANENT_COMMUNITY_EDITION",
+        "message": "已永久授权"
+    });
+    Json(status_obj)
 }
 
 async fn activate_license(Json(_body): Json<Value>) -> Json<Value> {
-    Json(json!({ "success": true, "message": "终身授权校验通过" }))
+    let status_obj = json!({
+        "licensed": true,
+        "is_active": true,
+        "hwid": "COMMUNITY_EDITION",
+        "tier": "ULTIMATE_PRO",
+        "expiresAt": 4102444800000_i64,
+        "expiresAtStr": "永久社区版",
+        "remainingDays": 99999,
+        "isUniversal": true,
+        "status": "ACTIVE",
+        "expiration": "PERMANENT_COMMUNITY_EDITION",
+        "message": "授权校验通过"
+    });
+    Json(json!({
+        "success": true,
+        "message": "授权校验通过",
+        "status": status_obj,
+        "licenseInfo": status_obj
+    }))
 }
 
 async fn scan_and_compare(
@@ -1915,7 +2153,20 @@ async fn static_asset_handler(uri: Uri) -> Response {
     }
     let target = if path.is_empty() { "index.html" } else { path };
 
-    // 1. Check local disk
+    // 1. Check frontend/dist first (if frontend was built)
+    let dist_path = std::path::Path::new("frontend/dist").join(target);
+    if dist_path.exists() && dist_path.is_file() {
+        if let Ok(bytes) = tokio::fs::read(&dist_path).await {
+            let mime = mime_guess::from_path(&dist_path).first_or_octet_stream();
+            return (
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                bytes,
+            )
+                .into_response();
+        }
+    }
+
+    // 2. Check local disk in static/
     let disk_path = std::path::Path::new("static").join(target);
     if disk_path.exists() && disk_path.is_file() {
         if let Ok(bytes) = tokio::fs::read(&disk_path).await {
@@ -1928,7 +2179,7 @@ async fn static_asset_handler(uri: Uri) -> Response {
         }
     }
 
-    // 2. Check embedded assets
+    // 3. Check embedded assets
     if let Some(content) = StaticAssets::get(target) {
         let mime = mime_guess::from_path(target).first_or_octet_stream();
         return (
@@ -1938,13 +2189,48 @@ async fn static_asset_handler(uri: Uri) -> Response {
             .into_response();
     }
 
+    // 4. Asset fuzzy fallback: if a hashed asset like assets/index-*.js or assets/index-*.css was requested but hash changed
+    if target.starts_with("assets/index-") {
+        let ext = std::path::Path::new(target).extension().and_then(|s| s.to_str()).unwrap_or("");
+        let search_dirs = [std::path::Path::new("frontend/dist/assets"), std::path::Path::new("static/assets")];
+        for dir in &search_dirs {
+            if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let file_name = entry.file_name();
+                    let name_str = file_name.to_string_lossy();
+                    if name_str.starts_with("index-") && name_str.ends_with(ext) {
+                        if let Ok(bytes) = tokio::fs::read(entry.path()).await {
+                            let mime = mime_guess::from_path(entry.path()).first_or_octet_stream();
+                            return (
+                                [(header::CONTENT_TYPE, mime.as_ref())],
+                                bytes,
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // If target has a file extension (like .css, .js, .png), never return index.html (SPA fallback)
     // to prevent browser strict MIME type violations!
     if std::path::Path::new(target).extension().is_some() {
         return (StatusCode::NOT_FOUND, "Static Asset Not Found").into_response();
     }
 
-    // 3. SPA Fallback: Serve index.html
+    // 5. SPA Fallback: Serve index.html (frontend/dist first, then static, then embedded)
+    let dist_index = std::path::Path::new("frontend/dist/index.html");
+    if dist_index.exists() {
+        if let Ok(bytes) = tokio::fs::read(&dist_index).await {
+            return (
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                bytes,
+            )
+                .into_response();
+        }
+    }
+
     let index_disk = std::path::Path::new("static").join("index.html");
     if index_disk.exists() {
         if let Ok(bytes) = tokio::fs::read(&index_disk).await {
@@ -1965,4 +2251,39 @@ async fn static_asset_handler(uri: Uri) -> Response {
     }
 
     (StatusCode::NOT_FOUND, "Not Found").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_paginate_matches_prevents_secondary_truncation() {
+        // Case 1: matches was already paged upstream by LCU [20..39] (20 items)
+        let paged_items: Vec<i32> = (20..40).collect();
+        let res = paginate_matches(&paged_items, 20, 39);
+        assert_eq!(res.len(), 20, "Should NOT skip 20 when already paged");
+        assert_eq!(res[0], 20);
+        assert_eq!(res[19], 39);
+
+        // Case 2: matches contains full history from index 0 [0..39] (40 items)
+        let full_items: Vec<i32> = (0..40).collect();
+        let res = paginate_matches(&full_items, 20, 39);
+        assert_eq!(res.len(), 20);
+        assert_eq!(res[0], 20);
+        assert_eq!(res[19], 39);
+
+        // Case 3: first page [0..19]
+        let res = paginate_matches(&full_items, 0, 19);
+        assert_eq!(res.len(), 20);
+        assert_eq!(res[0], 0);
+        assert_eq!(res[19], 19);
+
+        // Case 4: filtered queue returns fewer items than page size
+        let small_items: Vec<i32> = (20..25).collect();
+        let res = paginate_matches(&small_items, 20, 39);
+        assert_eq!(res.len(), 5);
+        assert_eq!(res[0], 20);
+        assert_eq!(res[4], 24);
+    }
 }

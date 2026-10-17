@@ -22,22 +22,7 @@ use tokio::sync::RwLock;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-pub static GLOBAL_TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
-
-pub fn spawn_task<F>(future: F)
-where
-    F: std::future::Future<Output = ()> + Send + 'static,
-{
-    if let Some(handle) = GLOBAL_TOKIO_HANDLE.get() {
-        handle.spawn(future);
-    } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(future);
-    } else {
-        tracing::error!("Cannot spawn task: Tokio runtime handle unavailable");
-    }
-}
-
-
+pub use lol_hex_rust::{get_tokio_handle, init_tokio_handle, spawn_task, GLOBAL_TOKIO_HANDLE};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     // 1. Cache Tokio runtime handle so non-Tokio worker threads (Win32 Hook, GDI loop) can safely spawn async tasks
-    let _ = GLOBAL_TOKIO_HANDLE.set(tokio::runtime::Handle::current());
+    init_tokio_handle(tokio::runtime::Handle::current());
 
     // 2. Global panic hook to log panics gracefully without silent crashes
     std::panic::set_hook(Box::new(|info| {
@@ -106,8 +91,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         *gio = Some(item_overlay.clone());
     }
 
-    // 3. Track current game mode (ARAM vs Summoner's Rift) for hotkeys & overlays
+    // 3. Track current game mode (ARAM vs Summoner's Rift vs Hextech) for hotkeys & overlays
     let is_aram_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let is_hextech_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // 4. Start Overlays
     bench_overlay.start();
@@ -117,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db.clone(),
         live_client.clone(),
         lcu_client.clone(),
-        is_aram_active.clone(),
+        is_hextech_active.clone(),
     );
     item_overlay.start();
 
@@ -125,31 +111,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingame_clone = ingame_overlay.clone();
     let item_clone = item_overlay.clone();
     let db_for_hotkey = db.clone();
-    let is_aram_for_hotkey = is_aram_active.clone();
+    let is_hextech_for_hotkey = is_hextech_active.clone();
     let hotkeys = HotkeyManager::new();
     hotkeys.start(
         move || {
-            let is_aram = is_aram_for_hotkey.load(std::sync::atomic::Ordering::SeqCst);
-            info!("Hotkey '[' pressed: is_aram = {}", is_aram);
-            if is_aram {
-                info!("Triggering InGame Augment Scan (ARAM)");
+            let is_hextech = is_hextech_for_hotkey.load(std::sync::atomic::Ordering::SeqCst);
+            info!("Hotkey '[' pressed: is_hextech = {}", is_hextech);
+            if is_hextech {
+                info!("Triggering InGame Augment Scan (Hextech Mode)");
                 ingame_clone.trigger_scan_with_db(&db_for_hotkey);
                 TextToSpeech::speak("海克斯强化推演已激活");
             } else {
                 let live_reader = LiveClientDataReader::new();
                 let ingame_fallback = ingame_clone.clone();
                 let db_fallback = db_for_hotkey.clone();
-                let is_aram_flag = is_aram_for_hotkey.clone();
+                let is_hex_flag = is_hextech_for_hotkey.clone();
                 crate::spawn_task(async move {
                     let stats = live_reader.get_live_stats().await;
-                    if stats.is_in_game && stats.is_aram {
-                        is_aram_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                        info!("Fast live probe confirmed ARAM! Triggering scan...");
+                    if stats.is_in_game && stats.has_hextech {
+                        is_hex_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        info!("Fast live probe confirmed Hextech mode! Triggering scan...");
                         ingame_fallback.trigger_scan_with_db(&db_fallback);
                         TextToSpeech::speak("海克斯强化推演已激活");
                     } else if stats.is_in_game {
-                        info!("Hotkey '[' pressed: Summoner's Rift active, skipping Hextech scan");
-                        TextToSpeech::speak("当前为召唤师峡谷模式，海克斯强化仅在狂暴大乱斗模式生效");
+                        info!("Hotkey '[' pressed: Non-hextech mode active, skipping Hextech scan");
+                        TextToSpeech::speak("当前对局非海克斯强化模式，海克斯推荐仅在斗魂竞技场或海克斯大乱斗生效");
                     } else {
                         info!("Hotkey '[' pressed outside match, attempting scan fallback");
                         ingame_fallback.trigger_scan_with_db(&db_fallback);
@@ -207,6 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingame_bg = ingame_overlay.clone();
     let hex_bg = hexdata_client.clone();
     let is_aram_bg = is_aram_active.clone();
+    let is_hextech_bg = is_hextech_active.clone();
     let config_bg = config_manager.clone();
     let ws_bg = ws_broadcaster.clone();
 
@@ -330,30 +317,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     })
                                     .unwrap_or_default();
 
-                                for pref_id in &cfg.bench_preferred_champions {
-                                    if !my_cid_str.is_empty() && my_cid_str == *pref_id {
+                                for pref_raw in &cfg.bench_preferred_champions {
+                                    let pref_id_str = db_bg.resolve_hero_id(pref_raw).unwrap_or_else(|| pref_raw.clone());
+                                    if !my_cid_str.is_empty() && my_cid_str == pref_id_str {
                                         break;
                                     }
-                                    if swapped_bench_cids.contains(pref_id) {
+                                    if swapped_bench_cids.contains(&pref_id_str) {
                                         continue;
                                     }
                                     let on_bench = bench.iter().any(|b| {
                                         b.get("championId")
                                             .map(|v| match v {
-                                                Value::String(s) => s == pref_id,
-                                                Value::Number(n) => n.to_string() == *pref_id,
+                                                Value::String(s) => s == &pref_id_str,
+                                                Value::Number(n) => n.to_string() == pref_id_str,
                                                 _ => false,
                                             })
                                             .unwrap_or(false)
                                     });
                                     if on_bench {
-                                        if lcu_bg.swap_bench_champion(pref_id).await {
-                                            swapped_bench_cids.insert(pref_id.clone());
-                                            let pref_name = db_bg.resolve_hero_name(pref_id).unwrap_or_else(|| format!("英雄{}", pref_id));
+                                        if lcu_bg.swap_bench_champion(&pref_id_str).await {
+                                            swapped_bench_cids.insert(pref_id_str.clone());
+                                            let pref_name = db_bg.resolve_hero_name(&pref_id_str).unwrap_or_else(|| format!("英雄{}", pref_id_str));
                                             tracing::info!("⚡ [HexBrain ARAM] 心愿英雄已出现在待选席！已极速为您秒抢：{}", pref_name);
                                             ws_bg.send_event("auto_swap_bench", serde_json::json!({
                                                 "status": "swapped",
-                                                "championId": pref_id,
+                                                "championId": pref_id_str,
                                                 "championName": pref_name
                                             }));
                                             break;
@@ -537,6 +525,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     is_aram_bg.store(live_stats.is_aram, std::sync::atomic::Ordering::SeqCst);
+                    let is_hextech_mode = live_stats.has_hextech;
+                    is_hextech_bg.store(is_hextech_mode, std::sync::atomic::Ordering::SeqCst);
+
                     if live_stats.is_aram {
                         // ARAM mode: transition from ranked overlay to augments
                         if ranked_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
@@ -552,11 +543,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         let current_lvl = live_stats.level;
-                        let is_hextech_mode = live_stats.game_mode.eq_ignore_ascii_case("CHERRY")
-                            || live_stats.game_mode.eq_ignore_ascii_case("KIWI")
-                            || live_stats.game_mode.eq_ignore_ascii_case("SWIFTPLAY")
-                            || live_stats.map_number == 30;
-
                         let is_milestone = if is_hextech_mode {
                             if last_level == 0 {
                                 matches!(current_lvl, 3 | 4 | 7 | 11 | 15)
@@ -570,7 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         if is_milestone {
-                            info!("ARAM level milestone reached: Level {}! Triggering augment readiness", current_lvl);
+                            info!("Hextech level milestone reached: Level {}! Triggering augment readiness", current_lvl);
                             TextToSpeech::speak(&format!("已升至{}级，海克斯强化节点已就绪", current_lvl));
                             let ingame_auto = ingame_bg.clone();
                             let db_auto = db_bg.clone();
@@ -612,6 +598,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if last_level > 0 {
                     last_level = 0;
                     is_aram_bg.store(false, std::sync::atomic::Ordering::SeqCst);
+                    is_hextech_bg.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
                 if bench_bg.is_showing.load(std::sync::atomic::Ordering::SeqCst) {
                     bench_bg.stop();

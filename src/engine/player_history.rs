@@ -246,6 +246,30 @@ pub fn get_tier_color(tier: &str) -> &'static str {
     }
 }
 
+/// Normalizes game duration across Riot LCU / SGP API versions,
+/// handling raw seconds (e.g. 1720), milliseconds (e.g. 1720000), or start/end timestamp diffs.
+pub fn normalize_game_duration(raw_duration: i64, start_ts: i64, end_ts: i64) -> i64 {
+    if raw_duration >= 10_000 {
+        raw_duration / 1000
+    } else if raw_duration > 0 {
+        raw_duration
+    } else if end_ts > start_ts && start_ts > 0 {
+        (end_ts - start_ts) / 1000
+    } else {
+        0
+    }
+}
+
+pub(crate) struct AbortOnDrop<T>(pub Option<tokio::task::JoinHandle<T>>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(ref h) = self.0 {
+            h.abort();
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchParticipantInput {
     pub participant_id: i64,
@@ -510,8 +534,22 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
         }
 
         for j in (i + 1)..n {
-            // Verify players are not opponents in current match (if team_id is known)
-            if players[i].team_id > 0 && players[j].team_id > 0 && players[i].team_id != players[j].team_id {
+            // Verify players are not opponents in current match (including fallback team assignment when team_id == 0)
+            let tid_i = if players[i].team_id > 0 {
+                players[i].team_id
+            } else if n == 10 {
+                if i < 5 { 100 } else { 200 }
+            } else {
+                0
+            };
+            let tid_j = if players[j].team_id > 0 {
+                players[j].team_id
+            } else if n == 10 {
+                if j < 5 { 100 } else { 200 }
+            } else {
+                0
+            };
+            if tid_i > 0 && tid_j > 0 && tid_i != tid_j {
                 continue;
             }
 
@@ -849,6 +887,20 @@ impl PlayerHistoryManager {
         let valid = [10, 20, 30, 40, 50, 100, 200];
         let c = if valid.contains(&count) { count } else { 20 };
         self.sample_count.store(c, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn recompute_profile_sync(
+        &self,
+        puuid: &str,
+        current_champion_id: i32,
+        sample_limit: usize,
+    ) -> Option<PlayerTacticalProfile> {
+        if let Ok(guard) = self.raw_cache.try_read() {
+            if let Some(record) = guard.get(puuid) {
+                return Some(self.compute_tactical_profile(record, current_champion_id, sample_limit));
+            }
+        }
+        None
     }
 
     pub async fn get_player_data(&self, puuid: &str) -> Option<CachedPlayerRecord> {
@@ -1306,24 +1358,32 @@ impl PlayerHistoryManager {
         if !is_valid_match_id(game_id) {
             return;
         }
-        static RECORD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = RECORD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let perform_write = move || {
+            static RECORD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = RECORD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
-        let cache_path = std::path::Path::new("data/cache/encountered_games.json");
-        let mut list: Vec<i64> = if let Ok(c) = std::fs::read_to_string(cache_path) {
-            serde_json::from_str(&c).unwrap_or_default()
-        } else {
-            Vec::new()
+            let cache_path = std::path::Path::new("data/cache/encountered_games.json");
+            let mut list: Vec<i64> = if let Ok(c) = std::fs::read_to_string(cache_path) {
+                serde_json::from_str(&c).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if !list.contains(&game_id) {
+                list.push(game_id);
+                if list.len() > 1000 {
+                    list.remove(0);
+                }
+                if let Some(parent) = cache_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(cache_path, serde_json::to_string(&list).unwrap_or_default());
+            }
         };
-        if !list.contains(&game_id) {
-            list.push(game_id);
-            if list.len() > 1000 {
-                list.remove(0);
-            }
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(cache_path, serde_json::to_string(&list).unwrap_or_default());
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(perform_write);
+        } else {
+            perform_write();
         }
     }
 
@@ -1369,16 +1429,32 @@ impl PlayerHistoryManager {
                 }
             }
 
-            // 3. Scan recent LeagueClient log files across common drives with lossy decoding (handles GBK/CP936 logs)
-            let potential_log_dirs = [
-                "F:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-                "D:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-                "C:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-                "E:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
-                "G:\\wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+            // 3. Scan recent LeagueClient log files across common drives and client paths dynamically
+            let relative_log_suffixes = [
+                "wegameapps\\英雄联盟（含经典模式）\\Game\\Logs\\LeagueClient Logs",
+                "WeGameApps\\英雄联盟\\Game\\Logs\\LeagueClient Logs",
+                "腾讯游戏\\英雄联盟\\Game\\Logs\\LeagueClient Logs",
+                "Riot Games\\League of Legends\\Logs\\LeagueClient Logs",
+                "League of Legends\\Logs\\LeagueClient Logs",
+                "Program Files\\Riot Games\\League of Legends\\Logs\\LeagueClient Logs",
+                "Program Files (x86)\\Riot Games\\League of Legends\\Logs\\LeagueClient Logs",
             ];
-            for dir in potential_log_dirs {
-                let p = std::path::Path::new(dir);
+
+            let mut potential_log_dirs: Vec<std::path::PathBuf> = Vec::new();
+            for drive in b'C'..=b'Z' {
+                let drive_root = format!("{}:\\", drive as char);
+                let drive_path = std::path::Path::new(&drive_root);
+                if drive_path.exists() {
+                    for suffix in &relative_log_suffixes {
+                        let full = drive_path.join(suffix);
+                        if full.exists() {
+                            potential_log_dirs.push(full);
+                        }
+                    }
+                }
+            }
+
+            for p in &potential_log_dirs {
                 if p.exists() {
                     if let Ok(entries) = std::fs::read_dir(p) {
                         let mut log_files: Vec<_> = entries
@@ -1571,12 +1647,13 @@ impl PlayerHistoryManager {
                         let mut handles = Vec::new();
                         for gid in batch {
                             let lcu_c = lcu.clone();
-                            handles.push(tokio::spawn(async move {
+                            handles.push(AbortOnDrop(Some(tokio::spawn(async move {
                                 lcu_c.get_match_detail(&gid.to_string()).await
-                            }));
+                            }))));
                         }
-                        for h in handles {
-                            if let Ok(Some(g_val)) = h.await {
+                        for mut h in handles {
+                            if let Some(handle) = h.0.take() {
+                                if let Ok(Some(g_val)) = handle.await {
                                 if g_val.get("participants").is_some() {
                                     let in_match = g_val.get("participantIdentities")
                                         .and_then(|pi| pi.as_array())
@@ -1595,7 +1672,8 @@ impl PlayerHistoryManager {
                             }
                         }
                     }
-                }).await;
+                }
+            }).await;
             }
         }
 
@@ -1603,7 +1681,10 @@ impl PlayerHistoryManager {
             for g in &raw_games {
                 let game_id = g.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
                 let game_creation = g.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
-                let duration_sec = g.get("gameDuration").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+                let raw_duration = g.get("gameDuration").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0).max(0);
+                let start_ts = g.get("gameStartTimestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                let end_ts = g.get("gameEndTimestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                let duration_sec = normalize_game_duration(raw_duration, start_ts, end_ts);
                 let duration_str = format!("{}:{:02}", duration_sec / 60, duration_sec % 60);
                 let queue_id = g.get("queueId").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let mode_cn = queue_id_to_mode_cn(queue_id).to_string();
@@ -1697,7 +1778,11 @@ impl PlayerHistoryManager {
                 } else {
                     format!("英雄{}", cid)
                 };
-                let cavatar = format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid);
+                let cavatar = if cid > 0 {
+                    format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid)
+                } else {
+                    "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+                };
 
                 let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let d = stats.and_then(|s| s.get("deaths")).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -1778,7 +1863,11 @@ impl PlayerHistoryManager {
                         is_blue: pt_tid == 100,
                         champion_id: pt_cid,
                         champion_name: pt_cname,
-                        champion_icon: format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", pt_cid),
+                        champion_icon: if pt_cid > 0 {
+                            format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", pt_cid)
+                        } else {
+                            "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+                        },
                         is_win: pt_win,
                         kills: pt_k,
                         deaths: pt_d,
@@ -1986,7 +2075,11 @@ impl PlayerHistoryManager {
                 mode_cn: "排位赛(单双)".to_string(),
                 champion_id: cid,
                 champion_name: pool[mi % pool.len()].to_string(),
-                champion_avatar: format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid),
+                champion_avatar: if cid > 0 {
+                    format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid)
+                } else {
+                    "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+                },
                 win: is_win,
                 kills: k,
                 deaths: d,
@@ -2080,7 +2173,11 @@ impl PlayerHistoryManager {
                 let rec = self.build_mock_player_profile(cfg.0, cfg.2);
                 let tactical = self.compute_tactical_profile(&rec, cfg.2, 20);
                 let cname = db.resolve_hero_name(&cfg.2.to_string()).unwrap_or_else(|| cfg.3.to_string());
-                let cavatar = format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cfg.2);
+                let cavatar = if cfg.2 > 0 {
+                    format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cfg.2)
+                } else {
+                    "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
+                };
 
                 OngoingPlayerCard {
                     slot_index: cfg.0,
@@ -2214,14 +2311,24 @@ impl PlayerHistoryManager {
 
             let mut my_cards = Vec::new();
             if let Some(arr) = my_raw {
+                let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64());
                 let cids: Vec<i32> = arr.iter().map(|p| p.get("championId").or_else(|| p.get("championPickIntent")).and_then(|v| v.as_i64()).unwrap_or(0) as i32).collect();
-                let is_locals: Vec<bool> = arr.iter().map(|p| p.get("is_local_player").and_then(|v| v.as_bool()).unwrap_or(false)).collect();
+                let is_locals: Vec<bool> = arr.iter().map(|p| {
+                    if let Some(lid) = local_cell_id {
+                        if let Some(cid) = p.get("cellId").and_then(|v| v.as_i64()) {
+                            if cid == lid {
+                                return true;
+                            }
+                        }
+                    }
+                    p.get("is_local_player").and_then(|v| v.as_bool()).unwrap_or(false)
+                }).collect();
                 let profiles = self.resolve_teammates(&session, &cids, &is_locals, lcu).await;
 
                 for (idx, p) in arr.iter().enumerate() {
                     let cid = cids.get(idx).copied().unwrap_or(0);
                     let cname = if cid > 0 { db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid)) } else { "选择中...".to_string() };
-                    let cavatar = if cid > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid) } else { String::new() };
+                    let cavatar = if cid > 0 { format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid) } else { String::new() };
                     let prof = profiles.get(idx).cloned().flatten().unwrap_or_default();
                     let sname = p.get("summonerName").or_else(|| p.get("gameName")).and_then(|v| v.as_str()).unwrap_or("");
                     let name = if !prof.summoner_name.is_empty() { prof.summoner_name.clone() } else if !sname.is_empty() { sname.to_string() } else { format!("我方{}楼", idx + 1) };
@@ -2282,7 +2389,7 @@ impl PlayerHistoryManager {
                 for (idx, p) in arr.iter().enumerate() {
                     let cid = cids.get(idx).copied().unwrap_or(0);
                     let cname = if cid > 0 { db.resolve_hero_name(&cid.to_string()).unwrap_or_else(|| format!("英雄{}", cid)) } else { "敌方英雄".to_string() };
-                    let cavatar = if cid > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", cid) } else { String::new() };
+                    let cavatar = if cid > 0 { format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", cid) } else { String::new() };
                     let prof = profiles.get(idx).cloned().flatten().unwrap_or_default();
                     let sname = p.get("summonerName").or_else(|| p.get("gameName")).and_then(|v| v.as_str()).unwrap_or("");
                     let name = if !prof.summoner_name.is_empty() { prof.summoner_name.clone() } else if !sname.is_empty() { sname.to_string() } else { format!("敌方{}楼", idx + 1) };
@@ -2379,7 +2486,7 @@ impl PlayerHistoryManager {
                 for (idx, s) in my_slots.into_iter().enumerate() {
                     let prof = s.profile.unwrap_or_default();
                     let cname = if s.champion_id > 0 { db.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone()) } else { s.summoner_name.clone() };
-                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", s.champion_id) } else { String::new() };
+                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", s.champion_id) } else { String::new() };
                     let name = if !s.summoner_name.is_empty() {
                         s.summoner_name.clone()
                     } else if !prof.summoner_name.is_empty() {
@@ -2431,7 +2538,7 @@ impl PlayerHistoryManager {
                 for (idx, s) in their_slots.into_iter().enumerate() {
                     let prof = s.profile.unwrap_or_default();
                     let cname = if s.champion_id > 0 { db.resolve_hero_name(&s.champion_id.to_string()).unwrap_or_else(|| s.summoner_name.clone()) } else { s.summoner_name.clone() };
-                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", s.champion_id) } else { String::new() };
+                    let cavatar = if s.champion_id > 0 { format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", s.champion_id) } else { String::new() };
                     let name = if !s.summoner_name.is_empty() {
                         s.summoner_name.clone()
                     } else if !prof.summoner_name.is_empty() {
@@ -2561,13 +2668,29 @@ impl PlayerHistoryManager {
         // 1. Ensure local player PUUID & name (sync with account switch detection)
         let (local_puuid_opt, local_name_opt) = self.sync_local_summoner(lcu).await;
 
-        // Assign local player to slot where is_local == true
+        // Assign local player to slot where is_local == true, or fallback to session localPlayerCellId
         if let Some(ref lp) = local_puuid_opt {
             let ln = local_name_opt.clone().unwrap_or_default();
+            let mut assigned = false;
             for (idx, &is_local) in my_team_is_locals.iter().enumerate() {
                 if is_local && idx < assigned_puuids.len() {
                     assigned_puuids[idx] = Some((lp.clone(), ln.clone()));
+                    assigned = true;
                     break;
+                }
+            }
+            if !assigned {
+                if let Some(local_cell) = session.get("localPlayerCellId").and_then(|v| v.as_i64()) {
+                    if let Some(my_arr) = session.get("myTeam").and_then(|v| v.as_array()) {
+                        for (idx, m) in my_arr.iter().enumerate() {
+                            if let Some(cell) = m.get("cellId").and_then(|v| v.as_i64()) {
+                                if cell == local_cell && idx < assigned_puuids.len() {
+                                    assigned_puuids[idx] = Some((lp.clone(), ln.clone()));
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2780,6 +2903,48 @@ impl PlayerHistoryManager {
             player_inputs.push((puuid_opt, name_opt, cur_cid));
         }
 
+        // SGP / GSM live query integration:
+        // In ranked champ select with anonymous opponent lobby, LCU conceals PUUIDs.
+        // Query SGP gateway using the local player's PUUID to reveal real opponent session members.
+        let has_any_opponent_puuid = player_inputs.iter().any(|(p, n, _)| p.is_some() || n.is_some());
+        if !has_any_opponent_puuid {
+            if let Some(sgp) = self.get_sgp_client().await {
+                let local_p = {
+                    let guard = self.cached_local_puuid.read().await;
+                    guard.clone()
+                };
+                let local_p = match local_p {
+                    Some(p) => Some(p),
+                    None => lcu.get_current_summoner().await.and_then(|c| c.get("puuid").and_then(|v| v.as_str()).map(|s| s.to_string())),
+                };
+
+                if let Some(lp) = local_p {
+                    if let Ok(gsm) = sgp.get_gsm_by_puuid(&lp).await {
+                        if let Some(game) = gsm.game {
+                            let team_one_has_me = game.team_one.iter().any(|m| m.puuid == lp);
+                            let opponent_members = if team_one_has_me {
+                                &game.team_two
+                            } else {
+                                &game.team_one
+                            };
+
+                            if !opponent_members.is_empty() {
+                                player_inputs.clear();
+                                for (idx, m) in opponent_members.iter().take(slot_count).enumerate() {
+                                    let cur_cid = their_team_cids.get(idx).copied().unwrap_or(0);
+                                    let gsm_cid = m.champion_id.unwrap_or(0) as i32;
+                                    let cid = if cur_cid > 0 { cur_cid } else { gsm_cid };
+                                    let puuid = if !m.puuid.is_empty() { Some(m.puuid.clone()) } else { None };
+                                    let name = m.summoner_name.clone();
+                                    player_inputs.push((puuid, name, cid));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         self.batch_resolve_players(&player_inputs, lcu).await
     }
 
@@ -2800,7 +2965,7 @@ impl PlayerHistoryManager {
             let lcu_client = lcu.clone();
             let sem = semaphore.clone();
 
-            handles.push(tokio::spawn(async move {
+            handles.push(AbortOnDrop(Some(tokio::spawn(async move {
                 let puuid = match p_opt {
                     Some(ref p) if !p.is_empty() && p != "0" => p.clone(),
                     _ => return None,
@@ -2832,12 +2997,16 @@ impl PlayerHistoryManager {
                 };
 
                 record.map(|r| mgr.compute_tactical_profile(&r, cid, sample_limit))
-            }));
+            }))));
         }
 
         let mut profiles = Vec::with_capacity(players.len());
-        for h in handles {
-            profiles.push(h.await.unwrap_or(None));
+        for mut h in handles {
+            if let Some(handle) = h.0.take() {
+                profiles.push(handle.await.unwrap_or(None));
+            } else {
+                profiles.push(None);
+            }
         }
         profiles
     }
@@ -3012,6 +3181,43 @@ impl PlayerHistoryManager {
             assign_team_positions(&mut their_team);
         }
 
+        // SGP / GSM live query fallback for gameflow:
+        // If opponent PUUIDs are anonymized or missing, query SGP GSM gateway to reveal them.
+        let their_has_puuids = their_team.iter().any(|s| !s.puuid.is_empty() && s.puuid != "0");
+        if !their_has_puuids {
+            if let Some(sgp) = self.get_sgp_client().await {
+                if let Some(ref lp) = local_puuid {
+                    if let Ok(gsm) = sgp.get_gsm_by_puuid(lp).await {
+                        if let Some(game) = gsm.game {
+                            let team_one_has_me = game.team_one.iter().any(|m| m.puuid == *lp);
+                            let opponent_members = if team_one_has_me {
+                                &game.team_two
+                            } else {
+                                &game.team_one
+                            };
+                            for (idx, m) in opponent_members.iter().enumerate() {
+                                if idx < their_team.len() {
+                                    if !m.puuid.is_empty() {
+                                        their_team[idx].puuid = m.puuid.clone();
+                                    }
+                                    if let Some(ref n) = m.summoner_name {
+                                        if their_team[idx].summoner_name.is_empty() {
+                                            their_team[idx].summoner_name = n.clone();
+                                        }
+                                    }
+                                    if let Some(cid) = m.champion_id {
+                                        if their_team[idx].champion_id == 0 && cid > 0 {
+                                            their_team[idx].champion_id = cid as i32;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut inputs = Vec::new();
         for s in &my_team {
             inputs.push((Some(s.puuid.clone()), Some(s.summoner_name.clone()), s.champion_id));
@@ -3172,5 +3378,52 @@ mod tests {
         // Group 2 should be p_2 and p_3 (team 200)
         assert_eq!(cards[2].premade_group, Some(2));
         assert_eq!(cards[3].premade_group, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_champ_select_local_player_cell_id_resolution() {
+        let mgr = PlayerHistoryManager::new();
+        mgr.set_cached_local_summoner("puuid-local-test", "LocalSummoner").await;
+
+        let session = serde_json::json!({
+            "localPlayerCellId": 3,
+            "myTeam": [
+                { "cellId": 0, "championId": 1 },
+                { "cellId": 1, "championId": 2 },
+                { "cellId": 2, "championId": 3 },
+                { "cellId": 3, "championId": 4 },
+                { "cellId": 4, "championId": 5 }
+            ],
+            "theirTeam": []
+        });
+
+        let my_raw = session.get("myTeam").and_then(|v| v.as_array()).unwrap();
+        let local_cell_id = session.get("localPlayerCellId").and_then(|v| v.as_i64());
+        let is_locals: Vec<bool> = my_raw.iter().map(|p| {
+            if let Some(lid) = local_cell_id {
+                if let Some(cid) = p.get("cellId").and_then(|v| v.as_i64()) {
+                    if cid == lid {
+                        return true;
+                    }
+                }
+            }
+            p.get("is_local_player").and_then(|v| v.as_bool()).unwrap_or(false)
+        }).collect();
+
+        assert_eq!(is_locals, vec![false, false, false, true, false]);
+    }
+
+    #[test]
+    fn test_normalize_game_duration() {
+        // Standard seconds
+        assert_eq!(normalize_game_duration(1720, 0, 0), 1720);
+        assert_eq!(normalize_game_duration(600, 0, 0), 600);
+        // Milliseconds (>= 10,000)
+        assert_eq!(normalize_game_duration(1_720_000, 0, 0), 1720);
+        assert_eq!(normalize_game_duration(900_000, 0, 0), 900);
+        // Timestamps fallback when raw duration is 0
+        assert_eq!(normalize_game_duration(0, 1_700_000_000_000, 1_700_001_800_000), 1800);
+        // All zero fallback
+        assert_eq!(normalize_game_duration(0, 0, 0), 0);
     }
 }

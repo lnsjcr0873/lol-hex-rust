@@ -55,9 +55,9 @@ const hasError = ref(false)
 
 const iconUrl = computed(() => {
   if (hasError.value || !props.championId || props.championId <= 0) {
-    return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png'
+    return 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg'
   }
-  return `https://game.gtimg.cn/images/lol/act/img/champion/${props.championId}.png`
+  return `https://game.gtimg.cn/images/lol/act/img/skinloading/${props.championId}000.jpg`
 })
 
 const handleImgError = (e: Event) => {
@@ -69,7 +69,7 @@ const handleImgError = (e: Event) => {
   }
   hasError.value = true
   if (target) {
-    target.src = 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-icons/-1.png'
+    target.src = 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg'
   }
 }
 </script>

@@ -4,6 +4,32 @@ use std::collections::HashSet;
 
 pub struct HexItemSynergyEngine;
 
+/// Matches a short token (like "AP", "AD", "CD") ensuring it is not part of a larger ASCII word (e.g. "TRAP", "ESCAPE", "BROADCAST").
+pub fn contains_isolated_token(text: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(idx) = text[start..].find(token) {
+        let abs_idx = start + idx;
+        let before_ok = if abs_idx == 0 {
+            true
+        } else {
+            let prev = text[..abs_idx].chars().last().unwrap();
+            !prev.is_ascii_alphabetic()
+        };
+        let after_idx = abs_idx + token.len();
+        let after_ok = if after_idx >= text.len() {
+            true
+        } else {
+            let next = text[after_idx..].chars().next().unwrap();
+            !next.is_ascii_alphabetic()
+        };
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_idx + token.len();
+    }
+    false
+}
+
 impl HexItemSynergyEngine {
     pub fn rerank_items_with_synergy(
         candidate_items: &[Value],
@@ -39,18 +65,23 @@ impl HexItemSynergyEngine {
             || aug_text.contains("法穿")
             || aug_text.contains("魔法伤害")
             || aug_text.contains("珠光")
-            || aug_text.contains("AP")
+            || contains_isolated_token(&aug_text, "AP")
             || aug_text.contains("巫师")
             || aug_text.contains("帽子")
             || aug_text.contains("秘术");
         let is_ad_crit_synergy = aug_text.contains("暴击")
             || aug_text.contains("无尽")
             || aug_text.contains("攻击力")
-            || aug_text.contains("刃")
+            || aug_text.contains("利刃")
+            || aug_text.contains("刀刃")
+            || aug_text.contains("锋刃")
+            || aug_text.contains("巨刃")
             || aug_text.contains("穿甲")
+            || aug_text.contains("破甲")
             || aug_text.contains("物理伤害")
             || aug_text.contains("暴伤")
-            || aug_text.contains("暴击率");
+            || aug_text.contains("暴击率")
+            || contains_isolated_token(&aug_text, "AD");
         let is_as_onhit_synergy = aug_text.contains("攻速")
             || aug_text.contains("攻击速度")
             || aug_text.contains("攻击特效")
@@ -71,7 +102,7 @@ impl HexItemSynergyEngine {
             || aug_text.contains("冷却")
             || aug_text.contains("急速")
             || aug_text.contains("冷却缩减")
-            || aug_text.contains("CD");
+            || contains_isolated_token(&aug_text, "CD");
 
         for it in candidate_items {
             let mut c = it.clone();
@@ -226,5 +257,41 @@ mod tests {
         let boots = reranked.iter().find(|it| it["itemId"] == "3158").unwrap();
         assert_eq!(boots["hasAugmentSynergy"], true);
         assert!(boots["tacticalScore"].as_f64().unwrap() >= 58.0);
+    }
+
+    #[test]
+    fn test_tightened_stem_matching_no_false_positives() {
+        assert!(!contains_isolated_token("TRAP_CARD", "AP"));
+        assert!(!contains_isolated_token("ESCAPE_ROUTE", "AP"));
+        assert!(!contains_isolated_token("BROADCAST", "CD"));
+        assert!(contains_isolated_token("获得额外 AP 加成", "AP"));
+        assert!(contains_isolated_token("+30AP", "AP"));
+        assert!(contains_isolated_token("CD缩短", "CD"));
+
+        // Augment contains "迎刃而解" and English word "TRAP"
+        // Neither single "刃" nor "TRAP" should trigger AD crit or AP synergy!
+        let active_augments = vec![json!({
+            "name": "思维飞跃 TRAP",
+            "description": "所有困境迎刃而解"
+        })];
+
+        let candidate_items = vec![
+            json!({ "itemId": "3089", "tacticalScore": 50.0 }), // Rabadon's (AP)
+            json!({ "itemId": "3031", "tacticalScore": 50.0 }), // IE (AD, CRIT)
+        ];
+
+        let reranked = HexItemSynergyEngine::rerank_items_with_synergy(
+            &candidate_items,
+            &active_augments,
+            &HashSet::new(),
+            "103",
+            1.0,
+            true,
+        );
+
+        for item in reranked {
+            assert_ne!(item.get("hasAugmentSynergy"), Some(&Value::Bool(true)));
+            assert_eq!(item["tacticalScore"], 50.0);
+        }
     }
 }

@@ -5,10 +5,21 @@ use std::time::Instant;
 
 static LAST_SNIFF_ATTEMPT: Mutex<Option<Instant>> = Mutex::new(None);
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LcuCredentials {
     pub port: u16,
     pub auth_token: String,
+    pub protocol: String,
+}
+
+impl Default for LcuCredentials {
+    fn default() -> Self {
+        Self {
+            port: 0,
+            auth_token: String::new(),
+            protocol: "https".to_string(),
+        }
+    }
 }
 
 pub struct LcuConnector;
@@ -84,10 +95,12 @@ impl LcuConnector {
         if parts.len() >= 5 {
             if let Ok(port) = parts[2].parse::<u16>() {
                 let token = parts[3].trim();
+                let proto = parts[4].trim().to_lowercase();
                 if port > 0 && !token.is_empty() {
                     return Some(LcuCredentials {
                         port,
                         auth_token: token.to_string(),
+                        protocol: if proto == "http" { "http".to_string() } else { "https".to_string() },
                     });
                 }
             }
@@ -127,7 +140,11 @@ impl LcuConnector {
             return None;
         };
 
-        Some(LcuCredentials { port, auth_token })
+        Some(LcuCredentials {
+            port,
+            auth_token,
+            protocol: "https".to_string(),
+        })
     }
 
     /// Extracts region and platform ID metadata from command line arguments.
@@ -157,7 +174,29 @@ impl LcuConnector {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        // 1. Try wmic (< 50ms)
+        // 1. Primary: PowerShell CIM (standard on Windows 10 & Windows 11 24H2+, where wmic is removed)
+        let ps_cmd = "Get-CimInstance Win32_Process -Filter \"Name = 'LeagueClientUx.exe'\" | Select-Object -ExpandProperty CommandLine";
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(&["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if let Some(creds) = Self::parse_commandline(line) {
+                        tracing::info!("Successfully sniffed LCU credentials via PowerShell CIM: port {}", creds.port);
+                        return Some(creds);
+                    }
+                }
+                if let Some(creds) = Self::parse_commandline(&text) {
+                    tracing::info!("Successfully sniffed LCU credentials via PowerShell CIM (fallback): port {}", creds.port);
+                    return Some(creds);
+                }
+            }
+        }
+
+        // 2. Fallback: wmic (legacy fallback for older Windows systems if wmic.exe exists)
         if let Ok(output) = std::process::Command::new("wmic")
             .args(&["process", "where", "name='LeagueClientUx.exe'", "get", "commandline"])
             .creation_flags(CREATE_NO_WINDOW)
@@ -173,28 +212,6 @@ impl LcuConnector {
                 }
                 if let Some(creds) = Self::parse_commandline(&text) {
                     tracing::info!("Successfully sniffed LCU credentials via WMIC (fallback): port {}", creds.port);
-                    return Some(creds);
-                }
-            }
-        }
-
-        // 2. Fallback to PowerShell CIM
-        let ps_cmd = "Get-CimInstance Win32_Process -Filter \"Name = 'LeagueClientUx.exe'\" | Select-Object -ExpandProperty CommandLine";
-        if let Ok(output) = std::process::Command::new("powershell")
-            .args(&["-NoProfile", "-Command", ps_cmd])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                for line in text.lines() {
-                    if let Some(creds) = Self::parse_commandline(line) {
-                        tracing::info!("Successfully sniffed LCU credentials via PowerShell: port {}", creds.port);
-                        return Some(creds);
-                    }
-                }
-                if let Some(creds) = Self::parse_commandline(&text) {
-                    tracing::info!("Successfully sniffed LCU credentials via PowerShell (fallback): port {}", creds.port);
                     return Some(creds);
                 }
             }

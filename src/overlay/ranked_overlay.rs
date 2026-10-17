@@ -163,7 +163,8 @@ pub async fn update_ranked_draft_overlay(
         return;
     }
 
-    let mut current_sig = String::new();
+    let sample_limit = history.sample_count.load(std::sync::atomic::Ordering::Relaxed);
+    let mut current_sig = format!("S:{};", sample_limit);
     for s in &d.state.my_team {
         current_sig.push_str(&format!("M:{}:{}:{};", s.cell_id, s.champion_id, s.position));
     }

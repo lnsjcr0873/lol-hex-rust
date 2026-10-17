@@ -55,6 +55,15 @@ impl SgpClient {
             server_config: Arc::new(RwLock::new(cfg)),
         }
     }
+}
+
+impl Default for SgpClient {
+    fn default() -> Self {
+        Self::with_credentials("", None, SgpTokens::default())
+    }
+}
+
+impl SgpClient {
 
     /// Configures the active server ID and resolves server configuration.
     pub async fn set_server(&self, region: &str, rso_platform_id: Option<&str>) {
@@ -88,8 +97,42 @@ impl SgpClient {
 
         if let Some(ref lcu) = self.lcu {
             let (region, platform_id) = lcu.get_region_and_platform().await;
-            let eff_region = if region.is_empty() { "TENCENT" } else { &region };
-            let eff_platform = platform_id.as_deref().or(Some("HN1"));
+            let (eff_region, eff_platform) = match (region.trim(), platform_id.as_deref().map(|s| s.trim())) {
+                ("", None) | ("", Some("")) => ("TENCENT", Some("HN1")),
+                ("", Some(p)) => {
+                    let p_upper = p.to_uppercase();
+                    if p_upper.starts_with("HN")
+                        || p_upper.starts_with("WT")
+                        || p_upper.starts_with("BGP")
+                        || p_upper.starts_with("EDU")
+                        || p_upper.starts_with("TJ")
+                        || p_upper.starts_with("NJ")
+                        || p_upper.starts_with("GZ")
+                        || p_upper.starts_with("CQ")
+                    {
+                        ("TENCENT", Some(p))
+                    } else {
+                        ("", Some(p))
+                    }
+                }
+                (r, None) | (r, Some("")) => {
+                    let r_upper = r.to_uppercase();
+                    if r_upper == "TENCENT" {
+                        ("TENCENT", Some("HN1"))
+                    } else {
+                        (r, None)
+                    }
+                }
+                (r, Some(p)) => {
+                    let r_upper = r.to_uppercase();
+                    let p_upper = p.to_uppercase();
+                    if r_upper == "TENCENT" && p_upper.is_empty() {
+                        ("TENCENT", Some("HN1"))
+                    } else {
+                        (r, Some(p))
+                    }
+                }
+            };
             self.set_server(eff_region, eff_platform).await;
             return Ok(());
         }
@@ -400,5 +443,34 @@ impl SgpClient {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_overseas_sgp_server_mapping() {
+        let client = SgpClient::default();
+        // Overseas NA platform
+        client.set_server("NA", None).await;
+        let cfg = client.server_config.read().await.clone();
+        assert!(cfg.is_some());
+        let cfg = cfg.unwrap();
+        assert!(!cfg.is_tencent);
+        assert!(cfg.match_history.contains("usw2-red") || cfg.match_history.contains("pvp.net"));
+
+        // Overseas EUW platform
+        client.set_server("EUW", Some("EUW1")).await;
+        let cfg = client.server_config.read().await.clone().unwrap();
+        assert!(!cfg.is_tencent);
+        assert!(cfg.match_history.contains("euc1-red") || cfg.match_history.contains("pvp.net"));
+
+        // Tencent server
+        client.set_server("TENCENT", Some("HN1")).await;
+        let cfg = client.server_config.read().await.clone().unwrap();
+        assert!(cfg.is_tencent);
+        assert!(cfg.match_history.contains("hn1-k8s-sgp"));
     }
 }

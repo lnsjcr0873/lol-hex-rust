@@ -9,6 +9,7 @@ pub struct HexdataCrawler {
     base_domain: String,
     cookie: Arc<RwLock<Option<String>>>,
     last_handshake: Arc<RwLock<Option<Instant>>>,
+    handshake_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Default for HexdataCrawler {
@@ -48,11 +49,29 @@ impl HexdataCrawler {
             base_domain: "https://hexdata.com.cn".to_string(),
             cookie: Arc::new(RwLock::new(None)),
             last_handshake: Arc::new(RwLock::new(None)),
+            handshake_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     /// Refresh token / session cookie every 30 minutes to satisfy HexData WAF
     pub async fn ensure_handshake(&self) {
+        // 1. Fast path: check if cached handshake is still valid
+        if let Ok(lock) = self.last_handshake.read() {
+            if let Some(t) = *lock {
+                if t.elapsed() < Duration::from_secs(1800) {
+                    if let Ok(c_lock) = self.cookie.read() {
+                        if c_lock.is_some() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Prevent TOCTOU race: acquire serialization lock
+        let _guard = self.handshake_mutex.lock().await;
+
+        // 3. Double-check under lock in case another request completed handshake
         if let Ok(lock) = self.last_handshake.read() {
             if let Some(t) = *lock {
                 if t.elapsed() < Duration::from_secs(1800) {

@@ -124,7 +124,7 @@ fn percent_encode_path_segment(input: &str) -> String {
     let mut encoded = String::with_capacity(input.len() * 3);
     for b in input.bytes() {
         match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'@' => {
                 encoded.push(b as char);
             }
             _ => {
@@ -163,8 +163,14 @@ impl LcuClient {
     }
 
     pub async fn set_opgg(&self, opgg: Arc<crate::crawler::OpggClient>) {
-        let mut g = self.opgg.write().await;
-        *g = Some(opgg);
+        {
+            let mut g = self.opgg.write().await;
+            *g = Some(opgg.clone());
+        }
+        let (region, platform_id) = self.get_region_and_platform().await;
+        if !region.is_empty() {
+            opgg.set_region_from_lcu(&region, platform_id.as_deref());
+        }
     }
 
     pub async fn get_opgg(&self) -> Option<Arc<crate::crawler::OpggClient>> {
@@ -311,8 +317,24 @@ impl LcuClient {
         *guard = Some(LcuCredentials {
             port,
             auth_token: auth_token.to_string(),
+            protocol: "https".to_string(),
         });
         self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    pub async fn set_credentials_with_protocol(&self, port: u16, auth_token: &str, protocol: &str) {
+        let mut guard = self.creds.write().await;
+        *guard = Some(LcuCredentials {
+            port,
+            auth_token: auth_token.to_string(),
+            protocol: protocol.to_string(),
+        });
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    pub async fn get_protocol(&self) -> String {
+        let guard = self.creds.read().await;
+        guard.as_ref().map(|c| c.protocol.clone()).unwrap_or_else(|| "https".to_string())
     }
 
     async fn handle_response(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
@@ -616,17 +638,14 @@ impl LcuClient {
         };
 
         let pages = self.get_perk_pages().await;
-        let mut editable_page_id = None;
+        let mut hexbrain_page_id = None;
 
         for p in &pages {
             if p.get("isEditable").and_then(|v| v.as_bool()).unwrap_or(false) {
                 let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 if name.contains("HexBrain") {
-                    editable_page_id = p.get("id").and_then(|v| v.as_i64());
+                    hexbrain_page_id = p.get("id").and_then(|v| v.as_i64());
                     break;
-                }
-                if editable_page_id.is_none() {
-                    editable_page_id = p.get("id").and_then(|v| v.as_i64());
                 }
             }
         }
@@ -635,16 +654,20 @@ impl LcuClient {
         if let Some(obj) = page_payload.as_object_mut() {
             obj.insert("isCurrent".to_string(), Value::Bool(true));
             obj.insert("current".to_string(), Value::Bool(true));
+            if !obj.contains_key("name") || obj.get("name").and_then(|v| v.as_str()).map_or(true, |n| !n.contains("HexBrain")) {
+                obj.insert("name".to_string(), Value::String("HexBrain 符文".to_string()));
+            }
         }
 
-        if let Some(pid) = editable_page_id {
+        // 1. If an existing HexBrain page is found, update it via PUT
+        if let Some(pid) = hexbrain_page_id {
             let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages/{}", port, pid);
             if self.handle_response(self.client.put(&url).headers(headers.clone()).json(&page_payload).send().await).await.is_some() {
                 return true;
             }
         }
 
-        // Otherwise create new page
+        // 2. Otherwise create a dedicated HexBrain page via POST (never overwrite user's custom pages)
         let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages", port);
         self.handle_response(self.client.post(&url).headers(headers).json(&page_payload).send().await).await.is_some()
     }
@@ -660,7 +683,37 @@ impl LcuClient {
         }
 
         let cid_str = champion_id.to_string();
-        let target_pos = match position.to_uppercase().as_str() {
+        let cached_opgg = self.get_opgg().await;
+
+        let mut eff_pos = position.to_string();
+        if eff_pos.eq_ignore_ascii_case("all") || eff_pos.is_empty() {
+            // 1. Try to detect assigned position from active ChampSelect session
+            let session = self.get_champ_select_session().await;
+            if let Some(my_arr) = session.get("myTeam").and_then(|v| v.as_array()) {
+                let local_cell = session.get("localPlayerCellId").and_then(|v| v.as_i64());
+                for m in my_arr {
+                    let cell = m.get("cellId").and_then(|v| v.as_i64());
+                    if cell == local_cell {
+                        if let Some(assigned) = m.get("assignedPosition").and_then(|v| v.as_str()) {
+                            if !assigned.is_empty() {
+                                eff_pos = assigned.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // 2. If still unspecified, fallback to champion's primary position from OP.GG
+            if eff_pos.eq_ignore_ascii_case("all") || eff_pos.is_empty() {
+                if let Some(ref opgg) = cached_opgg {
+                    if let Some(prim) = opgg.get_primary_position(&cid_str) {
+                        eff_pos = prim;
+                    }
+                }
+            }
+        }
+
+        let target_pos = match eff_pos.to_uppercase().as_str() {
             "TOP" => "top",
             "JUNGLE" => "jungle",
             "MID" | "MIDDLE" => "mid",
@@ -669,7 +722,6 @@ impl LcuClient {
             _ => "all",
         };
 
-        let cached_opgg = self.get_opgg().await;
         let detail = if let Some(ref client) = cached_opgg {
             let res = client.get_champion_detail(&cid_str, target_pos).await;
             if res.is_none() && target_pos != "all" {
@@ -718,7 +770,13 @@ impl LcuClient {
                 if let Some(first_pair) = spells.first().and_then(|p| p.as_array()) {
                     if first_pair.len() >= 2 {
                         if let (Some(s1), Some(mut s2)) = (first_pair[0].as_i64(), first_pair[1].as_i64()) {
-                            let is_jungle = position.eq_ignore_ascii_case("JUNGLE") || target_pos == "jungle";
+                            let is_jungle = eff_pos.eq_ignore_ascii_case("JUNGLE") || target_pos == "jungle" || {
+                                if let Some(ref opgg) = cached_opgg {
+                                    opgg.get_primary_position(&cid_str).map_or(false, |p| p.eq_ignore_ascii_case("JUNGLE"))
+                                } else {
+                                    false
+                                }
+                            };
                             // Protect Smite (spell 11) for junglers:
                             if is_jungle && s1 != 11 && s2 != 11 {
                                 s2 = 11;
@@ -788,43 +846,26 @@ impl LcuClient {
         beg_index: usize,
         end_index: usize,
     ) -> Option<Value> {
-        let https_url = format!(
-            "https://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
-            port, puuid, beg_index, end_index
+        let scheme = self.get_protocol().await;
+        let url = format!(
+            "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+            scheme, port, puuid, beg_index, end_index
         );
         let mut any_connect_err = false;
-        let https_res = self.client.get(&https_url).headers(headers.clone()).send().await;
-        if let Err(ref e) = https_res {
+        let req_res = self.client.get(&url).headers(headers.clone()).send().await;
+        if let Err(ref e) = req_res {
             if e.is_connect() {
                 any_connect_err = true;
             }
         }
-        if let Some(res) = self.handle_response_fallback_candidate(https_res).await {
+        if let Some(res) = self.handle_response_fallback_candidate(req_res).await {
             if let Ok(val) = res.json::<Value>().await {
                 if val.get("games").is_some() || val.get("matches").is_some() {
                     return Some(val);
                 }
             }
         }
-        // HTTP fallback for test harness / local mock
-        let http_url = format!(
-            "http://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
-            port, puuid, beg_index, end_index
-        );
-        let mut http_connect_err = false;
-        let http_res = self.client.get(&http_url).headers(headers.clone()).send().await;
-        if let Err(ref e) = http_res {
-            if e.is_connect() {
-                http_connect_err = true;
-            }
-        }
-        if let Some(res) = self.handle_response_fallback_candidate(http_res).await {
-            if let Ok(val) = res.json::<Value>().await {
-                if val.get("games").is_some() || val.get("matches").is_some() {
-                    return Some(val);
-                }
-            }
-        }
+
         // Fallback for current summoner endpoint if puuid is "current" / "me" / empty OR matches current summoner's PUUID:
         let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
             true
@@ -835,29 +876,18 @@ impl LcuClient {
         };
 
         if is_current {
-            let cur_https = format!(
-                "https://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
-                port, beg_index, end_index
+            let cur_url = format!(
+                "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
+                scheme, port, beg_index, end_index
             );
-            if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&cur_https).headers(headers.clone()).send().await).await {
+            if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&cur_url).headers(headers.clone()).send().await).await {
                 if let Ok(val) = res.json::<Value>().await {
                     if val.get("games").is_some() || val.get("matches").is_some() {
                         return Some(val);
                     }
                 }
             }
-            let cur_http = format!(
-                "http://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
-                port, beg_index, end_index
-            );
-            if let Some(res) = self.handle_response(self.client.get(&cur_http).headers(headers.clone()).send().await).await {
-                if let Ok(val) = res.json::<Value>().await {
-                    if val.get("games").is_some() || val.get("matches").is_some() {
-                        return Some(val);
-                    }
-                }
-            }
-        } else if any_connect_err && http_connect_err {
+        } else if any_connect_err {
             self.record_failure().await;
         }
         None
@@ -1098,20 +1128,12 @@ impl LcuClient {
             }
         }
 
+        let scheme = self.get_protocol().await;
         let url = format!(
-            "https://127.0.0.1:{}/lol-match-history/v1/games/{}",
-            port, game_id
+            "{}://127.0.0.1:{}/lol-match-history/v1/games/{}",
+            scheme, port, game_id
         );
-        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
-            Some(r) => Some(r),
-            None => {
-                let http_url = format!(
-                    "http://127.0.0.1:{}/lol-match-history/v1/games/{}",
-                    port, game_id
-                );
-                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
-            }
-        };
+        let res_opt = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await;
 
         let res = match res_opt {
             Some(r) => r,
@@ -1218,20 +1240,12 @@ impl LcuClient {
             return Some(cached);
         }
 
+        let scheme = self.get_protocol().await;
         let url = format!(
-            "https://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
-            port, game_id
+            "{}://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
+            scheme, port, game_id
         );
-        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
-            Some(r) => Some(r),
-            None => {
-                let http_url = format!(
-                    "http://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
-                    port, game_id
-                );
-                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
-            }
-        };
+        let res_opt = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await;
         let res = match res_opt {
             Some(r) => r,
             None => {
@@ -1265,14 +1279,9 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!("https://127.0.0.1:{}/entitlements/v1/token", port);
-        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
-            Some(r) => Some(r),
-            None => {
-                let http_url = format!("http://127.0.0.1:{}/entitlements/v1/token", port);
-                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
-            }
-        }?;
+        let scheme = self.get_protocol().await;
+        let url = format!("{}://127.0.0.1:{}/entitlements/v1/token", scheme, port);
+        let res = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await?;
         res.json::<Value>().await.ok()
     }
 
@@ -1283,14 +1292,9 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!("https://127.0.0.1:{}/lol-league-session/v1/league-session-token", port);
-        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
-            Some(r) => Some(r),
-            None => {
-                let http_url = format!("http://127.0.0.1:{}/lol-league-session/v1/league-session-token", port);
-                self.handle_response(self.client.get(&http_url).headers(headers).send().await).await
-            }
-        }?;
+        let scheme = self.get_protocol().await;
+        let url = format!("{}://127.0.0.1:{}/lol-league-session/v1/league-session-token", scheme, port);
+        let res = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await?;
         let text = res.text().await.ok()?;
         let trimmed = text.trim();
         if trimmed.is_empty() || trimmed == "null" {
@@ -1365,26 +1369,13 @@ impl LcuClient {
             name.trim()
         };
 
+        let scheme = self.get_protocol().await;
         let url = format!(
-            "https://127.0.0.1:{}/lol-summoner/v1/summoners",
-            port
+            "{}://127.0.0.1:{}/lol-summoner/v1/summoners",
+            scheme, port
         );
-        let req = self.client.get(&url).headers(headers.clone()).query(&[("name", query_name)]);
+        let req = self.client.get(&url).headers(headers).query(&[("name", query_name)]);
         if let Some(res) = self.handle_response(req.send().await).await {
-            if let Ok(val) = res.json::<Value>().await {
-                if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
-                    return Some(val);
-                }
-            }
-        }
-
-        // Fallback to HTTP
-        let url_http = format!(
-            "http://127.0.0.1:{}/lol-summoner/v1/summoners",
-            port
-        );
-        let req_http = self.client.get(&url_http).headers(headers).query(&[("name", query_name)]);
-        if let Some(res) = self.handle_response(req_http.send().await).await {
             if let Ok(val) = res.json::<Value>().await {
                 if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
                     return Some(val);
@@ -1580,7 +1571,7 @@ mod tests {
         assert_eq!(percent_encode_path_segment("hello world"), "hello%20world");
         assert_eq!(
             percent_encode_path_segment("champ-select-123@champ-select.lol.riotgames.com"),
-            "champ-select-123%40champ-select.lol.riotgames.com"
+            "champ-select-123@champ-select.lol.riotgames.com"
         );
     }
 

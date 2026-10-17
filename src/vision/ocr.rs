@@ -158,11 +158,25 @@ impl OcrScanner {
             #[link(name = "ole32")]
             extern "system" {
                 fn CoInitializeEx(pvreserved: *mut core::ffi::c_void, dwcoinit: u32) -> i32;
+                fn CoUninitialize();
             }
+
+            struct ComGuard {
+                initialized: bool,
+            }
+            impl Drop for ComGuard {
+                fn drop(&mut self) {
+                    if self.initialized {
+                        unsafe {
+                            CoUninitialize();
+                        }
+                    }
+                }
+            }
+
             // COINIT_MULTITHREADED = 0x0
-            unsafe {
-                let _ = CoInitializeEx(std::ptr::null_mut(), 0);
-            }
+            let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), 0) };
+            let _com_guard = ComGuard { initialized: hr >= 0 };
 
             use windows::Graphics::Imaging::BitmapDecoder;
             use windows::Media::Ocr::OcrEngine;
