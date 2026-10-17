@@ -20,3 +20,4 @@ src-tauri/gen/
 .agents/
 dist-new/
 scratch/
+*.dll
