@@ -40,6 +40,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "visible": false,
+        "create": false,
         "center": true
       }
     ],
