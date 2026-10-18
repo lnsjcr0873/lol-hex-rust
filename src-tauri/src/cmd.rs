@@ -1,8 +1,6 @@
-use lol_hex_rust::data::loader::Database;
-use lol_hex_rust::engine::player_history::OngoingPlayerCard;
 use lol_hex_rust::web::routes::{
     build_chat_broadcast_lines, build_mock_match_detail, build_mock_match_timeline,
-    convert_ongoing_card, parse_riot_match_detail, spell_meta,
+    convert_ongoing_card, parse_riot_match_detail,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

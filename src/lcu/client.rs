@@ -337,6 +337,13 @@ impl LcuClient {
         guard.as_ref().map(|c| c.protocol.clone()).unwrap_or_else(|| "https".to_string())
     }
 
+    pub async fn set_protocol(&self, protocol: &str) {
+        let mut guard = self.creds.write().await;
+        if let Some(ref mut c) = *guard {
+            c.protocol = protocol.to_string();
+        }
+    }
+
     async fn handle_response(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
         match res_result {
             Ok(res) => {
@@ -866,6 +873,28 @@ impl LcuClient {
             }
         }
 
+        // Try alternative scheme (http <-> https)
+        let alt_scheme = if scheme == "https" { "http" } else { "https" };
+        let alt_url = format!(
+            "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+            alt_scheme, port, puuid, beg_index, end_index
+        );
+        let mut alt_connect_err = false;
+        let alt_req_res = self.client.get(&alt_url).headers(headers.clone()).send().await;
+        if let Err(ref e) = alt_req_res {
+            if e.is_connect() {
+                alt_connect_err = true;
+            }
+        }
+        if let Some(res) = self.handle_response(alt_req_res).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if val.get("games").is_some() || val.get("matches").is_some() {
+                    self.set_protocol(alt_scheme).await;
+                    return Some(val);
+                }
+            }
+        }
+
         // Fallback for current summoner endpoint if puuid is "current" / "me" / empty OR matches current summoner's PUUID:
         let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
             true
@@ -876,9 +905,10 @@ impl LcuClient {
         };
 
         if is_current {
+            let active_scheme = self.get_protocol().await;
             let cur_url = format!(
                 "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
-                scheme, port, beg_index, end_index
+                active_scheme, port, beg_index, end_index
             );
             if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&cur_url).headers(headers.clone()).send().await).await {
                 if let Ok(val) = res.json::<Value>().await {
@@ -887,7 +917,20 @@ impl LcuClient {
                     }
                 }
             }
-        } else if any_connect_err {
+            let alt_cur_scheme = if active_scheme == "https" { "http" } else { "https" };
+            let alt_cur_url = format!(
+                "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
+                alt_cur_scheme, port, beg_index, end_index
+            );
+            if let Some(res) = self.handle_response(self.client.get(&alt_cur_url).headers(headers.clone()).send().await).await {
+                if let Ok(val) = res.json::<Value>().await {
+                    if val.get("games").is_some() || val.get("matches").is_some() {
+                        self.set_protocol(alt_cur_scheme).await;
+                        return Some(val);
+                    }
+                }
+            }
+        } else if any_connect_err && alt_connect_err {
             self.record_failure().await;
         }
         None
@@ -1133,7 +1176,21 @@ impl LcuClient {
             "{}://127.0.0.1:{}/lol-match-history/v1/games/{}",
             scheme, port, game_id
         );
-        let res_opt = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await;
+        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let alt_scheme = if scheme == "https" { "http" } else { "https" };
+                let alt_url = format!(
+                    "{}://127.0.0.1:{}/lol-match-history/v1/games/{}",
+                    alt_scheme, port, game_id
+                );
+                let alt_res = self.handle_response(self.client.get(&alt_url).headers(headers).send().await).await;
+                if alt_res.is_some() {
+                    self.set_protocol(alt_scheme).await;
+                }
+                alt_res
+            }
+        };
 
         let res = match res_opt {
             Some(r) => r,
@@ -1245,7 +1302,21 @@ impl LcuClient {
             "{}://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
             scheme, port, game_id
         );
-        let res_opt = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await;
+        let res_opt = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let alt_scheme = if scheme == "https" { "http" } else { "https" };
+                let alt_url = format!(
+                    "{}://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
+                    alt_scheme, port, game_id
+                );
+                let alt_res = self.handle_response(self.client.get(&alt_url).headers(headers).send().await).await;
+                if alt_res.is_some() {
+                    self.set_protocol(alt_scheme).await;
+                }
+                alt_res
+            }
+        };
         let res = match res_opt {
             Some(r) => r,
             None => {
@@ -1281,7 +1352,18 @@ impl LcuClient {
 
         let scheme = self.get_protocol().await;
         let url = format!("{}://127.0.0.1:{}/entitlements/v1/token", scheme, port);
-        let res = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await?;
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let alt_scheme = if scheme == "https" { "http" } else { "https" };
+                let alt_url = format!("{}://127.0.0.1:{}/entitlements/v1/token", alt_scheme, port);
+                let alt_res = self.handle_response(self.client.get(&alt_url).headers(headers.clone()).send().await).await;
+                if alt_res.is_some() {
+                    self.set_protocol(alt_scheme).await;
+                }
+                alt_res
+            }
+        }?;
         res.json::<Value>().await.ok()
     }
 
@@ -1294,7 +1376,18 @@ impl LcuClient {
 
         let scheme = self.get_protocol().await;
         let url = format!("{}://127.0.0.1:{}/lol-league-session/v1/league-session-token", scheme, port);
-        let res = self.handle_response_fallback_candidate(self.client.get(&url).headers(headers).send().await).await?;
+        let res = match self.handle_response_fallback_candidate(self.client.get(&url).headers(headers.clone()).send().await).await {
+            Some(r) => Some(r),
+            None => {
+                let alt_scheme = if scheme == "https" { "http" } else { "https" };
+                let alt_url = format!("{}://127.0.0.1:{}/lol-league-session/v1/league-session-token", alt_scheme, port);
+                let alt_res = self.handle_response(self.client.get(&alt_url).headers(headers).send().await).await;
+                if alt_res.is_some() {
+                    self.set_protocol(alt_scheme).await;
+                }
+                alt_res
+            }
+        }?;
         let text = res.text().await.ok()?;
         let trimmed = text.trim();
         if trimmed.is_empty() || trimmed == "null" {
@@ -1374,10 +1467,25 @@ impl LcuClient {
             "{}://127.0.0.1:{}/lol-summoner/v1/summoners",
             scheme, port
         );
-        let req = self.client.get(&url).headers(headers).query(&[("name", query_name)]);
+        let req = self.client.get(&url).headers(headers.clone()).query(&[("name", query_name)]);
         if let Some(res) = self.handle_response(req.send().await).await {
             if let Ok(val) = res.json::<Value>().await {
                 if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
+                    return Some(val);
+                }
+            }
+        }
+
+        let alt_scheme = if scheme == "https" { "http" } else { "https" };
+        let alt_url = format!(
+            "{}://127.0.0.1:{}/lol-summoner/v1/summoners",
+            alt_scheme, port
+        );
+        let alt_req = self.client.get(&alt_url).headers(headers).query(&[("name", query_name)]);
+        if let Some(res) = self.handle_response(alt_req.send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
+                    self.set_protocol(alt_scheme).await;
                     return Some(val);
                 }
             }

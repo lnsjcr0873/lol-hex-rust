@@ -85,6 +85,7 @@ pub fn run() {
         let mut last_swapped_champion_id: i64 = 0;
         let mut last_swap_instant = std::time::Instant::now();
         let mut last_draft_sig = String::new();
+        let mut cached_ranked_data: Option<lol_hex_rust::overlay::RankedOverlayData> = None;
         let mut accepting_ready_check = false;
 
         loop {
