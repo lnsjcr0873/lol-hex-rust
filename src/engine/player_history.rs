@@ -3090,7 +3090,7 @@ impl PlayerHistoryManager {
                     cid = cell_selection_map.get(&cell_id).copied().unwrap_or(0);
                 }
 
-                let (s1, s2) = if !puuid.is_empty() {
+                let (mut s1, mut s2) = if !puuid.is_empty() {
                     spell_map.get(&puuid).copied()
                 } else {
                     None
@@ -3101,6 +3101,13 @@ impl PlayerHistoryManager {
                         None
                     }
                 }).or_else(|| cell_spell_map.get(&cell_id).copied()).unwrap_or((0, 0));
+
+                if s1 == 0 {
+                    s1 = p.get("spell1Id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                }
+                if s2 == 0 {
+                    s2 = p.get("spell2Id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                }
 
                 let auto_pos = p.get("selectedPosition").and_then(|v| v.as_str()).and_then(|s| {
                     match s.to_lowercase().as_str() {

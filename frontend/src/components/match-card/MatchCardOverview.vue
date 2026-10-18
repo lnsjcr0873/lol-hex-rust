@@ -85,7 +85,9 @@
                 </div>
                 <div class="text-[10px] font-mono text-slate-400 mt-0.5">
                   <span class="text-slate-200 font-bold">{{ formattedKda }} KDA</span>
-                  <span class="text-[#0ac8b9] ml-1">({{ Math.round((participant.killParticipation || 0) * 100) }}% 参团)</span>
+                  <span v-if="participant.killParticipation !== null && Number.isFinite(participant.killParticipation)" class="text-[#0ac8b9] ml-1">
+                    ({{ Math.min(100, Math.round((participant.killParticipation || 0) * 100)) }}% 参团)
+                  </span>
                 </div>
               </div>
 
@@ -93,7 +95,7 @@
               <div class="text-right font-mono text-xs hidden sm:block">
                 <div class="text-slate-200 font-bold">
                   {{ (((participant.totalDamageDealtToChampions || 0) / 1000)).toFixed(1) }}k 输出
-                  <span class="text-[#0ac8b9] text-[10px] ml-0.5">({{ damageSharePct }}%)</span>
+                  <span v-if="damageSharePct !== null" class="text-[#0ac8b9] text-[10px] ml-0.5">({{ damageSharePct }}%)</span>
                 </div>
                 <div class="text-[10px] text-slate-400 mt-0.5">
                   {{ participant.cs || 0 }} 刀 ({{ csPerMin }}/分)
@@ -123,7 +125,7 @@
                 round
                 :class="p.puuid === participant.puuid ? 'ring-1 ring-[#0ac8b9]' : ''"
               />
-              <span class="text-[10px] truncate max-w-14 text-slate-400 font-mono" :class="p.puuid === participant.puuid ? 'text-cyan-300 font-bold' : ''">
+              <span class="text-[10px] truncate max-w-20 text-slate-400 font-mono" :class="p.puuid === participant.puuid ? 'text-cyan-300 font-bold' : ''">
                 {{ p.gameName }}
               </span>
             </div>
@@ -214,11 +216,12 @@ const formattedKda = computed(() => {
 })
 
 const damageSharePct = computed(() => {
-  if (!participant.value || !team.value || !team.value.totalDamageDealtToChampions) return 0
+  if (participants.value.length <= 1) return null
+  if (!participant.value || !team.value || !team.value.totalDamageDealtToChampions) return null
   const dmg = participant.value.totalDamageDealtToChampions || 0
   const teamDmg = team.value.totalDamageDealtToChampions
-  if (!Number.isFinite(dmg) || !Number.isFinite(teamDmg) || teamDmg <= 0) return 0
-  return Math.round((dmg / teamDmg) * 100)
+  if (!Number.isFinite(dmg) || !Number.isFinite(teamDmg) || teamDmg <= 0) return null
+  return Math.min(100, Math.round((dmg / teamDmg) * 100))
 })
 
 const csPerMin = computed(() => {

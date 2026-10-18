@@ -569,12 +569,17 @@ pub fn spell_meta(spell_id: i32) -> (&'static str, &'static str) {
         4 => ("闪现", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png"),
         6 => ("幽灵疾步", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHaste.png"),
         7 => ("治疗术", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerHeal.png"),
-        11 => ("惩戒", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png"),
+        11 | 54 | 55 => ("惩戒", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png"),
         12 => ("传送", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerTeleport.png"),
+        13 => ("清晰术", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerMana.png"),
         14 => ("引燃", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerDot.png"),
         21 => ("屏障", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerBarrier.png"),
-        32 => ("雪球", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSnowball.png"),
-        _ => ("", ""),
+        30 => ("王者魄罗", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerPoroRecall.png"),
+        31 => ("魄罗投掷", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerPoroThrow.png"),
+        32 | 39 => ("雪球", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerSnowball.png"),
+        2201 => ("逃跑", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerCherryFlee.png"),
+        2202 => ("闪现", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerCherryFlash.png"),
+        _ => ("召唤师技能", "https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png"),
     }
 }
 

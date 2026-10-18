@@ -205,7 +205,7 @@ const premadeTeamIdMap = computed<Record<string, string>>(() => {
   return map
 })
 
-const getPremadeGroupsForTeam = (team: PlayerCard[]): PremadeGroup[] => {
+const getPremadeGroupsForTeam = (team: PlayerCard[], prefix = ''): PremadeGroup[] => {
   const partyBuckets: Record<number, string[]> = {}
   team.forEach((p) => {
     if (p.premade_party && p.premade_party.party_id > 0) {
@@ -230,17 +230,19 @@ const getPremadeGroupsForTeam = (team: PlayerCard[]): PremadeGroup[] => {
       winRateTeamInfo = { type: 'loss-rate-team' }
     }
 
+    const teamLabel = prefix ? `${prefix}-车队 ${letter}` : `车队 ${letter}`
+
     return {
       id: letter,
-      label: `车队 ${letter}`,
+      label: teamLabel,
       puuids,
       winRateTeamInfo
     }
   })
 }
 
-const bluePremades = computed(() => getPremadeGroupsForTeam(props.blueTeam))
-const redPremades = computed(() => getPremadeGroupsForTeam(props.redTeam))
+const bluePremades = computed(() => getPremadeGroupsForTeam(props.blueTeam, '蓝方'))
+const redPremades = computed(() => getPremadeGroupsForTeam(props.redTeam, '红方'))
 
 const enhancePlayer = (player: PlayerCard): EnhancedPlayerCard => {
   const premadeId = premadeTeamIdMap.value[player.puuid]

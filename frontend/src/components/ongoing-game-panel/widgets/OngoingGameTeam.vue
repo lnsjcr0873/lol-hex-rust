@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col gap-2 min-h-0 flex-1">
+  <div class="flex flex-col gap-2">
     <!-- Header with Indicator & TeamTagsArea -->
     <div class="flex items-center justify-between pb-1 border-b border-slate-800/80">
       <div class="flex items-center space-x-2">
@@ -23,7 +23,7 @@
     </div>
 
     <!-- Players Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 min-h-0 flex-1">
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 items-stretch">
       <PlayerInfoCard
         v-for="player of players"
         :key="player.puuid"

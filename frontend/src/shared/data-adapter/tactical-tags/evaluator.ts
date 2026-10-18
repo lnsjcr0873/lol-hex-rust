@@ -56,7 +56,10 @@ export function getEasyGankStatus(
 export function getKillDamageEfficiencyStatus(
   analysis: AggregatedAnalysis
 ): { kind: 'high' | 'low' | 'normal'; value: number } {
-  const kde = analysis.summary.avgKillDamageEfficiency
+  const kde = analysis.summary?.avgKillDamageEfficiency
+  if (!kde || !Number.isFinite(kde) || kde <= 0.05) {
+    return { kind: 'normal', value: 1 }
+  }
   if (kde > KILL_DAMAGE_EFFICIENCY_HIGH_THRESHOLD) {
     return { kind: 'high', value: kde }
   }

@@ -184,17 +184,20 @@ export function toParticipants(
 
   if (source === 'sgp') {
     const participantsList = data?.json?.participants || []
-    const totalKills = participantsList.reduce(
-      (acc, p) => {
-        const teamIdentifier = safeBasicInfo.isCherrySubteam
-          ? `CHERRY-${p.playerSubteamId || 0}`
-          : `TEAM-${p.teamId || 0}`
+    const hasFullTeam = participantsList.length > 1
+    const totalKills = hasFullTeam
+      ? participantsList.reduce(
+          (acc, p) => {
+            const teamIdentifier = safeBasicInfo.isCherrySubteam
+              ? `CHERRY-${p.playerSubteamId || 0}`
+              : `TEAM-${p.teamId || 0}`
 
-        acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (p.kills || 0)
-        return acc
-      },
-      {} as Record<string, number>
-    )
+            acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (p.kills || 0)
+            return acc
+          },
+          {} as Record<string, number>
+        )
+      : {}
 
     const participants = participantsList.map<MatchParticipant>((p) => {
       const teamIdentifier = safeBasicInfo.isCherrySubteam
@@ -232,8 +235,9 @@ export function toParticipants(
         assists: p.assists || 0,
         kda: ((p.kills || 0) + (p.assists || 0)) / noZero(p.deaths || 0),
         killParticipation:
-          ((p.kills || 0) + (p.assists || 0)) /
-          noZero(totalKills[teamIdentifier] || 0),
+          hasFullTeam && totalKills[teamIdentifier] && totalKills[teamIdentifier] > 0
+            ? Math.min(1, ((p.kills || 0) + (p.assists || 0)) / totalKills[teamIdentifier])
+            : null,
         totalDamageDealtToChampions: p.totalDamageDealtToChampions || 0,
         damageGoldEfficiency:
           (p.totalDamageDealtToChampions || 0) / noZero(p.goldEarned || 0),
@@ -296,17 +300,22 @@ export function toParticipants(
     return participants
   }
 
-  const totalKills = (data.participants || []).reduce(
-    (acc, p) => {
-      const stats = p.stats || ({} as any)
-      const teamIdentifier = safeBasicInfo.isCherrySubteam
-        ? `CHERRY-${stats.playerSubteamId || 0}`
-        : `TEAM-${p.teamId || 0}`
-      acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (stats.kills || 0)
-      return acc
-    },
-    {} as Record<string, number>
-  )
+  const rawParticipants = data.participants || []
+  const hasFullTeam = rawParticipants.length > 1
+
+  const totalKills = hasFullTeam
+    ? rawParticipants.reduce(
+        (acc, p) => {
+          const stats = p.stats || ({} as any)
+          const teamIdentifier = safeBasicInfo.isCherrySubteam
+            ? `CHERRY-${stats.playerSubteamId || 0}`
+            : `TEAM-${p.teamId || 0}`
+          acc[teamIdentifier] = (acc[teamIdentifier] || 0) + (stats.kills || 0)
+          return acc
+        },
+        {} as Record<string, number>
+      )
+    : {}
 
   const participants = (data.participants || [])
     .map<MatchParticipant | null>((participant) => {
@@ -364,8 +373,9 @@ export function toParticipants(
         kda:
           ((stats.kills || 0) + (stats.assists || 0)) / noZero(stats.deaths || 0),
         killParticipation:
-          ((stats.kills || 0) + (stats.assists || 0)) /
-          noZero(totalKills[teamIdentifier] || 0),
+          hasFullTeam && totalKills[teamIdentifier] && totalKills[teamIdentifier] > 0
+            ? Math.min(1, ((stats.kills || 0) + (stats.assists || 0)) / totalKills[teamIdentifier])
+            : null,
         totalDamageDealtToChampions: stats.totalDamageDealtToChampions || 0,
         damageGoldEfficiency:
           (stats.totalDamageDealtToChampions || 0) / noZero(stats.goldEarned || 0),

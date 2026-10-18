@@ -39,16 +39,18 @@
       <!-- Spells (Spell 1 & Spell 2) -->
       <div class="flex flex-col space-y-1 shrink-0">
         <img
-          :src="player.spell1_icon"
-          :alt="player.spell1_name"
-          :title="player.spell1_name"
-          class="w-4 h-4 rounded border border-slate-700 object-cover"
+          :src="s1Icon"
+          :alt="player.spell1_name || '技能1'"
+          :title="player.spell1_name || '技能1'"
+          class="w-4 h-4 rounded border border-slate-700 object-cover bg-slate-800"
+          @error="s1Fallback"
         />
         <img
-          :src="player.spell2_icon"
-          :alt="player.spell2_name"
-          :title="player.spell2_name"
-          class="w-4 h-4 rounded border border-slate-700 object-cover"
+          :src="s2Icon"
+          :alt="player.spell2_name || '技能2'"
+          :title="player.spell2_name || '技能2'"
+          class="w-4 h-4 rounded border border-slate-700 object-cover bg-slate-800"
+          @error="s2Fallback"
         />
       </div>
 
@@ -108,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { NDropdown, NPopover, useMessage } from 'naive-ui'
 import type { EnhancedPlayerCard } from '../../types'
 import { RANKED_MEDAL_MAP, PREMADE_TEAM_COLORS } from '../../constants'
@@ -122,6 +124,37 @@ import type { ChampionAnalysisMastery } from '../../../champion-analysis/types'
 const props = defineProps<{
   player: EnhancedPlayerCard
 }>()
+
+const s1Default = computed(() => props.player.spell1_icon || 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png')
+const s2Default = computed(() => {
+  if (props.player.spell2_icon) return props.player.spell2_icon
+  const pos = props.player.assigned_position?.toUpperCase()
+  if (pos === 'JUNGLE' || pos === 'JUG') {
+    return 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png'
+  }
+  return 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerTeleport.png'
+})
+
+const s1Icon = ref(s1Default.value)
+const s2Icon = ref(s2Default.value)
+
+watch(() => props.player.spell1_icon, () => {
+  s1Icon.value = s1Default.value
+})
+watch(() => props.player.spell2_icon, () => {
+  s2Icon.value = s2Default.value
+})
+
+function s1Fallback() {
+  s1Icon.value = 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png'
+}
+
+function s2Fallback() {
+  const pos = props.player.assigned_position?.toUpperCase()
+  s2Icon.value = (pos === 'JUNGLE' || pos === 'JUG')
+    ? 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerSmite.png'
+    : 'https://game.gtimg.cn/images/lol/act/img/spell/SummonerTeleport.png'
+}
 
 const message = useMessage()
 const { streamerMode, inspectPlayer, selectPlayer } = useOngoingGamePanel()

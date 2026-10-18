@@ -48,14 +48,14 @@
     <!-- Honest fallback when 14-min timeline data is not available -->
     <div
       v-else
-      class="flex w-full items-center gap-2 rounded border border-slate-700/40 bg-slate-900/30 px-2 py-1.5 text-slate-400 text-[11px]"
+      class="flex w-full items-center gap-1.5 rounded border border-slate-700/40 bg-slate-900/40 px-2 py-1 text-slate-400 text-[10px]"
     >
-      <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-slate-800 text-[10px] text-slate-400 font-semibold">
+      <span class="px-1 py-0.5 rounded bg-slate-800 text-[9px] text-slate-400 font-semibold shrink-0">
         打野
-      </div>
-      <div class="min-w-0 flex-1 truncate text-[10px] text-slate-400">
-        暂无前14分钟刷野偏好数据
-      </div>
+      </span>
+      <span class="min-w-0 flex-1 truncate text-[10px] text-slate-400">
+        前14m刷野偏好暂无
+      </span>
     </div>
   </div>
 </template>

@@ -206,6 +206,7 @@ import {
   getSummonerProfile,
   getRawMatchHistory,
   getRawMatchTimeline,
+  getRawMatchDetail,
   getChampionMastery,
   getMatchDetail,
   getMatchTimeline,
@@ -513,7 +514,57 @@ async function handleStartCollect(options: {
   }
 }
 
-const rawSummaries = ref<Map<number, LcuOrSgpGameSummary>>(new Map())
+const rawSummaries = shallowRef<Map<number, LcuOrSgpGameSummary>>(new Map())
+
+async function enrichCurrentGames(games: Game[], targetFetchId: number) {
+  if (isDemoMode.value || !profile.value.is_connected) return
+
+  const toEnrich = games.filter((g) => {
+    const existing = rawSummaries.value.get(g.gameId)
+    const existingCount = (existing?.data as Game)?.participants?.length ?? 0
+    const gCount = g.participants?.length ?? 0
+    return existingCount <= 1 && gCount <= 1
+  })
+
+  if (toEnrich.length === 0) return
+
+  const CONCURRENCY = 3
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < toEnrich.length) {
+      if (targetFetchId !== currentFetchId.value) return
+      const g = toEnrich[cursor++]
+      if (!g) break
+
+      try {
+        const fullDetail = await getRawMatchDetail(g.gameId)
+        if (targetFetchId !== currentFetchId.value) return
+        if (fullDetail && Array.isArray(fullDetail.participants) && fullDetail.participants.length > 1) {
+          const next = new Map(rawSummaries.value)
+          next.set(g.gameId, {
+            gameId: g.gameId,
+            source: 'lcu',
+            data: markRaw(fullDetail)
+          })
+          rawSummaries.value = next
+
+          const selfPuuid = profile.value.puuid || props.tab.puuid
+          const mIdx = matches.value.findIndex((m) => m.game_id === g.gameId)
+          if (mIdx !== -1) {
+            matches.value[mIdx] = convertRawGameToMatchItem(fullDetail, selfPuuid)
+          }
+        }
+      } catch (err) {
+        // Non-blocking
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, toEnrich.length) }, () => worker())
+  )
+}
 
 const allMatchSummaries = computed<LcuOrSgpGameSummary[]>(() => {
   const currentList = isLoadedByCollectMode.value ? collectedGames.value : rawGames.value
@@ -645,6 +696,7 @@ async function fetchPageMatches(
       rawGames.value = rawHistory.games.games
       matches.value = rawHistory.games.games.map((g) => convertRawGameToMatchItem(g, profile.value.puuid))
       hasNextPage.value = rawHistory.games.games.length >= targetSize
+      enrichCurrentGames(rawHistory.games.games, fetchId)
     } else {
       if (!profile.value.is_connected) {
         const mockHistory = getMockRawMatchHistory(queueId, begIndex, endIndex)
@@ -734,11 +786,13 @@ async function handleLoadDetails(gameId: number) {
       try {
         const detail = await getMatchDetail(gameId)
         if (detail?.raw_game) {
-          rawSummaries.value.set(gameId, {
+          const next = new Map(rawSummaries.value)
+          next.set(gameId, {
             gameId,
             source: 'lcu',
             data: markRaw(detail.raw_game)
           })
+          rawSummaries.value = next
         }
       } catch (e) {
         // Non-blocking

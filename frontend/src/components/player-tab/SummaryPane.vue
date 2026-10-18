@@ -253,24 +253,24 @@ const avgKda = computed(() => {
 
 const avgKp = computed(() => {
   const val = props.analysis?.summary?.avgKillParticipation
-  if (val !== undefined && val !== null && Number.isFinite(val)) {
-    return (val * 100).toFixed(0)
+  if (val !== undefined && val !== null && Number.isFinite(val) && val > 0) {
+    return Math.min(100, Math.round(val * 100)).toFixed(0)
   }
   return props.profileSummary?.avg_kp ? String(props.profileSummary.avg_kp) : '—'
 })
 
 const avgDmgShare = computed(() => {
   const val = props.analysis?.summary?.avgChampionDamagePercentageOfTeam
-  if (val !== undefined && val !== null && Number.isFinite(val)) {
-    return (val * 100).toFixed(1)
+  if (val !== undefined && val !== null && Number.isFinite(val) && val > 0) {
+    return Math.min(100, val * 100).toFixed(1)
   }
   return props.profileSummary?.avg_damage_share ? String(props.profileSummary.avg_damage_share) : '—'
 })
 
 const avgTankShare = computed(() => {
   const val = props.analysis?.summary?.avgDamageTakenPercentageOfTeam
-  if (val !== undefined && val !== null && Number.isFinite(val)) {
-    return (val * 100).toFixed(1)
+  if (val !== undefined && val !== null && Number.isFinite(val) && val > 0) {
+    return Math.min(100, val * 100).toFixed(1)
   }
   return props.profileSummary?.avg_damage_taken_share ? String(props.profileSummary.avg_damage_taken_share) : '—'
 })

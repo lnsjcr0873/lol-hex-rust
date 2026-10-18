@@ -64,7 +64,9 @@ export function computeSingleSummary(
     ),
     championDamageRatioToMax: participant.totalDamageDealtToChampions / noZero(maxChampionDmg),
     championDamagePercentageOfTeam:
-      participant.totalDamageDealtToChampions / noZero(teamTotalChampionDmg),
+      teamParticipants.length > 1
+        ? participant.totalDamageDealtToChampions / noZero(teamTotalChampionDmg)
+        : null,
     championDamagePerMinute: participant.totalDamageDealtToChampions / durationMinutes,
     damageTakenRatioToTeamMax: participant.totalDamageTaken / noZero(teamMaxDmgTaken),
     damageTakenRatioToExpectedContribution: getExpectedContributionRatio(
@@ -72,7 +74,10 @@ export function computeSingleSummary(
       teamTotalDmgTaken
     ),
     damageTakenRatioToMax: participant.totalDamageTaken / noZero(maxDmgTaken),
-    damageTakenPercentageOfTeam: participant.totalDamageTaken / noZero(teamTotalDmgTaken),
+    damageTakenPercentageOfTeam:
+      teamParticipants.length > 1
+        ? participant.totalDamageTaken / noZero(teamTotalDmgTaken)
+        : null,
     healingRatioToTeamAverageDamageTaken: participant.totalHeal / noZero(teamAverageDmgTaken),
     teamParticipantCount: teamParticipants.length,
     goldRatioToTeamMax: participant.goldEarned / noZero(teamMaxGold),
@@ -81,15 +86,27 @@ export function computeSingleSummary(
       teamTotalGold
     ),
     goldRatioToMax: participant.goldEarned / noZero(maxGold),
-    goldPercentageOfTeam: participant.goldEarned / noZero(teamTotalGold),
+    goldPercentageOfTeam:
+      teamParticipants.length > 1
+        ? participant.goldEarned / noZero(teamTotalGold)
+        : null,
     csRatioToTeamMax: participant.cs / noZero(teamMaxCs),
     csRatioToMax: participant.cs / noZero(maxCs),
-    csPercentageOfTeam: participant.cs / noZero(teamTotalCs),
+    csPercentageOfTeam:
+      teamParticipants.length > 1
+        ? participant.cs / noZero(teamTotalCs)
+        : null,
     csPerMinute: participant.cs / durationMinutes,
     towerDamageRatioToTeamMax: participant.totalDamageToTowers / noZero(teamMaxTowerDmg),
     towerDamageRatioToMax: participant.totalDamageToTowers / noZero(maxTowerDmg),
-    towerDamagePercentageOfTeam: participant.totalDamageToTowers / noZero(teamTotalTowerDmg),
-    visionScorePercentageOfTeam: getVisionScore(participant) / noZero(teamTotalVisionScore),
+    towerDamagePercentageOfTeam:
+      teamParticipants.length > 1
+        ? participant.totalDamageToTowers / noZero(teamTotalTowerDmg)
+        : null,
+    visionScorePercentageOfTeam:
+      teamParticipants.length > 1
+        ? getVisionScore(participant) / noZero(teamTotalVisionScore)
+        : null,
     visionScoreRatioToExpectedContribution: getExpectedContributionRatio(
       getVisionScore(participant),
       teamTotalVisionScore
@@ -103,15 +120,19 @@ export function computeSingleSummary(
         ? participant.totalDamageShieldedOnTeammates / noZero(maxShieldedDmg)
         : null,
     totalDamageShieldedOnTeammatesPercentageOfTeam:
-      participant.totalDamageShieldedOnTeammates !== null
+      participant.totalDamageShieldedOnTeammates !== null && teamParticipants.length > 1
         ? participant.totalDamageShieldedOnTeammates / noZero(teamTotalShieldedDmg)
         : null,
     kda: participant.kda,
     win: participant.winResult === 'win',
-    killParticipation: (participant.kills + participant.assists) / noZero(teamTotalKills),
+    killParticipation:
+      teamParticipants.length > 1 && teamTotalKills > 0
+        ? Math.min(1, (participant.kills + participant.assists) / teamTotalKills)
+        : null,
     damageGoldEfficiency: participant.totalDamageDealtToChampions / noZero(participant.goldEarned),
     killDamageEfficiency: (() => {
       if (
+        teamParticipants.length <= 1 ||
         teamTotalKills === 0 ||
         teamTotalChampionDmg === 0 ||
         participant.totalDamageDealtToChampions === 0

@@ -67,8 +67,15 @@ export function computePlayerTags(
     })
   }
 
+  const hasMultipleParticipants =
+    teams.teamStatsArr.length > 1 ||
+    (teams.teamStatsArr.length === 1 &&
+      (teams.teamStatsArr[0].totalDamageDealtToChampions > (participant.totalDamageDealtToChampions || 0) ||
+        teams.allTeamStats.totalKills > (participant.kills || 0)))
+
   // Damage leader
   if (
+    hasMultipleParticipants &&
     participant.totalDamageDealtToChampions > 0 &&
     participant.totalDamageDealtToChampions === teams.allTeamStats.maxDamageDealtToChampions
   ) {
@@ -79,7 +86,7 @@ export function computePlayerTags(
       content: `对英雄输出 ${participant.totalDamageDealtToChampions.toLocaleString()} (全场第 1)`,
       priority: 600
     })
-  } else if (team && participant.totalDamageDealtToChampions === team.maxDamageDealtToChampions) {
+  } else if (hasMultipleParticipants && team && participant.totalDamageDealtToChampions === team.maxDamageDealtToChampions) {
     tags.push({
       label: '队内输出第一',
       color: 'bg-red-950/60 border border-red-500/30',
@@ -91,6 +98,7 @@ export function computePlayerTags(
 
   // Damage taken leader
   if (
+    hasMultipleParticipants &&
     participant.totalDamageTaken > 0 &&
     participant.totalDamageTaken === teams.allTeamStats.maxDamageTaken
   ) {
@@ -104,7 +112,7 @@ export function computePlayerTags(
   }
 
   // Gold leader
-  if (participant.goldEarned > 0 && participant.goldEarned === teams.allTeamStats.maxGoldEarned) {
+  if (hasMultipleParticipants && participant.goldEarned > 0 && participant.goldEarned === teams.allTeamStats.maxGoldEarned) {
     tags.push({
       label: '经济第一',
       color: 'bg-amber-950/60 border border-amber-600/30',

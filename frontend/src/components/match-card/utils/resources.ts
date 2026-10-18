@@ -219,16 +219,41 @@ export const SPELL_NAME_MAP: Record<number, { name: string; iconKey: string }> =
   2202: { name: '闪现', iconKey: 'summoner_cherry_flash' }
 }
 
+export const SPELL_GTIMG_MAP: Record<number, string> = {
+  1: 'SummonerBoost.png',
+  3: 'SummonerExhaust.png',
+  4: 'SummonerFlash.png',
+  6: 'SummonerHaste.png',
+  7: 'SummonerHeal.png',
+  11: 'SummonerSmite.png',
+  12: 'SummonerTeleport.png',
+  13: 'SummonerMana.png',
+  14: 'SummonerDot.png',
+  21: 'SummonerBarrier.png',
+  30: 'SummonerPoroRecall.png',
+  31: 'SummonerPoroThrow.png',
+  32: 'SummonerSnowball.png',
+  39: 'SummonerSnowball.png',
+  54: 'SummonerSmite.png',
+  55: 'SummonerSmite.png',
+  2201: 'SummonerCherryFlee.png',
+  2202: 'SummonerCherryFlash.png'
+}
+
 export function getSpellName(spellId: number): string {
   return SPELL_NAME_MAP[spellId]?.name || `技能${spellId}`
 }
 
 export function getSpellIconUrl(spellId: number): string {
+  const gtFileName = SPELL_GTIMG_MAP[spellId]
+  if (gtFileName) {
+    return `https://game.gtimg.cn/images/lol/act/img/spell/${gtFileName}`
+  }
   const meta = SPELL_NAME_MAP[spellId]
-  if (meta) {
+  if (meta?.iconKey) {
     return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/data/spells/icons2d/${meta.iconKey}.png`
   }
-  return `https://ddragon.leagueoflegends.com/cdn/14.24.1/img/spell/SummonerFlash.png`
+  return `https://game.gtimg.cn/images/lol/act/img/spell/SummonerFlash.png`
 }
 
 export const PERK_NAME_MAP: Record<number, string> = {

@@ -20,22 +20,22 @@
     />
 
     <!-- Header Section -->
-    <PlayerInfoCardHeader :player="player" />
+    <PlayerInfoCardHeader class="shrink-0" :player="player" />
 
     <!-- Core Stats (Winrate, KDA with IQR, Position) -->
-    <PlayerInfoCardStats :player="player" />
+    <PlayerInfoCardStats class="shrink-0" :player="player" />
 
     <!-- Jungle Pathing Indicator (When Jungle) -->
-    <PlayerInfoCardJunglePathing :player="player" />
+    <PlayerInfoCardJunglePathing class="shrink-0" :player="player" />
 
     <!-- Tactical Tags (21 evaluated tags) -->
-    <TagsArea :player="player" />
+    <TagsArea class="shrink-0" :player="player" />
 
     <!-- Champion Usage Mini Bar -->
-    <PlayerInfoCardChampionUsage :player="player" />
+    <PlayerInfoCardChampionUsage class="shrink-0" :player="player" />
 
     <!-- Mini Match History Strip -->
-    <PlayerInfoCardMatchHistory :player="player" />
+    <PlayerInfoCardMatchHistory class="shrink-0" :player="player" />
   </div>
 </template>
 
