@@ -175,6 +175,8 @@ pub fn create_router(state: AppState) -> axum::Router {
                 .allow_origin([
                     "http://127.0.0.1:8765".parse().unwrap(),
                     "http://localhost:8765".parse().unwrap(),
+                    "http://127.0.0.1:3000".parse().unwrap(),
+                    "http://localhost:3000".parse().unwrap(),
                     "http://127.0.0.1:5173".parse().unwrap(),
                     "http://localhost:5173".parse().unwrap(),
                     "tauri://localhost".parse().unwrap(),
