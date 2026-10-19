@@ -47,22 +47,22 @@
         <!-- Chat Record Broadcast Options -->
         <div v-if="(matchData?.is_active || isDemoMode)" class="flex items-center space-x-1.5">
           <button
-            @click="sendChat('concise')"
+            @click="sendChat(preferredBroadcastFormat)"
             :disabled="isBroadcasting"
             class="px-3 py-1.5 rounded-lg bg-[#0e273c] hover:bg-[#143452] border border-[#1b4366] text-[#38bdf8] text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 disabled:opacity-50 shadow-sm"
-            title="将我方 5 人近期胜率与战绩以精简格式发送到选人聊天室"
+            :title="preferredBroadcastFormat === 'detailed' ? '发送包含段位、胜率与车队标记的详细战绩' : '将我方 5 人近期胜率与战绩以精简格式发送到选人聊天室'"
           >
             <MessageSquare class="w-3.5 h-3.5" />
-            <span>{{ isBroadcasting ? '广播中...' : '广播精简战绩' }}</span>
+            <span>{{ isBroadcasting ? '广播中...' : (preferredBroadcastFormat === 'detailed' ? '广播详细战绩' : '广播精简战绩') }}</span>
           </button>
 
           <button
-            @click="sendChat('detailed')"
+            @click="sendChat(alternateBroadcastFormat)"
             :disabled="isBroadcasting"
             class="px-2.5 py-1.5 rounded-lg bg-[#0d2133] hover:bg-[#122e47] border border-[#183955] text-slate-300 hover:text-white text-xs font-medium transition active:scale-95 disabled:opacity-50"
-            title="发送包含段位、胜率与车队标记的详细战绩"
+            :title="alternateBroadcastFormat === 'detailed' ? '发送包含段位、胜率与车队标记的详细战绩' : '将我方 5 人近期胜率与战绩以精简格式发送到选人聊天室'"
           >
-            <span>详细版</span>
+            <span>{{ alternateBroadcastFormat === 'detailed' ? '详细版' : '精简版' }}</span>
           </button>
         </div>
 
@@ -225,6 +225,26 @@ import PlayerDetailDrawer from '../components/PlayerDetailDrawer.vue'
 import ConnectedMatchPreviewer from '../components/match-preview/ConnectedMatchPreviewer.vue'
 import type { EnhancedPlayerCard } from '../components/ongoing-game-panel/types'
 
+function getPreferredBroadcastFormat(): 'concise' | 'detailed' {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('hexbrain_preferences') : null
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed?.broadcastFormat === 'detailed' || parsed?.broadcastFormat === 'concise') {
+        return parsed.broadcastFormat
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return 'concise'
+}
+
+const preferredBroadcastFormat = ref<'concise' | 'detailed'>(getPreferredBroadcastFormat())
+const alternateBroadcastFormat = computed(() =>
+  preferredBroadcastFormat.value === 'detailed' ? 'concise' : 'detailed'
+)
+
 const matchData = ref<OngoingMatchData | null>(null)
 const isDemoMode = ref(false)
 const isRefreshing = ref(false)
@@ -267,6 +287,7 @@ const showToast = (msg: string) => {
 }
 
 const refreshData = async () => {
+  preferredBroadcastFormat.value = getPreferredBroadcastFormat()
   if (isDemoMode.value) {
     matchData.value = mockOngoingMatch
     return

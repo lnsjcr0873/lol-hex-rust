@@ -161,4 +161,51 @@ describe('Milestone 3: Match History Pagination & Dynamic Fetching Integration T
       expect(Array.isArray(result)).toBe(true)
     })
   })
+
+  describe('7. User Preferences Storage & Resolution (hexbrain_preferences)', () => {
+    function resolvePageSize(rawJson: string | null): number {
+      try {
+        if (!rawJson) return 20
+        const parsed = JSON.parse(rawJson)
+        if (typeof parsed?.defaultPageSize === 'number' && [10, 20, 50, 100].includes(parsed.defaultPageSize)) {
+          return parsed.defaultPageSize
+        }
+      } catch {
+        // fallback
+      }
+      return 20
+    }
+
+    function resolveBroadcastFormat(rawJson: string | null): 'concise' | 'detailed' {
+      try {
+        if (!rawJson) return 'concise'
+        const parsed = JSON.parse(rawJson)
+        if (parsed?.broadcastFormat === 'detailed' || parsed?.broadcastFormat === 'concise') {
+          return parsed.broadcastFormat
+        }
+      } catch {
+        // fallback
+      }
+      return 'concise'
+    }
+
+    it('resolves valid saved preferences accurately', () => {
+      const prefs = JSON.stringify({ defaultPageSize: 50, broadcastFormat: 'detailed' })
+      expect(resolvePageSize(prefs)).toBe(50)
+      expect(resolveBroadcastFormat(prefs)).toBe('detailed')
+    })
+
+    it('falls back to defaults on corrupted or null preferences', () => {
+      expect(resolvePageSize(null)).toBe(20)
+      expect(resolveBroadcastFormat(null)).toBe('concise')
+      expect(resolvePageSize('{ invalid json')).toBe(20)
+      expect(resolveBroadcastFormat('{ invalid json')).toBe('concise')
+    })
+
+    it('rejects invalid pageSize values outside whitelist', () => {
+      const invalidPrefs = JSON.stringify({ defaultPageSize: 999, broadcastFormat: 'hack' })
+      expect(resolvePageSize(invalidPrefs)).toBe(20)
+      expect(resolveBroadcastFormat(invalidPrefs)).toBe('concise')
+    })
+  })
 })

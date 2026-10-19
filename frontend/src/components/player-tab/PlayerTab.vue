@@ -291,7 +291,23 @@ const isLoadingMatches = ref(false)
 
 const activeQueue = ref('all')
 const currentPage = ref(1)
-const pageSize = ref(20)
+
+function getInitialPageSize(): number {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('hexbrain_preferences') : null
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (typeof parsed?.defaultPageSize === 'number' && [10, 20, 50, 100].includes(parsed.defaultPageSize)) {
+        return parsed.defaultPageSize
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return 20
+}
+
+const pageSize = ref(getInitialPageSize())
 const hasNextPage = ref(true)
 const currentFetchId = ref(0)
 const realMasteries = ref<any[]>([])
