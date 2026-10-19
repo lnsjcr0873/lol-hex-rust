@@ -1678,7 +1678,12 @@ impl PlayerHistoryManager {
                         .unwrap_or(&empty_vec);
 
                     for g in games {
-                        raw_games.push(g.clone());
+                        let unwrapped = if let Some(inner) = g.get("json") {
+                            if inner.is_object() { inner } else { g }
+                        } else {
+                            g
+                        };
+                        raw_games.push(unwrapped.clone());
                     }
                 }
             }
@@ -1738,7 +1743,12 @@ impl PlayerHistoryManager {
         }
 
         if !raw_games.is_empty() {
-            for g in &raw_games {
+            for g_raw in &raw_games {
+                let g = if let Some(inner) = g_raw.get("json") {
+                    if inner.is_object() { inner } else { g_raw }
+                } else {
+                    g_raw
+                };
                 let game_id = g.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
                 let game_creation = g.get("gameCreation").and_then(|v| v.as_i64()).unwrap_or(0);
                 let raw_duration = g.get("gameDuration").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0).max(0);
