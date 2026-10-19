@@ -349,7 +349,7 @@ pub async fn get_summoner_profile(
             json!({
                 "champion_id": tc.champion_id,
                 "champion_name": tc.champion_name,
-                "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", tc.champion_id),
+                "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", tc.champion_id),
                 "games": tc.games,
                 "win_rate": tc.win_rate_pct,
                 "kda": format!("{:.1}", tc.kda)
@@ -484,7 +484,7 @@ pub async fn get_match_history(
                 "is_blue": m.is_blue,
                 "champion_id": m.champion_id,
                 "champion_name": m.champion_name,
-                "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/champion/{}.png", m.champion_id),
+                "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", m.champion_id),
                 "role": role_cn,
                 "spell1_id": m.spell1_id,
                 "spell2_id": m.spell2_id,

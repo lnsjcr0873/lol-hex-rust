@@ -31,9 +31,9 @@ impl TextToSpeech {
                             "-ExecutionPolicy",
                             "Bypass",
                             "-Command",
-                            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; \
+                            "$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8); \
                              $voice = New-Object -ComObject SAPI.SpVoice; \
-                             while ($line = [Console]::In.ReadLine()) { \
+                             while ($line = $reader.ReadLine()) { \
                                  if (-not [string]::IsNullOrWhiteSpace($line)) { \
                                      try { $voice.Speak($line) } catch {} \
                                  } \

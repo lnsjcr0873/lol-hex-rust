@@ -260,7 +260,7 @@ export async function setOngoingOverlayAlwaysOnTop(alwaysOnTop: boolean): Promis
 }
 
 export async function isOngoingOverlayVisible(): Promise<boolean> {
-  return safeInvoke<boolean>('is_ongoing_overlay_visible', undefined, !isTauri);
+  return safeInvoke<boolean>('is_ongoing_overlay_visible', undefined, false);
 }
 
 export { getMockChampionMastery } from './mockData';

@@ -43,6 +43,7 @@ impl WsBroadcaster {
     }
 }
 
+#[allow(dead_code)]
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(broadcaster): State<Arc<WsBroadcaster>>,

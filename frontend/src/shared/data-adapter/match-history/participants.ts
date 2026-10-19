@@ -297,7 +297,7 @@ export function toParticipants(
       }
     })
 
-    return participants
+    return assignMvpSvp(participants)
   }
 
   const rawParticipants = data.participants || []
@@ -420,6 +420,48 @@ export function toParticipants(
       }
     })
     .filter(isNotNull)
+
+  return assignMvpSvp(participants)
+}
+
+function computeParticipantScore(p: MatchParticipant): number {
+  const kda = ((p.kills || 0) + (p.assists || 0) * 0.7) / Math.max(1, p.deaths || 0)
+  const dmg = p.totalDamageDealtToChampions || 0
+  const kp = p.killParticipation ?? 0.2
+  const cs = p.cs || 0
+  return kda * 3.0 + dmg / 5000.0 + kp * 5.0 + cs / 50.0
+}
+
+function assignMvpSvp(participants: MatchParticipant[]): MatchParticipant[] {
+  if (participants.length <= 1) return participants
+
+  const winGroup = participants.filter((p) => p.win)
+  const lossGroup = participants.filter((p) => !p.win)
+
+  let bestWin: MatchParticipant | null = null
+  let bestWinScore = -Infinity
+  for (const p of winGroup) {
+    const s = computeParticipantScore(p)
+    if (s > bestWinScore) {
+      bestWinScore = s
+      bestWin = p
+    }
+  }
+
+  let bestLoss: MatchParticipant | null = null
+  let bestLossScore = -Infinity
+  for (const p of lossGroup) {
+    const s = computeParticipantScore(p)
+    if (s > bestLossScore) {
+      bestLossScore = s
+      bestLoss = p
+    }
+  }
+
+  for (const p of participants) {
+    p.isMvp = bestWin !== null && p === bestWin
+    p.isSvp = bestLoss !== null && p === bestLoss
+  }
 
   return participants
 }

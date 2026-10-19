@@ -328,7 +328,37 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
     : (game.participants?.find(p => p.participantId === myPid) || game.participants?.[0])
   const stats = myPart?.stats
 
-  const participantsPreview = (game.participants || []).map(p => {
+  // Evaluate MVP and SVP across all participants in the match
+  const rawParts = game.participants || []
+  let bestWinPart: any = null
+  let bestWinScore = -Infinity
+  let bestLossPart: any = null
+  let bestLossScore = -Infinity
+
+  for (const p of rawParts) {
+    const s = p.stats
+    if (!s) continue
+    const kda = ((s.kills || 0) + (s.assists || 0) * 0.7) / Math.max(1, s.deaths || 0)
+    const dmg = s.totalDamageDealtToChampions || 0
+    const cs = (s.totalMinionsKilled || 0) + (s.neutralMinionsKilled || 0)
+    const score = kda * 3.0 + dmg / 5000.0 + cs / 50.0
+    if (s.win) {
+      if (score > bestWinScore) {
+        bestWinScore = score
+        bestWinPart = p
+      }
+    } else {
+      if (score > bestLossScore) {
+        bestLossScore = score
+        bestLossPart = p
+      }
+    }
+  }
+
+  const isMvp = myPart != null && myPart === bestWinPart
+  const isSvp = myPart != null && myPart === bestLossPart
+
+  const participantsPreview = rawParts.map(p => {
     const ident = game.participantIdentities?.find(i => i.participantId === p.participantId)
     const pAny = p as any
     return {
@@ -367,8 +397,8 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
     deaths: stats?.deaths ?? 0,
     assists: stats?.assists ?? 0,
     kda_ratio: stats ? Math.round((((stats.kills ?? 0) + (stats.assists ?? 0)) / Math.max(1, stats.deaths ?? 0)) * 10) / 10 : 0,
-    is_mvp: false,
-    is_svp: false,
+    is_mvp: isMvp,
+    is_svp: isSvp,
     items: [stats?.item0 ?? 0, stats?.item1 ?? 0, stats?.item2 ?? 0, stats?.item3 ?? 0, stats?.item4 ?? 0, stats?.item5 ?? 0, stats?.item6 ?? 0],
     total_damage: stats?.totalDamageDealtToChampions ?? 0,
     damage_share_pct: 0,

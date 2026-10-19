@@ -609,9 +609,19 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
     let max_party_size = if queue_id == 420 { 2 } else { 5 };
 
     // Group player indices by team_id
+    // If team_id is <= 0 (e.g. ChampSelect or unassigned), in a standard 10-player match
+    // indices 0..5 are Team 100 (Blue) and 5..10 are Team 200 (Red).
+    // Otherwise, assign individual negative IDs to prevent opposing players from grouping into a fake cross-team premade.
     let mut team_groups: HashMap<i32, Vec<usize>> = HashMap::new();
     for i in 0..n {
-        team_groups.entry(players[i].team_id).or_default().push(i);
+        let eff_team_id = if players[i].team_id > 0 {
+            players[i].team_id
+        } else if n == 10 {
+            if i < 5 { 100 } else { 200 }
+        } else {
+            0
+        };
+        team_groups.entry(eff_team_id).or_default().push(i);
     }
 
     let mut sorted_teams: Vec<i32> = team_groups.keys().copied().collect();
@@ -3385,6 +3395,29 @@ mod tests {
         // Group 2 should be p_2 and p_3 (team 200)
         assert_eq!(cards[2].premade_group, Some(2));
         assert_eq!(cards[3].premade_group, Some(2));
+    }
+
+    #[test]
+    fn test_detect_premade_teams_unassigned_team_id_isolation() {
+        let mut cards = Vec::new();
+        // 10 players in a standard match, but team_id == 0
+        for i in 0..10 {
+            let mut c = OngoingPlayerCard::default();
+            c.puuid = format!("p_{}", i);
+            c.team_id = 0;
+            cards.push(c);
+        }
+
+        // p_0 (blue side, index 0) and p_6 (red side, index 6) played together in past matches
+        let m1 = ParsedMatchRecord { game_id: 101, teammate_puuids: vec!["p_6".to_string()], ..Default::default() };
+        let m2 = ParsedMatchRecord { game_id: 102, teammate_puuids: vec!["p_6".to_string()], ..Default::default() };
+        cards[0].matches = vec![m1, m2];
+
+        detect_premade_teams(&mut cards);
+
+        // They must NOT be grouped together across sides!
+        assert!(cards[0].premade_group.is_none());
+        assert!(cards[6].premade_group.is_none());
     }
 
     #[tokio::test]

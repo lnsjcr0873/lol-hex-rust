@@ -351,6 +351,7 @@ unsafe fn get_cached_font_kind(size: i32, weight: i32, kind: FontKind) -> window
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::Gdi::HFONT {
     get_cached_font_kind(size, weight, FontKind::Text)
 }
