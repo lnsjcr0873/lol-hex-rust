@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme } from 'naive-ui';
 import Titlebar from './components/Titlebar.vue';
 import Sidebar from './components/Sidebar.vue';
@@ -38,6 +38,9 @@ import OngoingOverlayView from './views/OngoingOverlayView.vue';
 import MatchHistory from './views/MatchHistory.vue';
 import Automation from './views/Automation.vue';
 import Settings from './views/Settings.vue';
+import { useLcuStore } from './stores/lcu';
+
+const lcuStore = useLcuStore();
 
 const checkOverlay = () => {
   if (typeof window !== 'undefined') {
@@ -72,7 +75,7 @@ onUnmounted(() => {
 type Tab = 'ongoing' | 'history' | 'automation' | 'settings';
 
 const currentTab = ref<Tab>('ongoing');
-const currentPhaseText = ref('对局准备就绪');
+const currentPhaseText = computed(() => lcuStore.phaseDisplayText);
 
 const ongoingRef = ref<InstanceType<typeof OngoingMatch> | null>(null);
 const historyRef = ref<InstanceType<typeof MatchHistory> | null>(null);

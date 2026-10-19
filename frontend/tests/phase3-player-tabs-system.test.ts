@@ -320,5 +320,47 @@ describe('Phase 3: Player Tabs System & Champion Mastery Modal (1:1 LeagueAkari 
       expect(getPerkName(999999)).toBe('符文999999')
     })
   })
+
+  // =========================================================================
+  // 5. Unified LCU Pinia Store (useLcuStore)
+  // =========================================================================
+  describe('5. Unified LCU Pinia Store (useLcuStore)', () => {
+    it('initializes disconnected with fallback text', async () => {
+      const { useLcuStore } = await import('../src/stores/lcu')
+      const lcuStore = useLcuStore()
+      expect(lcuStore.isConnected).toBe(false)
+      expect(lcuStore.phaseDisplayText).toBe('客户端未连接')
+      expect(lcuStore.connectionDisplayText).toBe('LCU 离线 (请登录游戏)')
+    })
+
+    it('correctly computes phaseDisplayText and connectionDisplayText when connected', async () => {
+      const { useLcuStore } = await import('../src/stores/lcu')
+      const lcuStore = useLcuStore()
+      lcuStore.isConnected = true
+      lcuStore.gameName = 'HideOnBush'
+      lcuStore.tagLine = 'KR1'
+
+      expect(lcuStore.displayName).toBe('HideOnBush#KR1')
+      expect(lcuStore.connectionDisplayText).toBe('HideOnBush#KR1 (已连接)')
+
+      lcuStore.gameflowPhase = 'ChampSelect'
+      expect(lcuStore.phaseDisplayText).toBe('英雄选择进行中')
+
+      lcuStore.gameflowPhase = 'InProgress'
+      expect(lcuStore.phaseDisplayText).toBe('正在游戏中')
+
+      lcuStore.gameflowPhase = 'GameStart'
+      expect(lcuStore.phaseDisplayText).toBe('对局加载中')
+
+      lcuStore.gameflowPhase = 'ReadyCheck'
+      expect(lcuStore.phaseDisplayText).toBe('对局就绪 (待确认)')
+
+      lcuStore.gameflowPhase = 'Matchmaking'
+      expect(lcuStore.phaseDisplayText).toBe('匹配中')
+
+      lcuStore.gameflowPhase = 'Lobby'
+      expect(lcuStore.phaseDisplayText).toBe('大厅待命中')
+    })
+  })
 })
 

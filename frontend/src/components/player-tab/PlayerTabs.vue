@@ -55,6 +55,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { usePlayerTabsStore, type PlayerTabItem } from '../../stores/player-tabs'
+import { useLcuStore } from '../../stores/lcu'
 import PlayerTabStrip from './widgets/PlayerTabStrip.vue'
 import PlayerTab from './PlayerTab.vue'
 
@@ -69,6 +70,7 @@ import { getSummonerProfile, getLcuStatus } from '../../api/tauri'
 import type { SummonerProfile } from '../../api/types'
 
 const playerTabsStore = usePlayerTabsStore()
+const lcuStore = useLcuStore()
 
 const selfProfile = ref<SummonerProfile | null>(null)
 const tabComponentsMap = new Map<string, any>()
@@ -156,17 +158,16 @@ async function initSelfProfile(forceOpen = false) {
   isCheckingSelf = true
   try {
     if (!forceOpen && selfProfile.value?.is_connected && selfProfile.value?.puuid) {
-      // Lightweight check to avoid fetching 20 matches + calculating radar every 2.5s
-      const status = await getLcuStatus()
-      if (status.is_connected && status.puuid) {
-        if (status.puuid === selfProfile.value.puuid) {
-          selfProfile.value.game_name = status.game_name
-          selfProfile.value.tag_line = status.tag_line
-          selfProfile.value.profile_icon_id = status.profile_icon_id
-          selfProfile.value.summoner_level = status.summoner_level
+      // Use synchronized LCU store to avoid duplicate IPC calls
+      if (lcuStore.isConnected && lcuStore.puuid) {
+        if (lcuStore.puuid === selfProfile.value.puuid) {
+          selfProfile.value.game_name = lcuStore.gameName
+          selfProfile.value.tag_line = lcuStore.tagLine
+          selfProfile.value.profile_icon_id = lcuStore.profileIconId
+          selfProfile.value.summoner_level = lcuStore.summonerLevel
           return
         }
-      } else {
+      } else if (!lcuStore.isConnected) {
         selfProfile.value = null
         return
       }
