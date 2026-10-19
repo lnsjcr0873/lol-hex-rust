@@ -509,7 +509,13 @@ impl LcuClient {
             return None;
         }
 
-        // Primary protocol request failed (network error / connection refusal).
+        // Primary protocol request failed. Only retry with alternative protocol if it was
+        // a connection / handshake failure (e.g. SSL mismatch), not a request timeout or cancellation.
+        let is_conn_err = req_res.as_ref().err().map_or(false, |e| e.is_connect());
+        if !is_conn_err {
+            return None;
+        }
+
         // Try the alternative protocol ("http" <-> "https") for bidirectional self-healing.
         let alt_scheme = if scheme == "https" { "http" } else { "https" };
         let alt_url = format!("{}://127.0.0.1:{}{}", alt_scheme, port, path_and_query);
@@ -1312,6 +1318,12 @@ impl LcuClient {
                         return Some(cached);
                     }
                     let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
+                    if self.is_negative_cached_detail(gid) {
+                        return None;
+                    }
+                    if let Some(cached) = self.get_cached_match_detail(gid) {
+                        return Some(cached);
+                    }
                 } else {
                     break Some(InFlightGuard {
                         set: self.in_flight_details.clone(),
@@ -1431,6 +1443,12 @@ impl LcuClient {
                     return Some(cached);
                 }
                 let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
+                if self.is_negative_cached_timeline(game_id) {
+                    return None;
+                }
+                if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                    return Some(cached);
+                }
             } else {
                 break InFlightGuard {
                     set: self.in_flight_timelines.clone(),

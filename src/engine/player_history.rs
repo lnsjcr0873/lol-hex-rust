@@ -763,11 +763,11 @@ pub fn queue_id_to_mode_cn(queue_id: i32) -> &'static str {
 pub fn infer_typical_position(champion_id: i32) -> &'static str {
     match champion_id {
         // TOP
-        14 | 266 | 24 | 122 | 86 | 114 | 164 | 92 | 58 | 39 | 98 | 54 | 516 | 82 | 875 | 150 | 897 | 17 | 6 | 31 | 75 | 420 | 41 | 126 | 887 | 78 | 133 | 240 | 80 | 83 | 2 | 10 => "TOP",
+        14 | 266 | 24 | 122 | 86 | 114 | 164 | 92 | 58 | 39 | 98 | 54 | 516 | 82 | 875 | 150 | 897 | 799 | 17 | 6 | 31 | 75 | 420 | 41 | 126 | 887 | 78 | 133 | 240 | 80 | 83 | 2 | 10 => "TOP",
         // JUNGLE
         64 | 141 | 5 | 59 | 11 | 254 | 56 | 120 | 234 | 104 | 245 | 60 | 28 | 876 | 203 | 19 | 35 | 154 | 32 | 113 | 107 | 121 | 76 | 200 | 233 | 77 | 421 | 9 | 20 | 33 | 79 | 102 | 106 | 131 => "JUNGLE",
         // MID
-        8 | 103 | 517 | 157 | 777 | 238 | 55 | 134 | 112 | 61 | 7 | 711 | 84 | 4 | 45 | 1 | 38 | 91 | 910 | 800 | 127 | 136 | 268 | 3 | 69 | 13 | 26 | 34 | 90 | 101 | 105 | 115 | 142 => "MID",
+        8 | 103 | 517 | 157 | 777 | 238 | 55 | 134 | 112 | 61 | 7 | 711 | 84 | 4 | 45 | 1 | 38 | 91 | 910 | 800 | 127 | 136 | 268 | 3 | 69 | 13 | 26 | 34 | 90 | 101 | 105 | 115 | 142 | 893 => "MID",
         // ADC
         51 | 145 | 81 | 222 | 67 | 202 | 22 | 360 | 236 | 18 | 21 | 498 | 29 | 119 | 523 | 221 | 15 | 110 | 96 | 429 | 901 => "ADC",
         // SUPPORT
@@ -894,16 +894,8 @@ pub fn assign_team_positions(slots: &mut [GameflowSlotInfo]) {
 }
 
 pub fn is_valid_match_id(id: i64) -> bool {
-    // League game IDs must be within valid numeric boundaries (typically 7 to 11 digits)
-    if id < 1_000_000 || id > 99_999_999_999 {
-        return false;
-    }
-    // Filter out Unix second-level timestamps:
-    // e.g., 1_600_000_000 to 1_850_000_000 (covers 1_700_000_000..1_800_000_000)
-    if (1_600_000_000..=1_850_000_000).contains(&id) {
-        return false;
-    }
-    true
+    // League game IDs must be within valid numeric boundaries (typically 7 to 11 digits, e.g. 1_000_000 to 99_999_999_999)
+    id >= 1_000_000 && id <= 99_999_999_999
 }
 
 impl PlayerHistoryManager {
@@ -1517,6 +1509,18 @@ impl PlayerHistoryManager {
 
             let mut potential_log_dirs: Vec<std::path::PathBuf> = Vec::new();
             for drive in b'C'..=b'Z' {
+                #[cfg(windows)]
+                {
+                    extern "system" {
+                        fn GetDriveTypeW(lpRootPathName: *const u16) -> u32;
+                    }
+                    let drive_root_wide: Vec<u16> = format!("{}:\\\0", drive as char).encode_utf16().collect();
+                    let dt = unsafe { GetDriveTypeW(drive_root_wide.as_ptr()) };
+                    // 3 = DRIVE_FIXED, 6 = DRIVE_RAMDISK. Skip removable, remote/network, optical, etc.
+                    if dt != 3 && dt != 6 {
+                        continue;
+                    }
+                }
                 let drive_root = format!("{}:\\", drive as char);
                 let drive_path = std::path::Path::new(&drive_root);
                 if drive_path.exists() {

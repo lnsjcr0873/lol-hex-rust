@@ -1072,29 +1072,36 @@ function updateEncounteredGames() {
     if (!g) continue
     const sIdent = g.participantIdentities?.find(i => i.player?.puuid === selfPuuid)
     const tIdent = g.participantIdentities?.find(i => i.player?.puuid === targetPuuid)
-    if (sIdent && tIdent) {
-      const sPart = g.participants?.find(p => p.participantId === sIdent.participantId)
-      const tPart = g.participants?.find(p => p.participantId === tIdent.participantId)
-      if (sPart && tPart) {
-        const isOpponent = (sPart as any).teamId !== (tPart as any).teamId
-        const sStats = sPart.stats || ({} as any)
-        const tStats = tPart.stats || ({} as any)
-        const dateStr = g.gameCreation
-          ? new Date(g.gameCreation).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
-          : ''
-        result.push({
-          gameId: g.gameId,
-          queueName: QUEUE_NAME_MAP[g.queueId] || '匹配对局',
-          date: dateStr,
-          isOpponent,
-          selfChampionId: sPart.championId,
-          selfWin: Boolean(sStats.win),
-          selfKda: `${sStats.kills ?? 0}/${sStats.deaths ?? 0}/${sStats.assists ?? 0}`,
-          targetChampionId: tPart.championId,
-          targetWin: Boolean(tStats.win),
-          targetKda: `${tStats.kills ?? 0}/${tStats.deaths ?? 0}/${tStats.assists ?? 0}`
-        })
-      }
+
+    let sPart = sIdent ? g.participants?.find(p => p.participantId === sIdent.participantId) : undefined
+    let tPart = tIdent ? g.participants?.find(p => p.participantId === tIdent.participantId) : undefined
+
+    if (!sPart) {
+      sPart = g.participants?.find(p => (p as any).puuid === selfPuuid || (p as any).player?.puuid === selfPuuid)
+    }
+    if (!tPart) {
+      tPart = g.participants?.find(p => (p as any).puuid === targetPuuid || (p as any).player?.puuid === targetPuuid)
+    }
+
+    if (sPart && tPart) {
+      const isOpponent = (sPart as any).teamId !== (tPart as any).teamId
+      const sStats = sPart.stats || (sPart as any) || ({} as any)
+      const tStats = tPart.stats || (tPart as any) || ({} as any)
+      const dateStr = g.gameCreation
+        ? new Date(g.gameCreation).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+        : ''
+      result.push({
+        gameId: g.gameId,
+        queueName: QUEUE_NAME_MAP[g.queueId] || '匹配对局',
+        date: dateStr,
+        isOpponent,
+        selfChampionId: sPart.championId,
+        selfWin: Boolean(sStats.win ?? (sPart as any).win),
+        selfKda: `${sStats.kills ?? (sPart as any).kills ?? 0}/${sStats.deaths ?? (sPart as any).deaths ?? 0}/${sStats.assists ?? (sPart as any).assists ?? 0}`,
+        targetChampionId: tPart.championId,
+        targetWin: Boolean(tStats.win ?? (tPart as any).win),
+        targetKda: `${tStats.kills ?? (tPart as any).kills ?? 0}/${tStats.deaths ?? (tPart as any).deaths ?? 0}/${tStats.assists ?? (tPart as any).assists ?? 0}`
+      })
     }
   }
   encounteredGames.value = result

@@ -180,7 +180,7 @@ pub fn normalize_item_id(item_id: &str) -> String {
         // We only strip prefix when the remainder is an authentic component (in component_prices
         // or component_names without being a canyon composite item), avoiding unconditional
         // truncation of 6-digit mode items that falsely aliases canyon items (e.g. "223089").
-        if digits.len() >= 5 {
+        if digits.starts_with("22") && digits.len() >= 5 {
             for pfx_len in [2, 3] {
                 if digits.len() > pfx_len && digits.is_char_boundary(pfx_len) {
                     let sub = &digits[pfx_len..];

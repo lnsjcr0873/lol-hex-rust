@@ -68,7 +68,7 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       const cTotalDeaths = cMatches.reduce((acc, m) => acc + (m.deaths || 0), 0)
       const cTotalAssists = cMatches.reduce((acc, m) => acc + (m.assists || 0), 0)
       const cAvgKda = cTotalDeaths === 0 ? (cTotalKills + cTotalAssists) : (cTotalKills + cTotalAssists) / cTotalDeaths
-      const cCsPerMin = cMatches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / cCount
+      const cCsPerMin = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / cCount : 0
 
       let cWinStreak = 0
       let cLoseStreak = 0
@@ -122,7 +122,7 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
           avgTowerDamagePercentageOfTeam: 0,
           avgVisionScore: cVision > 0 ? Math.round(cVision) : 0,
           avgVisionScorePercentageOfTeam: 0,
-          avgDamageGoldEfficiency: cGold > 0 ? Math.round((cDamage / cGold) * 100) / 100 : 0,
+          avgDamageGoldEfficiency: cGold > 0 ? Math.round((cDamage / Math.max(cGold, 1)) * 100) / 100 : 0,
           avgKillDamageEfficiency: 1.0,
           kdaCv: 0,
           avgSoloKills: null,
@@ -241,7 +241,7 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         avgTowerDamagePercentageOfTeam: 0,
         avgVisionScore: avgVision > 0 ? Math.round(avgVision) : (player.radar?.vision ?? 0),
         avgVisionScorePercentageOfTeam: 0,
-        avgDamageGoldEfficiency: avgGold > 0 ? Math.round((avgDamage / avgGold) * 100) / 100 : 0,
+        avgDamageGoldEfficiency: avgGold > 0 ? Math.round((avgDamage / Math.max(avgGold, 1)) * 100) / 100 : 0,
         avgKillParticipation: avgKp,
         avgKillDamageEfficiency: 1.0,
         kills: totalKills,
