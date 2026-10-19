@@ -1087,6 +1087,7 @@ impl LcuClient {
         puuid: &str,
         beg_index: usize,
         end_index: usize,
+        is_current: bool,
     ) -> Option<Value> {
         let path = format!(
             "/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
@@ -1101,14 +1102,6 @@ impl LcuClient {
         }
 
         // Fallback for current summoner endpoint if puuid is "current" / "me" / empty OR matches current summoner's PUUID:
-        let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
-            true
-        } else if let Some(cur) = self.get_current_summoner().await {
-            cur.get("puuid").and_then(|v| v.as_str()).map(|p| p.eq_ignore_ascii_case(puuid)).unwrap_or(false)
-        } else {
-            false
-        };
-
         if is_current {
             let cur_path = format!(
                 "/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
@@ -1141,10 +1134,19 @@ impl LcuClient {
         let total_requested = end_index.saturating_add(1).saturating_sub(beg_index).clamp(1, 200);
         let effective_end = beg_index.saturating_add(total_requested).saturating_sub(1).min(end_index);
 
+        // Pre-compute is_current once to prevent redundant /current-summoner network requests inside pagination loop
+        let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
+            true
+        } else if let Some(cur) = self.get_current_summoner().await {
+            cur.get("puuid").and_then(|v| v.as_str()).map(|p| p.eq_ignore_ascii_case(puuid)).unwrap_or(false)
+        } else {
+            false
+        };
+
         // If requested 20 or fewer matches, single request is sufficient
         if total_requested <= 20 {
             let _permit = self.concurrency_limiter.acquire().await.ok()?;
-            return self.fetch_match_history_batch(port, &headers, puuid, beg_index, effective_end).await;
+            return self.fetch_match_history_batch(port, &headers, puuid, beg_index, effective_end, is_current).await;
         }
 
         // For > 20 matches (e.g. 30, 50, 100, 200), chunk in batches of 20 (LCU native limit per page)
@@ -1156,7 +1158,7 @@ impl LcuClient {
             let cur_end = cur_beg.saturating_add(19).min(effective_end);
             let _permit = self.concurrency_limiter.acquire().await.ok()?;
 
-            let chunk_val = self.fetch_match_history_batch(port, &headers, puuid, cur_beg, cur_end).await;
+            let chunk_val = self.fetch_match_history_batch(port, &headers, puuid, cur_beg, cur_end, is_current).await;
 
             if let Some(val) = chunk_val {
                 if base_obj.is_none() {
@@ -1826,7 +1828,7 @@ mod tests {
         assert_eq!(client.get_consecutive_failures(), 0);
 
         let headers = client.get_auth_header().await.unwrap();
-        let result = client.fetch_match_history_batch(dead_port, &headers, "some-other-puuid", 0, 10).await;
+        let result = client.fetch_match_history_batch(dead_port, &headers, "some-other-puuid", 0, 10, false).await;
         assert!(result.is_none());
         assert!(client.get_consecutive_failures() > 0);
     }
