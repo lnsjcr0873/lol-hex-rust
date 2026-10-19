@@ -10,7 +10,7 @@
     "frontendDist": "../frontend/dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "label": "main",
@@ -45,7 +45,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: tauri:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost data: blob: https://game.gtimg.cn https://raw.communitydragon.org https://ddragon.leagueoflegends.com; font-src 'self' data:; connect-src 'self' ipc: tauri: http://localhost:* http://127.0.0.1:* https://game.gtimg.cn https://raw.communitydragon.org https://ddragon.leagueoflegends.com ws://localhost:* ws://127.0.0.1:*"
     }
   },
   "bundle": {
