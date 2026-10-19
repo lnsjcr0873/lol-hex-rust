@@ -356,11 +356,20 @@ const handleToggleOverlay = async () => {
   }
 }
 
+function handlePreferencesUpdated() {
+  preferredBroadcastFormat.value = getPreferredBroadcastFormat()
+}
+
 let isPolling = false
 
 onMounted(() => {
   refreshData()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('hexbrain-preferences-updated', handlePreferencesUpdated)
+    window.addEventListener('storage', handlePreferencesUpdated)
+  }
   pollTimer = window.setInterval(async () => {
+    preferredBroadcastFormat.value = getPreferredBroadcastFormat()
     if (!isDemoMode.value && !isPolling) {
       isPolling = true
       try {
@@ -378,6 +387,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('hexbrain-preferences-updated', handlePreferencesUpdated)
+    window.removeEventListener('storage', handlePreferencesUpdated)
+  }
   if (pollTimer) {
     clearInterval(pollTimer)
   }

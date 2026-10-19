@@ -289,7 +289,12 @@ const setBroadcastFormat = (fmt: 'concise' | 'detailed') => {
 
 const savePreferences = () => {
   try {
-    localStorage.setItem('hexbrain_preferences', JSON.stringify(preferences.value));
+    const raw = JSON.stringify(preferences.value);
+    localStorage.setItem('hexbrain_preferences', raw);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('hexbrain-preferences-updated', { detail: preferences.value }));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'hexbrain_preferences', newValue: raw }));
+    }
     statusText.value = '偏好设置已更新';
     if (statusTimer) {
       clearTimeout(statusTimer);

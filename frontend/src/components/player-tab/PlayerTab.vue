@@ -1102,16 +1102,33 @@ watch([() => allMatchSummaries.value, () => analysis.value], () => {
   loadPlayerTags()
 })
 
+function syncPreferences() {
+  const newSize = getInitialPageSize()
+  if (newSize !== pageSize.value) {
+    pageSize.value = newSize
+    fetchPageMatches(1, newSize, activeQueue.value)
+  }
+}
+
 function refreshData() {
+  pageSize.value = getInitialPageSize()
   loadData()
 }
 
 onMounted(() => {
   loadData()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('hexbrain-preferences-updated', syncPreferences)
+    window.addEventListener('storage', syncPreferences)
+  }
 })
 
 onUnmounted(() => {
   handleStopCollect()
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('hexbrain-preferences-updated', syncPreferences)
+    window.removeEventListener('storage', syncPreferences)
+  }
 })
 
 defineExpose({

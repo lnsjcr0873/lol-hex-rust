@@ -78,7 +78,13 @@ const ongoingRef = ref<InstanceType<typeof OngoingMatch> | null>(null);
 const historyRef = ref<InstanceType<typeof MatchHistory> | null>(null);
 
 const handleTabChange = (tab: Tab) => {
+  const prevTab = currentTab.value;
   currentTab.value = tab;
+  if (prevTab === 'settings' && tab !== 'settings') {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('hexbrain-preferences-updated'));
+    }
+  }
 };
 
 const handleNavigateToSummoner = async (puuid: string) => {
