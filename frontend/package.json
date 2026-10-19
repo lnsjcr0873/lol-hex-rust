@@ -12,6 +12,9 @@
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
     "@vitejs/plugin-vue": "^6.0.10",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.29",
+    "tailwindcss": "^3.4.19",
     "typescript": "~5.8.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.3",
@@ -23,7 +26,6 @@
     "@vicons/fluent": "^0.13.0",
     "@vicons/ionicons5": "^0.13.0",
     "@vueuse/core": "^12.8.2",
-    "autoprefixer": "^10.6.1",
     "chart.js": "^4.4.8",
     "chartjs-plugin-datalabels": "^2.2.0",
     "dayjs": "^1.11.13",
@@ -31,8 +33,6 @@
     "lucide-vue-next": "^0.577.0",
     "naive-ui": "^2.41.0",
     "pinia": "^3.0.1",
-    "postcss": "^8.5.29",
-    "tailwindcss": "^3.4.19",
     "vue": "^3.5.43",
     "vue-chartjs": "^5.3.2"
   }
