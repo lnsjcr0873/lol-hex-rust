@@ -287,6 +287,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             cmd::get_ongoing_match,
             cmd::send_chat_records,
+            cmd::get_lcu_status,
             cmd::get_summoner_profile,
             cmd::get_match_history,
             cmd::get_raw_match_history,

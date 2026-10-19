@@ -84,6 +84,16 @@ export interface OngoingMatchData {
   message?: string;
 }
 
+export interface LcuStatus {
+  is_connected: boolean;
+  gameflow_phase: string;
+  puuid: string;
+  game_name: string;
+  tag_line: string;
+  profile_icon_id: number;
+  summoner_level: number;
+}
+
 export interface SummonerProfile {
   is_connected?: boolean;
   is_mock?: boolean;

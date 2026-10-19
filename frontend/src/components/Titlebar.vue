@@ -71,7 +71,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { Minus, Square, X } from 'lucide-vue-next';
-import { minimizeWindow, toggleMaximizeWindow, closeWindow, getSummonerProfile, getOngoingMatch } from '../api/tauri';
+import { minimizeWindow, toggleMaximizeWindow, closeWindow, getLcuStatus } from '../api/tauri';
 
 const lcuConnected = ref(false);
 const currentSummonerName = ref('');
@@ -80,19 +80,12 @@ let pollTimer: any = null;
 
 const checkLcuStatus = async () => {
   try {
-    const prof = await getSummonerProfile();
-    if (prof && prof.is_connected) {
-      lcuConnected.value = true;
-      currentSummonerName.value = prof.game_name || '';
-    } else {
-      lcuConnected.value = false;
-      currentSummonerName.value = '';
-    }
+    const status = await getLcuStatus();
+    lcuConnected.value = Boolean(status && status.is_connected);
+    currentSummonerName.value = status?.game_name ? (status.tag_line ? `${status.game_name}#${status.tag_line}` : status.game_name) : '';
 
-    const ongoing = await getOngoingMatch(false);
-    if (ongoing && ongoing.lcu_connected) {
-      lcuConnected.value = true;
-      const phase = ongoing.gameflow_phase;
+    if (status && status.is_connected) {
+      const phase = status.gameflow_phase;
       if (phase === 'ChampSelect') {
         gameflowPhaseDisplay.value = '英雄选择进行中';
       } else if (phase === 'GameStart') {
@@ -106,9 +99,13 @@ const checkLcuStatus = async () => {
       } else {
         gameflowPhaseDisplay.value = '大厅待命中';
       }
+    } else {
+      gameflowPhaseDisplay.value = '客户端未连接';
     }
   } catch {
     lcuConnected.value = false;
+    currentSummonerName.value = '';
+    gameflowPhaseDisplay.value = '客户端未连接';
   }
 };
 

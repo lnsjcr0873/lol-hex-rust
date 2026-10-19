@@ -199,6 +199,49 @@ pub async fn send_chat_records(
 }
 
 #[tauri::command]
+pub async fn get_lcu_status(
+    state: State<'_, TauriAppState>,
+) -> Result<Value, String> {
+    if !state.lcu.ensure_credentials().await {
+        return Ok(json!({
+            "is_connected": false,
+            "gameflow_phase": "None",
+            "puuid": "",
+            "game_name": "",
+            "tag_line": "",
+            "profile_icon_id": 0,
+            "summoner_level": 0
+        }));
+    }
+
+    let phase = state.lcu.get_gameflow_phase().await;
+    let sum = state.lcu.get_current_summoner().await;
+
+    let is_connected = (!phase.is_empty() && phase != "None") || sum.is_some();
+    let (puuid, name, tag, icon, lvl) = if let Some(ref s) = sum {
+        (
+            s.get("puuid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            s.get("gameName").or_else(|| s.get("displayName")).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            s.get("tagLine").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            s.get("profileIconId").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            s.get("summonerLevel").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+        )
+    } else {
+        (String::new(), String::new(), String::new(), 0, 0)
+    };
+
+    Ok(json!({
+        "is_connected": is_connected,
+        "gameflow_phase": phase,
+        "puuid": puuid,
+        "game_name": name,
+        "tag_line": tag,
+        "profile_icon_id": icon,
+        "summoner_level": lvl
+    }))
+}
+
+#[tauri::command]
 pub async fn get_summoner_profile(
     state: State<'_, TauriAppState>,
     puuid: Option<String>,

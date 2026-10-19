@@ -59,7 +59,7 @@ import PlayerTabStrip from './widgets/PlayerTabStrip.vue'
 import PlayerTab from './PlayerTab.vue'
 import StartupPane from './StartupPane.vue'
 import ConnectedMatchPreviewer from '../match-preview/ConnectedMatchPreviewer.vue'
-import { getSummonerProfile } from '../../api/tauri'
+import { getSummonerProfile, getLcuStatus } from '../../api/tauri'
 import type { SummonerProfile } from '../../api/types'
 
 const playerTabsStore = usePlayerTabsStore()
@@ -149,6 +149,23 @@ async function initSelfProfile(forceOpen = false) {
   if (isCheckingSelf) return
   isCheckingSelf = true
   try {
+    if (!forceOpen && selfProfile.value?.is_connected && selfProfile.value?.puuid) {
+      // Lightweight check to avoid fetching 20 matches + calculating radar every 2.5s
+      const status = await getLcuStatus()
+      if (status.is_connected && status.puuid) {
+        if (status.puuid === selfProfile.value.puuid) {
+          selfProfile.value.game_name = status.game_name
+          selfProfile.value.tag_line = status.tag_line
+          selfProfile.value.profile_icon_id = status.profile_icon_id
+          selfProfile.value.summoner_level = status.summoner_level
+          return
+        }
+      } else {
+        selfProfile.value = null
+        return
+      }
+    }
+
     const p = await getSummonerProfile()
     if (p && p.puuid && p.is_connected) {
       selfProfile.value = p

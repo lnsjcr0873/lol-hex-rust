@@ -1,6 +1,7 @@
 import { 
   OngoingMatchData, 
   SummonerProfile, 
+  LcuStatus,
   MatchHistoryItem, 
   MatchDetailFull, 
   AutomationConfig,
@@ -118,6 +119,20 @@ export const emptySummonerProfile: SummonerProfile = {
   is_connected: false,
   message: '客户端未连接'
 };
+
+const emptyLcuStatus: LcuStatus = {
+  is_connected: false,
+  gameflow_phase: 'None',
+  puuid: '',
+  game_name: '',
+  tag_line: '',
+  profile_icon_id: 0,
+  summoner_level: 0
+};
+
+export async function getLcuStatus(): Promise<LcuStatus> {
+  return safeInvoke<LcuStatus>('get_lcu_status', undefined, emptyLcuStatus);
+}
 
 export async function getSummonerProfile(puuid?: string): Promise<SummonerProfile> {
   return safeInvoke<SummonerProfile>('get_summoner_profile', { puuid }, emptySummonerProfile);
