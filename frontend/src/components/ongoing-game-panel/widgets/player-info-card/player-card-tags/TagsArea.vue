@@ -1,6 +1,6 @@
 <template>
   <div class="mb-1.5 flex flex-wrap gap-1 select-none items-center min-h-[22px]">
-    <template v-for="tag in tags" :key="tag.id">
+    <template v-for="tag in tags" :key="`${tag.id}-${tag.label}`">
       <NPopover
         v-if="hasPopover(tag)"
         :delay="50"
@@ -151,7 +151,13 @@ const tags = computed<EvaluatedTag[]>(() => {
   if (props.player.badges && props.player.badges.length > 0) {
     for (const badge of props.player.badges) {
       const cleanBadge = cleanTagLabel(badge.label)
-      if (!result.some((r) => cleanTagLabel(r.label).includes(cleanBadge) || cleanBadge.includes(cleanTagLabel(r.label)))) {
+      const isDuplicate = result.some((r) => {
+        if (r.id === badge.id) return true
+        if (r.id === 'tagged' || badge.id === 'tagged') return false
+        const cleanR = cleanTagLabel(r.label)
+        return cleanR === cleanBadge
+      })
+      if (!isDuplicate) {
         result.push({
           id: badge.id,
           label: badge.label,
@@ -187,12 +193,12 @@ const tags = computed<EvaluatedTag[]>(() => {
     return true
   })
 
-  // Deduplicate tags by cleaned label
-  const seenLabels = new Set<string>()
+  // Deduplicate tags: combine tag.id with cleanTagLabel to avoid collisions between distinct categories (e.g. custom note vs premade team)
+  const seenKeys = new Set<string>()
   filtered = filtered.filter((t) => {
-    const key = cleanTagLabel(t.label)
-    if (seenLabels.has(key)) return false
-    seenLabels.add(key)
+    const key = `${t.id}-${cleanTagLabel(t.label)}`
+    if (seenKeys.has(key)) return false
+    seenKeys.add(key)
     return true
   })
 

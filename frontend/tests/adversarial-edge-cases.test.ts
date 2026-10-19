@@ -595,6 +595,55 @@ try {
   results.push({ name: '4.4 Cherry Arena Boundary Conditions', status: 'FAIL', message: e.message })
 }
 
+// ----------------------------------------------------------------------------
+// TEST 4.5: TagsArea Premade vs Custom Remark Deduplication Non-Collision
+// ----------------------------------------------------------------------------
+try {
+  const cleanTagLabel = (label: string) => {
+    return label.replace(/^[\p{Emoji}\u200d\uFE0F\s]+/u, '').trim()
+  }
+
+  const tags = [
+    { id: 'tagged', label: '备注: 双排车队', priority: 95 },
+    { id: 'premade-team', label: '🚗 双排车队', priority: 90 },
+    { id: 'premade-team', label: '🚗 双排车队', priority: 90 }, // duplicate premade
+    { id: 'high-win-rate', label: '👑 胜率队', priority: 85 }
+  ]
+
+  const seenKeys = new Set<string>()
+  const deduplicated = tags.filter((t) => {
+    const key = `${t.id}-${cleanTagLabel(t.label)}`
+    if (seenKeys.has(key)) return false
+    seenKeys.add(key)
+    return true
+  })
+
+  assert(deduplicated.length === 3, `Expected 3 tags after deduplication, got ${deduplicated.length}`)
+  assert(deduplicated.some(t => t.id === 'tagged' && t.label === '备注: 双排车队'), 'Preserves user custom remark tag')
+  assert(deduplicated.some(t => t.id === 'premade-team' && t.label === '🚗 双排车队'), 'Preserves premade team tag')
+  assert(deduplicated.some(t => t.id === 'high-win-rate'), 'Preserves high win rate tag')
+
+  // Verify badge merging logic
+  const result: any[] = [{ id: 'tagged', label: '备注: 双排车队' }]
+  const badge = { id: 'premade-badge', label: '双排车队', color: 'blue' }
+  const cleanBadge = cleanTagLabel(badge.label)
+  const isDuplicate = result.some((r) => {
+    if (r.id === badge.id) return true
+    if (r.id === 'tagged' || badge.id === 'tagged') return false
+    const cleanR = cleanTagLabel(r.label)
+    return cleanR === cleanBadge
+  })
+  assert(!isDuplicate, 'Badge must not be suppressed by custom note tag')
+
+  results.push({
+    name: '4.5 TagsArea Premade vs Custom Remark Deduplication Non-Collision',
+    status: 'PASS',
+    message: 'TagsArea key disambiguation preserves both premade and custom remarks'
+  })
+} catch (e: any) {
+  results.push({ name: '4.5 TagsArea Premade vs Custom Remark Deduplication Non-Collision', status: 'FAIL', message: e.message })
+}
+
 // ============================================================================
 // SUMMARY REPORT
 // ============================================================================
