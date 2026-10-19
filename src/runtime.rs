@@ -259,9 +259,6 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
             if phase == "ChampSelect" {
                 let session = lcu_bg.get_champ_select_session().await;
                 if !session.is_null() {
-                    let mut d = draft_bg.write().await;
-                    d.parse_session_with_db_and_opgg(&session, Some(&db_bg), Some(&opgg_bg));
-
                     // Check ARAM mode vs Summoner's Rift
                     let is_aram = session.get("benchEnabled").and_then(|v| v.as_bool()).unwrap_or(false)
                         || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
@@ -354,11 +351,10 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                                 }
                             }
                         }
-                    } else if !d.state.my_team.is_empty() {
+                    } else if my_team.map_or(false, |t| !t.is_empty()) {
                         if bench_bg.is_showing.load(Ordering::SeqCst) {
                             bench_bg.stop();
                         }
-                        drop(d);
                         crate::overlay::ranked_overlay::update_ranked_draft_overlay(
                             &session,
                             &draft_bg,
@@ -370,8 +366,6 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                             &mut last_draft_sig,
                             &mut cached_ranked_data,
                         ).await;
-                    } else {
-                        drop(d);
                     }
 
                     // Auto apply runes & summoner spells for locked champion
