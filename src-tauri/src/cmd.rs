@@ -701,37 +701,107 @@ pub async fn get_raw_match_history(
 
     let b_idx = beg_index.unwrap_or(0);
     let e_idx = end_index.unwrap_or_else(|| b_idx.saturating_add(19)).max(b_idx);
-    let e_idx = e_idx.min(b_idx.saturating_add(199));
+    let needed_count = e_idx.saturating_sub(b_idx).saturating_add(1).clamp(1, 100);
 
-    let mut raw_history = match state.lcu.get_raw_match_history(&target_puuid, b_idx, e_idx).await {
-        Some(hist) => hist,
-        None => {
-            return Err("无法从客户端获取原始战绩数据".to_string());
-        }
-    };
-
-    // If queue_id filter is requested (and > 0), filter the games array in place
-    if let Some(qid) = queue_id {
-        if qid > 0 {
-            let filter_fn = |arr: &mut Vec<Value>| {
-                arr.retain(|game| {
-                    game.get("queueId").and_then(|q| q.as_i64()).map(|q| q == qid as i64).unwrap_or(false)
-                });
-            };
-
-            if let Some(g_val) = raw_history.get_mut("games") {
-                if let Some(arr) = g_val.as_array_mut() {
-                    filter_fn(arr);
-                } else if let Some(arr) = g_val.get_mut("games").and_then(|g| g.as_array_mut()) {
-                    filter_fn(arr);
-                }
-            } else if let Some(arr) = raw_history.as_array_mut() {
-                filter_fn(arr);
+    let qid = queue_id.unwrap_or(0);
+    if qid <= 0 {
+        let e_idx = e_idx.min(b_idx.saturating_add(199));
+        let raw_history = match state.lcu.get_raw_match_history(&target_puuid, b_idx, e_idx).await {
+            Some(hist) => hist,
+            None => {
+                return Err("无法从客户端获取原始战绩数据".to_string());
             }
-        }
+        };
+        return Ok(raw_history);
     }
 
-    Ok(raw_history)
+    // Queue filtering requested (e.g. 420 for ranked solo, 450 for ARAM)
+    // Scan LCU history in chunks to collect enough games matching the requested queue
+    let target_total = b_idx.saturating_add(needed_count);
+    let mut matching_games: Vec<Value> = Vec::new();
+    let mut base_template: Option<Value> = None;
+    let mut lcu_cursor = 0usize;
+    let chunk_size = 60usize;
+    let max_lcu_scan = 300usize;
+
+    while matching_games.len() < target_total && lcu_cursor < max_lcu_scan {
+        let lcu_end = lcu_cursor.saturating_add(chunk_size).saturating_sub(1);
+        let batch_opt = state.lcu.get_raw_match_history(&target_puuid, lcu_cursor, lcu_end).await;
+        let batch = match batch_opt {
+            Some(b) => b,
+            None => break,
+        };
+
+        if base_template.is_none() {
+            base_template = Some(batch.clone());
+        }
+
+        let empty_arr = Vec::new();
+        let games_slice = batch
+            .get("games")
+            .and_then(|g| {
+                if let Some(arr) = g.as_array() {
+                    Some(arr)
+                } else {
+                    g.get("games").and_then(|v| v.as_array())
+                }
+            })
+            .or_else(|| batch.get("matches").and_then(|m| m.as_array()))
+            .or_else(|| batch.as_array())
+            .unwrap_or(&empty_arr);
+
+        let batch_count = games_slice.len();
+        if batch_count == 0 {
+            break;
+        }
+
+        for game in games_slice {
+            let game_qid = game.get("queueId").and_then(|q| q.as_i64()).unwrap_or(0);
+            if game_qid == qid as i64 {
+                matching_games.push(game.clone());
+            }
+        }
+
+        if batch_count < chunk_size {
+            break;
+        }
+
+        lcu_cursor = lcu_cursor.saturating_add(chunk_size);
+    }
+
+    if base_template.is_none() {
+        return Err("无法从客户端获取原始战绩数据".to_string());
+    }
+
+    let page_games: Vec<Value> = matching_games.into_iter().skip(b_idx).take(needed_count).collect();
+    let page_len = page_games.len();
+
+    let mut response = base_template.unwrap_or_else(|| json!({
+        "accountId": 0,
+        "games": {
+            "games": []
+        }
+    }));
+
+    if let Some(g_val) = response.get_mut("games") {
+        if let Some(arr) = g_val.as_array_mut() {
+            *arr = page_games;
+        } else if let Some(inner) = g_val.get_mut("games").and_then(|g| g.as_array_mut()) {
+            *inner = page_games;
+        } else {
+            *g_val = json!({
+                "games": page_games,
+                "gameCount": page_len
+            });
+        }
+    } else {
+        response["games"] = json!({
+            "games": page_games,
+            "gameCount": page_len
+        });
+    }
+
+    Ok(response)
 }
 
 #[tauri::command]
