@@ -644,6 +644,51 @@ try {
   results.push({ name: '4.5 TagsArea Premade vs Custom Remark Deduplication Non-Collision', status: 'FAIL', message: e.message })
 }
 
+// ----------------------------------------------------------------------------
+// TEST 4.6: PlayerAdapter Percentages & Cumulative KDA Consistency
+// ----------------------------------------------------------------------------
+try {
+  const { adaptPlayerCardToAggregatedAnalysis } = await import('../src/components/ongoing-game-panel/utils/player-adapter')
+  const testPlayer: any = {
+    puuid: 'p-test-kda-scale',
+    game_name: 'TestPlayer',
+    tag_line: 'CN',
+    matches: [
+      { champion_id: 1, win: true, kills: 10, deaths: 2, assists: 8, damage_share_pct: 35, kp_pct: 70, cs_per_min: 8.5 },
+      { champion_id: 1, win: false, kills: 6, deaths: 4, assists: 4, damage_share_pct: 25, kp_pct: 50, cs_per_min: 7.0 }
+    ]
+  }
+
+  const analysis = adaptPlayerCardToAggregatedAnalysis(testPlayer)
+
+  // Verify cumulative kills in overall summary
+  assert(analysis.summary.kills === 16, `Expected total kills 16, got ${analysis.summary.kills}`)
+  assert(analysis.summary.deaths === 6, `Expected total deaths 6, got ${analysis.summary.deaths}`)
+  assert(analysis.summary.assists === 12, `Expected total assists 12, got ${analysis.summary.assists}`)
+  const avgKill = analysis.summary.kills / analysis.count
+  assert(avgKill === 8, `Expected per-game average kills 8, got ${avgKill}`)
+
+  // Verify normalized percentage [0, 1]
+  assert(analysis.summary.avgChampionDamagePercentageOfTeam <= 1.0, `avgChampionDamagePercentageOfTeam should be in [0, 1], got ${analysis.summary.avgChampionDamagePercentageOfTeam}`)
+  assert(Math.abs(analysis.summary.avgChampionDamagePercentageOfTeam - 0.30) < 0.001, `Expected 0.30, got ${analysis.summary.avgChampionDamagePercentageOfTeam}`)
+  assert(analysis.summary.avgKillParticipation <= 1.0, `avgKillParticipation should be in [0, 1], got ${analysis.summary.avgKillParticipation}`)
+  assert(Math.abs(analysis.summary.avgKillParticipation - 0.60) < 0.001, `Expected 0.60, got ${analysis.summary.avgKillParticipation}`)
+
+  // Verify champion summary
+  const champ1 = analysis.champions['1']
+  assert(champ1 !== undefined, 'Champion 1 should be aggregated')
+  assert(champ1.summary.kills === 16, `Expected champion total kills 16, got ${champ1.summary.kills}`)
+  assert(champ1.summary.avgChampionDamagePercentageOfTeam <= 1.0, 'Champion damage share should be [0, 1]')
+
+  results.push({
+    name: '4.6 PlayerAdapter Percentages & Cumulative KDA Consistency',
+    status: 'PASS',
+    message: 'Summary kills are cumulative and percentages are normalized to [0, 1]'
+  })
+} catch (e: any) {
+  results.push({ name: '4.6 PlayerAdapter Percentages & Cumulative KDA Consistency', status: 'FAIL', message: e.message })
+}
+
 // ============================================================================
 // SUMMARY REPORT
 // ============================================================================

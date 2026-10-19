@@ -177,7 +177,10 @@ const props = defineProps<{
   onCollectMatches?: () => void
 }>()
 
-const formatPercent = (val: number) => `${Math.round((val || 0) * 100)}%`
+const formatPercent = (val: number) => {
+  const normalized = (val || 0) > 1.0 ? (val / 100.0) : (val || 0)
+  return `${Math.round(normalized * 100)}%`
+}
 
 const averageKdaLine = computed(() => {
   const count = Math.max(props.analysis?.winLoss?.all?.count ?? 1, 1)

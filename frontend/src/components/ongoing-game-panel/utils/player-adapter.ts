@@ -6,6 +6,11 @@ import type {
 } from '../../../shared/data-adapter/analysis/player'
 import type { EnhancedPlayerCard } from '../types'
 
+function normalizeRate(val: number | undefined | null): number {
+  if (val === undefined || val === null || !Number.isFinite(val)) return 0
+  return val > 1.0 ? val / 100.0 : Math.max(0, val)
+}
+
 export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard): AggregatedAnalysis {
   if (player.analysis) {
     return player.analysis
@@ -59,10 +64,10 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       const cWins = cMatches.filter((m) => m.win).length
       const cLosses = cCount - cWins
       const cWinRate = cCount > 0 ? cWins / cCount : 0
-      const cKills = cMatches.reduce((acc, m) => acc + (m.kills || 0), 0) / cCount
-      const cDeaths = cMatches.reduce((acc, m) => acc + (m.deaths || 0), 0) / cCount
-      const cAssists = cMatches.reduce((acc, m) => acc + (m.assists || 0), 0) / cCount
-      const cAvgKda = cDeaths === 0 ? (cKills + cAssists) : (cKills + cAssists) / cDeaths
+      const cTotalKills = cMatches.reduce((acc, m) => acc + (m.kills || 0), 0)
+      const cTotalDeaths = cMatches.reduce((acc, m) => acc + (m.deaths || 0), 0)
+      const cTotalAssists = cMatches.reduce((acc, m) => acc + (m.assists || 0), 0)
+      const cAvgKda = cTotalDeaths === 0 ? (cTotalKills + cTotalAssists) : (cTotalKills + cTotalAssists) / cTotalDeaths
       const cCsPerMin = cMatches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / cCount
 
       let cWinStreak = 0
@@ -77,11 +82,13 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         }
       }
 
-      const cDamageShare = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / cCount : 0
+      const cRawDamageShare = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / cCount : 0
+      const cDamageShare = normalizeRate(cRawDamageShare)
       const cDamage = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage || 0), 0) / cCount : 0
       const cGold = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.gold || 0), 0) / cCount : 0
       const cVision = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / cCount : 0
-      const cKp = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / cCount : 0
+      const cRawKp = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / cCount : 0
+      const cKp = normalizeRate(cRawKp)
       const cDamagePerMin = cCount > 0 ? cMatches.reduce((acc, m) => {
         const dur = (m.game_duration || 1800) / 60
         return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
@@ -99,9 +106,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
           avgGoldPercentageOfTeam: 0,
           avgKillParticipation: cKp,
           avgChampionDamagePerMinute: Math.round(cDamagePerMin),
-          kills: Math.round(cKills),
-          deaths: Math.round(cDeaths),
-          assists: Math.round(cAssists),
+          kills: cTotalKills,
+          deaths: cTotalDeaths,
+          assists: cTotalAssists,
           avgChampionDamageRatioToTeamMax: 0,
           avgChampionDamageRatioToMax: 0,
           avgDamageTakenRatioToTeamMax: 0,
@@ -153,17 +160,17 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
           TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0
         },
         akariScore: {
-          total: 0,
+          total: Math.min(17.0, Math.min(1.0, cAvgKda / 5.0) + Math.min(1.0, cWinRate) + (cDamageShare > 0 ? Math.min(3.0, (cDamageShare / 0.30) * 3.0) : 0) + (cCsPerMin > 0 ? Math.min(2.0, (cCsPerMin / 10.0) * 2.0) : 0) + (cGold > 0 ? Math.min(2.0, (cGold / 16000) * 2.0) : 0) + (cKp > 0 ? Math.min(2.0, cKp * 2.5) : 0) + (cVision > 0 ? Math.min(2.0, cVision / 35.0) : 0)),
           maxScore: 17.0,
           kdaScore: Math.min(1.0, cAvgKda / 5.0),
           winRateScore: Math.min(1.0, cWinRate),
-          dmgScore: 0,
+          dmgScore: cDamageShare > 0 ? Math.min(3.0, (cDamageShare / 0.30) * 3.0) : 0,
           dmgTakenScore: 0,
           healingScore: 0,
-          csScore: 0,
-          goldScore: 0,
-          participationScore: 0,
-          visionScore: 0,
+          csScore: cCsPerMin > 0 ? Math.min(2.0, (cCsPerMin / 10.0) * 2.0) : 0,
+          goldScore: cGold > 0 ? Math.min(2.0, (cGold / 16000) * 2.0) : 0,
+          participationScore: cKp > 0 ? Math.min(2.0, cKp * 2.5) : 0,
+          visionScore: cVision > 0 ? Math.min(2.0, cVision / 35.0) : 0,
           outstanding: null,
           extraordinary: null
         },
@@ -171,11 +178,13 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       }
     }
 
-    const avgDamageShare = count > 0 ? matches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / count : 0
+    const rawAvgDamageShare = count > 0 ? matches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / count : 0
+    const avgDamageShare = normalizeRate(rawAvgDamageShare)
     const avgDamage = count > 0 ? matches.reduce((acc, m) => acc + (m.damage || 0), 0) / count : 0
     const avgGold = count > 0 ? matches.reduce((acc, m) => acc + (m.gold || 0), 0) / count : 0
     const avgVision = count > 0 ? matches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / count : 0
-    const avgKp = count > 0 ? matches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / count : 0
+    const rawAvgKp = count > 0 ? matches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / count : 0
+    const avgKp = normalizeRate(rawAvgKp)
     const avgDamagePerMinute = count > 0 ? matches.reduce((acc, m) => {
       const dur = (m.game_duration || 1800) / 60
       return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
@@ -183,11 +192,11 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
 
     const kdaScore = Math.min(1.0, avgKda / 5.0)
     const winRateScore = Math.min(1.0, winRate)
-    const dmgScore = avgDamageShare > 0 ? Math.min(3.0, (avgDamageShare / 30.0) * 3.0) : Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
+    const dmgScore = avgDamageShare > 0 ? Math.min(3.0, (avgDamageShare / 0.30) * 3.0) : Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
     const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
     const csScore = avgCsPerMinute > 0 ? Math.min(2.0, (avgCsPerMinute / 10.0) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
     const goldScore = avgGold > 0 ? Math.min(2.0, (avgGold / 16000) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-    const participationScore = avgKp > 0 ? Math.min(2.0, (avgKp / 100.0) * 2.5) : Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
+    const participationScore = avgKp > 0 ? Math.min(2.0, avgKp * 2.5) : Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
     const visionScore = avgVision > 0 ? Math.min(2.0, avgVision / 35.0) : Math.min(2.0, (player.radar?.vision ?? 0) / 45)
     const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
     const isExtraordinary = akariTotal >= 13.5 && count >= 5
@@ -235,9 +244,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         avgDamageGoldEfficiency: avgGold > 0 ? Math.round((avgDamage / avgGold) * 100) / 100 : 0,
         avgKillParticipation: avgKp,
         avgKillDamageEfficiency: 1.0,
-        kills: Math.round(totalKills / count),
-        deaths: Math.round(totalDeaths / count),
-        assists: Math.round(totalAssists / count),
+        kills: totalKills,
+        deaths: totalDeaths,
+        assists: totalAssists,
         avgKda,
         kdaCv: 0,
         winRate,
@@ -548,9 +557,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         avgGoldPercentageOfTeam: 0,
         avgKillParticipation: 0,
         avgChampionDamagePerMinute: 0,
-        kills: Math.round(kills),
-        deaths: Math.round(deaths),
-        assists: Math.round(assists),
+        kills: Math.round(kills * cCount),
+        deaths: Math.round(deaths * cCount),
+        assists: Math.round(assists * cCount),
         avgChampionDamageRatioToTeamMax: 0,
         avgChampionDamageRatioToMax: 0,
         avgDamageTakenRatioToTeamMax: 0,
@@ -634,9 +643,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       avgDamageGoldEfficiency: 0,
       avgKillParticipation: 0,
       avgKillDamageEfficiency: 1.0,
-      kills: Math.round(kills),
-      deaths: Math.round(deaths),
-      assists: Math.round(assists),
+      kills: Math.round(kills * count),
+      deaths: Math.round(deaths * count),
+      assists: Math.round(assists * count),
       avgKda: kdaRatio,
       kdaCv: 0,
       winRate,
