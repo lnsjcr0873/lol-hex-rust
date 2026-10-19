@@ -596,8 +596,9 @@ async function enrichCurrentGames(games: Game[], targetFetchId: number) {
       if (!g) break
 
       try {
-        const fullDetail = await getRawMatchDetail(g.gameId)
+        const res = await getRawMatchDetail(g.gameId)
         if (targetFetchId !== currentFetchId.value) return
+        const fullDetail = res?.raw_game || res
         if (fullDetail && Array.isArray(fullDetail.participants) && fullDetail.participants.length > 1) {
           const next = new Map(rawSummaries.value)
           next.set(g.gameId, {

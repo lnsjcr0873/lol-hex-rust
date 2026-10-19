@@ -558,7 +558,8 @@ async fn get_raw_match_detail(
 
     if gid == 0 || game_id.starts_with('-') || gid == 99991234 || gid == 100200300 {
         let mock = build_mock_match_detail(gid as i64, &state.db);
-        return Json(mock);
+        let raw = mock.get("raw_game").cloned().unwrap_or(mock);
+        return Json(raw);
     }
 
     Json(json!({ "error": "无法获取原始详情数据" }))

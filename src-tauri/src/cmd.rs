@@ -843,7 +843,8 @@ pub async fn get_raw_match_detail(
 
     // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0, 99991234, 100200300)
     if game_id == 99991234 || game_id == 100200300 {
-        return Ok(build_mock_match_detail(game_id as i64, &state.db));
+        let mock = build_mock_match_detail(game_id as i64, &state.db);
+        return Ok(mock.get("raw_game").cloned().unwrap_or(mock));
     }
 
     Err(format!("无法获取对局 {} 的原始详情数据", game_id))
