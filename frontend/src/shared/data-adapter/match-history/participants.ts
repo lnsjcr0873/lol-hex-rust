@@ -117,10 +117,19 @@ export type MatchParticipant = {
 }
 
 // 以 SGP 的格式为参照，将 LCU 数据映射为抽象格式
-function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
+export function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
   const stats = participant?.stats || ({} as any)
+  const rawStatPerks = (participant as any).perks?.statPerks
+  const offense = rawStatPerks?.offense ?? stats.statPerk0 ?? 0
+  const flex = rawStatPerks?.flex ?? stats.statPerk1 ?? 0
+  const defense = rawStatPerks?.defense ?? stats.statPerk2 ?? 0
+
+  const statPerks = (offense > 0 || flex > 0 || defense > 0)
+    ? { offense, flex, defense }
+    : null
+
   return {
-    statPerks: null, // lcu has no stat perks record
+    statPerks,
     styles: [
       {
         description: 'primaryStyle',

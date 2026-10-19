@@ -18,7 +18,7 @@ import {
   type LcuGameSummary,
   type LcuGameTimeline
 } from '../src/shared/data-adapter'
-import { resolveParticipantPosition } from '../src/shared/data-adapter/match-history/participants'
+import { resolveParticipantPosition, mapLcuDataToPerks } from '../src/shared/data-adapter/match-history/participants'
 import { computeAggregatedPositions } from '../src/shared/data-adapter/analysis/player/aggregate/positions'
 
 describe('Milestone 2 (R2): Lossless Frontend Data Pipeline & Direct Contract Alignment', () => {
@@ -323,6 +323,29 @@ describe('Milestone 2 (R2): Lossless Frontend Data Pipeline & Direct Contract Al
       expect(aggregated!.MIDDLE).toBe(0)
       expect(aggregated!.JUNGLE).toBe(0)
       expect(Number.isNaN((aggregated as any).NONE)).toBe(false)
+    })
+
+    it('extracts statPerks shards from LCU participant stats', () => {
+      const mockParticipantWithStats: any = {
+        stats: {
+          perk0: 8112,
+          perkPrimaryStyle: 8100,
+          perkSubStyle: 8000,
+          statPerk0: 5008, // Adaptive force
+          statPerk1: 5008, // Adaptive force
+          statPerk2: 5001  // Health
+        }
+      }
+      const perks = mapLcuDataToPerks(mockParticipantWithStats)
+      expect(perks.statPerks).not.toBeNull()
+      expect(perks.statPerks!.offense).toBe(5008)
+      expect(perks.statPerks!.flex).toBe(5008)
+      expect(perks.statPerks!.defense).toBe(5001)
+
+      const mockParticipantEmpty: any = {
+        stats: {}
+      }
+      expect(mapLcuDataToPerks(mockParticipantEmpty).statPerks).toBeNull()
     })
   })
 })
