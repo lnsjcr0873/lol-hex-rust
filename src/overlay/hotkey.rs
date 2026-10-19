@@ -10,6 +10,17 @@ static SHARED_LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atom
 static IS_KEY_DOWN_LEFT: AtomicBool = AtomicBool::new(false);
 static IS_KEY_DOWN_RIGHT: AtomicBool = AtomicBool::new(false);
 
+#[cfg(windows)]
+fn is_allowed_foreground_for_hotkey() -> bool {
+    super::window_tracker::WindowTracker::is_game_active()
+        || super::window_tracker::WindowTracker::is_league_active()
+}
+
+#[cfg(not(windows))]
+fn is_allowed_foreground_for_hotkey() -> bool {
+    false
+}
+
 pub struct HotkeyManager {
     running: Arc<AtomicBool>,
 }
@@ -115,6 +126,11 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
         };
         if hook_active {
             std::thread::sleep(std::time::Duration::from_millis(200));
+            continue;
+        }
+
+        if !is_allowed_foreground_for_hotkey() {
+            std::thread::sleep(std::time::Duration::from_millis(150));
             continue;
         }
 
@@ -301,6 +317,11 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
             }
         } else if wparam == 0x0100 || wparam == 0x0104 {
             // WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
+            // ONLY trigger when LoL or HexBrain is active in the foreground
+            if (is_left_bracket || is_right_bracket) && !is_allowed_foreground_for_hotkey() {
+                return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+            }
+
             // ONLY trigger on the rising edge (false -> true). Ignore all Windows auto-repeat keydown events!
             if is_left_bracket {
                 if !IS_KEY_DOWN_LEFT.swap(true, Ordering::SeqCst) {

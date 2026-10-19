@@ -133,15 +133,22 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                         } else if stats.is_in_game {
                             info!("Hotkey '[' pressed: Non-hextech mode active, skipping Hextech scan");
                             TextToSpeech::speak("当前对局非海克斯强化模式，海克斯推荐仅在斗魂竞技场或海克斯大乱斗生效");
-                        } else {
-                            info!("Hotkey '[' pressed outside match, attempting scan fallback");
+                        } else if crate::overlay::window_tracker::WindowTracker::is_game_active() {
+                            info!("Hotkey '[' pressed in game window, attempting scan fallback");
                             ingame_fallback.trigger_scan_with_db(&db_fallback);
                             TextToSpeech::speak("正在尝试感知当前卡片画面");
+                        } else {
+                            info!("Hotkey '[' pressed outside active match window, skipping OCR and announcement");
                         }
                     });
                 }
             },
             move || {
+                if !crate::overlay::window_tracker::WindowTracker::is_game_active()
+                    && !crate::overlay::window_tracker::WindowTracker::is_league_active() {
+                    info!("Hotkey ']' pressed outside League window, ignoring");
+                    return;
+                }
                 info!("Hotkey ']' pressed: Triggering Item Recommendation HUD");
                 item_clone.trigger_manual_scan();
             },
