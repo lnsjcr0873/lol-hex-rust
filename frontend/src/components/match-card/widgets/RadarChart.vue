@@ -26,6 +26,7 @@ const props = withDefaults(
     size?: number
     standaloneStats?: {
       output?: number
+      damage?: number
       kda?: number
       join_rate?: number
       survival?: number
@@ -58,12 +59,12 @@ const chartData = computed(() => {
   if (props.standaloneStats) {
     const s = props.standaloneStats
     return {
-      labels: ['输出', '承伤', '经济', '补刀', 'KDA', '参团'],
+      labels: ['输出', '承伤', '经济', '视野', 'KDA', '参团'],
       datasets: [
         {
           label: '个人表现',
           data: [
-            safePercent(s.output ?? 0, 100),
+            safePercent(s.output ?? s.damage ?? 0, 100),
             safePercent(s.survival ?? 0, 100),
             safePercent(s.gold ?? 0, 100),
             safePercent(s.vision ?? 0, 100),

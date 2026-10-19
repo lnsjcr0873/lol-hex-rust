@@ -9,6 +9,7 @@ withDefaults(
   defineProps<{
     stats?: {
       output?: number
+      damage?: number
       kda?: number
       join_rate?: number
       survival?: number

@@ -273,7 +273,7 @@ const profile = ref<SummonerProfile>({
   wins_flex: 0,
   losses_flex: 0,
   win_rate_flex: 0,
-  recent_radar: { damage: 0, kda: 0, join_rate: 0, survival: 0, gold: 0, vision: 0 },
+  recent_radar: { output: 0, damage: 0, kda: 0, join_rate: 0, survival: 0, gold: 0, vision: 0 },
   recent_summary: {
     total_games: 0,
     win_rate: 0,
