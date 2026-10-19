@@ -1,6 +1,6 @@
 <template>
   <div class="w-full h-full flex flex-col overflow-hidden bg-[#090d1a]">
-    <PlayerTabs ref="playerTabsRef">
+    <PlayerTabs :is-active="isActive" ref="playerTabsRef">
       <template #header-actions>
         <!-- Demo Mode Toggle -->
         <button
@@ -34,6 +34,12 @@ import { usePlayerTabsStore } from '../stores/player-tabs'
 import { getMockSummonerProfile, getRawMatchTimeline } from '../api/tauri'
 import type { LcuOrSgpGameSummary, LcuOrSgpGameDetails } from '@shared/data-adapter/wrapper'
 import type { Game, GameTimeline } from '@shared/types/league-client/match-history'
+
+const props = withDefaults(defineProps<{
+  isActive?: boolean
+}>(), {
+  isActive: true
+})
 
 const playerTabsRef = ref<InstanceType<typeof PlayerTabs> | null>(null)
 const playerTabsStore = usePlayerTabsStore()

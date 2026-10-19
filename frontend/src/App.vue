@@ -16,8 +16,8 @@
             />
 
             <main class="flex-1 flex flex-col overflow-hidden relative">
-              <OngoingMatch v-show="currentTab === 'ongoing'" ref="ongoingRef" @navigate-to-summoner="handleNavigateToSummoner" />
-              <MatchHistory v-show="currentTab === 'history'" ref="historyRef" />
+              <OngoingMatch v-show="currentTab === 'ongoing'" :is-active="currentTab === 'ongoing'" ref="ongoingRef" @navigate-to-summoner="handleNavigateToSummoner" />
+              <MatchHistory v-show="currentTab === 'history'" :is-active="currentTab === 'history'" ref="historyRef" />
               <Automation v-show="currentTab === 'automation'" />
               <Settings v-show="currentTab === 'settings'" />
             </main>

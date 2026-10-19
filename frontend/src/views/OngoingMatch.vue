@@ -208,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   MessageSquare,
   Gamepad2,
@@ -225,6 +225,12 @@ import OngoingGamePanel from '../components/ongoing-game-panel/OngoingGamePanel.
 import PlayerDetailDrawer from '../components/PlayerDetailDrawer.vue'
 import ConnectedMatchPreviewer from '../components/match-preview/ConnectedMatchPreviewer.vue'
 import type { EnhancedPlayerCard } from '../components/ongoing-game-panel/types'
+
+const props = withDefaults(defineProps<{
+  isActive?: boolean
+}>(), {
+  isActive: true
+})
 
 function getPreferredBroadcastFormat(): 'concise' | 'detailed' {
   try {
@@ -363,13 +369,10 @@ function handlePreferencesUpdated() {
 
 let isPolling = false
 
-onMounted(() => {
-  refreshData()
-  if (typeof window !== 'undefined') {
-    window.addEventListener('hexbrain-preferences-updated', handlePreferencesUpdated)
-    window.addEventListener('storage', handlePreferencesUpdated)
-  }
+function startPolling() {
+  if (pollTimer) return
   pollTimer = window.setInterval(async () => {
+    if (!props.isActive) return
     preferredBroadcastFormat.value = getPreferredBroadcastFormat()
     if (!isDemoMode.value && !isPolling) {
       isPolling = true
@@ -385,6 +388,33 @@ onMounted(() => {
       }
     }
   }, 2500)
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+watch(() => props.isActive, (active) => {
+  if (active) {
+    refreshData()
+    startPolling()
+  } else {
+    stopPolling()
+  }
+})
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('hexbrain-preferences-updated', handlePreferencesUpdated)
+    window.addEventListener('storage', handlePreferencesUpdated)
+  }
+  if (props.isActive) {
+    refreshData()
+    startPolling()
+  }
 })
 
 onUnmounted(() => {
@@ -392,9 +422,7 @@ onUnmounted(() => {
     window.removeEventListener('hexbrain-preferences-updated', handlePreferencesUpdated)
     window.removeEventListener('storage', handlePreferencesUpdated)
   }
-  if (pollTimer) {
-    clearInterval(pollTimer)
-  }
+  stopPolling()
   if (toastTimer) {
     clearTimeout(toastTimer)
   }

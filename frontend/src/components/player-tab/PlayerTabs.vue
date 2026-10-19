@@ -53,10 +53,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { usePlayerTabsStore, type PlayerTabItem } from '../../stores/player-tabs'
 import PlayerTabStrip from './widgets/PlayerTabStrip.vue'
 import PlayerTab from './PlayerTab.vue'
+
+const props = withDefaults(defineProps<{
+  isActive?: boolean
+}>(), {
+  isActive: true
+})
 import StartupPane from './StartupPane.vue'
 import ConnectedMatchPreviewer from '../match-preview/ConnectedMatchPreviewer.vue'
 import { getSummonerProfile, getLcuStatus } from '../../api/tauri'
@@ -192,18 +198,39 @@ async function initSelfProfile(forceOpen = false) {
   }
 }
 
-onMounted(() => {
-  initSelfProfile()
+function startPolling() {
+  if (pollTimer) return
   pollTimer = setInterval(() => {
+    if (!props.isActive) return
     initSelfProfile()
   }, 2500)
-})
+}
 
-onUnmounted(() => {
+function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
   }
+}
+
+watch(() => props.isActive, (active) => {
+  if (active) {
+    initSelfProfile()
+    startPolling()
+  } else {
+    stopPolling()
+  }
+})
+
+onMounted(() => {
+  if (props.isActive) {
+    initSelfProfile()
+    startPolling()
+  }
+})
+
+onUnmounted(() => {
+  stopPolling()
 })
 
 defineExpose({
