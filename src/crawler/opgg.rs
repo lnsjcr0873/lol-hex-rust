@@ -502,10 +502,28 @@ impl OpggClient {
 
                     if let Some(counters_data) = raw.get("data").and_then(|d| d.get("counters")).and_then(|c| c.as_array()) {
                         for c in counters_data {
-                            if let Some(opp_id) = c.get("opponent_champion_id").and_then(|v| v.as_i64()) {
+                            let opp_id_opt = c.get("opponent_champion_id")
+                                .or_else(|| c.get("champion_id"))
+                                .or_else(|| c.get("opponentId"))
+                                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())));
+
+                            if let Some(opp_id) = opp_id_opt {
                                 let opp_id_str = opp_id.to_string();
-                                let wr = c.get("win").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.5);
-                                let games = c.get("play").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let games = c.get("play")
+                                    .or_else(|| c.get("games"))
+                                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())))
+                                    .unwrap_or(0);
+                                let mut wr = c.get("win")
+                                    .or_else(|| c.get("win_rate"))
+                                    .or_else(|| c.get("winRate"))
+                                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+                                    .filter(|v| v.is_finite())
+                                    .unwrap_or(0.5);
+                                if wr > 1.0 && games > 0 {
+                                    wr = (wr / games as f64).clamp(0.0, 1.0);
+                                } else if wr > 1.0 {
+                                    wr = (wr / 100.0).clamp(0.0, 1.0);
+                                }
                                 counter_map[opp_id_str.clone()] = json!({
                                     "opponentId": opp_id,
                                     "opponentIdStr": opp_id_str.clone(),
