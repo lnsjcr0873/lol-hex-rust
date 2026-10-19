@@ -277,10 +277,12 @@ impl LcuClient {
         self.cache_notify.notify_waiters();
     }
 
+    pub const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(6);
+
     pub fn is_negative_cached_detail(&self, game_id: u64) -> bool {
         if let Ok(mut map) = self.negative_match_details.lock() {
             if let Some(timestamp) = map.get(&game_id) {
-                if timestamp.elapsed() < std::time::Duration::from_secs(30) {
+                if timestamp.elapsed() < Self::NEGATIVE_CACHE_TTL {
                     return true;
                 } else {
                     map.remove(&game_id);
@@ -311,7 +313,7 @@ impl LcuClient {
     pub fn is_negative_cached_timeline(&self, game_id: u64) -> bool {
         if let Ok(mut map) = self.negative_match_timelines.lock() {
             if let Some(timestamp) = map.get(&game_id) {
-                if timestamp.elapsed() < std::time::Duration::from_secs(30) {
+                if timestamp.elapsed() < Self::NEGATIVE_CACHE_TTL {
                     return true;
                 } else {
                     map.remove(&game_id);
