@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { isUnrankedTier, formatTierName, isMasterPlus } from '../src/components/player-tab/widgets/RankedPane.vue'
 import { QUEUE_NAME_MAP } from '../src/components/player-tab/SummaryPane.vue'
+import { createSynthesizedJungleAnalysis } from '../src/components/ongoing-game-panel/utils/player-adapter'
 
 describe('RankedPane Unranked & Tier Formatting Tests', () => {
   it('correctly identifies unranked tiers without false negatives', () => {
@@ -180,5 +181,40 @@ describe('SummaryPane Queue Mapping & Dynamic Computations', () => {
     expect(getDrawerSampleCount({ recent_matches: ['win', 'loss', 'win'] })).toBe(3)
     expect(getDrawerSampleCount({})).toBe(20)
     expect(getDrawerSampleCount(null)).toBe(20)
+  })
+
+  it('correctly creates synthesized jungle analysis for junglers and returns null for non-junglers', () => {
+    // Non-jungler without Smite/jungle matches
+    const adcPlayer: any = {
+      assigned_position: 'BOTTOM',
+      spell1_id: 4, // Flash
+      spell2_id: 7, // Heal
+      matches: [{ assigned_position: 'BOTTOM', win: true }]
+    }
+    expect(createSynthesizedJungleAnalysis(adcPlayer)).toBeNull()
+
+    // Jungler with assigned_position JUNGLE
+    const junglePlayer: any = {
+      assigned_position: 'JUNGLE',
+      spell1_id: 11, // Smite
+      spell2_id: 4,  // Flash
+      champion_id: 64, // Lee Sin
+      cell_id: 1,
+      puuid: 'test-jungle-puuid',
+      matches: [
+        { assigned_position: 'JUNGLE', win: true, kills: 6, deaths: 2, assists: 8, kp_pct: 0.65 },
+        { assigned_position: 'JUNGLE', win: false, kills: 3, deaths: 4, assists: 4, kp_pct: 0.50 }
+      ]
+    }
+    const analysis = createSynthesizedJungleAnalysis(junglePlayer)
+    expect(analysis).not.toBeNull()
+    expect(analysis!.gamesAnalyzed).toBeGreaterThanOrEqual(2)
+    expect(analysis!.avgTopGanks).toBeGreaterThan(0)
+    expect(analysis!.avgMidGanks).toBeGreaterThan(0)
+    expect(analysis!.avgBotGanks).toBeGreaterThan(0)
+    expect(analysis!.objectives.avgDragons).toBeGreaterThan(0)
+    expect(analysis!.firstClearCamp.blueGames).toBeGreaterThan(0)
+    expect(analysis!.minutePositions.length).toBeGreaterThan(0)
+    expect(analysis!.gankPositions.length).toBeGreaterThan(0)
   })
 })
