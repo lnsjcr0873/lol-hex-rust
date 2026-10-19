@@ -3077,9 +3077,12 @@ pub fn sanitize_for_gdi(text: &str) -> String {
     text.chars()
         .filter(|&c| {
             let u = c as u32;
-            // Remove Variation Selectors (U+FE00..=U+FE0F) and Zero Width Joiners (U+200B..=U+200D)
+            // Remove Variation Selectors (U+FE00..=U+FE0F, U+E0100..=U+E01EF) and Zero Width Joiners/characters (U+200B..=U+200F, U+FEFF)
             // which produce black box .notdef glyphs in GDI TextOutW
-            !(0xFE00..=0xFE0F).contains(&u) && !(0x200B..=0x200D).contains(&u)
+            !(0xFE00..=0xFE0F).contains(&u)
+                && !(0xE0100..=0xE01EF).contains(&u)
+                && !(0x200B..=0x200F).contains(&u)
+                && u != 0xFEFF
         })
         .collect()
 }
@@ -3312,6 +3315,16 @@ mod tests {
         assert_eq!(runs[0].text, "🛡");
         assert_eq!(runs[1].kind, FontKind::Text);
         assert_eq!(runs[1].text, " 我方战绩");
+    }
+
+    #[test]
+    fn test_sanitize_variation_selectors() {
+        // Emoji with variation selector-16 (U+FE0F) and ZWJ (U+200D)
+        let raw = "👑\u{FE0F} 绝活 / 🚗\u{FE0F} 双排车队\u{200D}";
+        let sanitized = sanitize_for_gdi(raw);
+        assert_eq!(sanitized, "👑 绝活 / 🚗 双排车队");
+        let runs = split_text_runs(raw);
+        assert!(!runs.iter().any(|r| r.text.contains('\u{FE0F}') || r.text.contains('\u{200D}')));
     }
 }
 
