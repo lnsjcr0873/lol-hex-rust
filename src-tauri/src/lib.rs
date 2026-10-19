@@ -9,6 +9,8 @@ use lol_hex_rust::engine::PlayerHistoryManager;
 use lol_hex_rust::lcu::LcuClient;
 use lol_hex_rust::runtime::{start_background_engine, BackgroundEngineOptions};
 
+use tauri::Manager;
+
 pub struct TauriAppState {
     pub lcu: Arc<LcuClient>,
     pub history: Arc<PlayerHistoryManager>,
@@ -61,11 +63,21 @@ pub fn run() {
             cmd::is_ongoing_overlay_visible
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "ongoing-overlay" {
-                    api.prevent_close();
-                    let _ = window.hide();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "ongoing-overlay" {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    } else if window.label() == "main" {
+                        window.app_handle().exit(0);
+                    }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    if window.label() == "main" {
+                        window.app_handle().exit(0);
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
