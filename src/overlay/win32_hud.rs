@@ -2043,8 +2043,45 @@ unsafe fn render_ranked_hud(
         let sy = r.height as f64 / 720.0;
         let top_h = (44.0 * sy) as i32;
         let lw = if left_collapsed { (24.0 * sx) as i32 } else { (168.0 * sx) as i32 };
-        let off_y = if r.y >= top_h { top_h } else { r.y.max(0) };
-        let off_x = if r.x >= lw { lw } else { 0 };
+
+        // In multi-monitor setups, HUD window origin (LAST_WIN_GEOM.0, LAST_WIN_GEOM.1) is placed at
+        // (r.x - actual_left_margin, r.y - actual_offset_y). Inside the HUD window DC, the exact client
+        // origin is always at (r.x - win_x, r.y - win_y).
+        let (off_x, off_y) = if let Ok(g) = LAST_WIN_GEOM.lock() {
+            if g.2 > 0 && g.3 > 0 {
+                ((r.x - g.0).max(0), (r.y - g.1).max(0))
+            } else {
+                use windows::Win32::Graphics::Gdi::{
+                    GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+                };
+                let client_r = windows::Win32::Foundation::RECT {
+                    left: r.x,
+                    top: r.y,
+                    right: r.x + r.width,
+                    bottom: r.y + r.height,
+                };
+                let hmon = MonitorFromRect(&client_r, MONITOR_DEFAULTTONEAREST);
+                let mut mi = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                let (mon_left, mon_top) = if GetMonitorInfoW(hmon, &mut mi).as_bool() {
+                    (mi.rcWork.left, mi.rcWork.top)
+                } else {
+                    (0, 0)
+                };
+                let left_avail = r.x - mon_left;
+                let top_avail = r.y - mon_top;
+                let ox = if left_avail >= lw { lw } else { left_avail.max(0) };
+                let oy = if top_avail >= top_h { top_h } else { top_avail.max(0) };
+                (ox, oy)
+            }
+        } else {
+            let ox = if r.x >= lw { lw } else { 0 };
+            let oy = if r.y >= top_h { top_h } else { r.y.max(0) };
+            (ox, oy)
+        };
+
         (off_x, off_y, r.width, r.height)
     } else {
         let lw = if left_collapsed { 24 } else { 168 };
