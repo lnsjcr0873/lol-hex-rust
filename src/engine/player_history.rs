@@ -3242,8 +3242,12 @@ impl PlayerHistoryManager {
                         _ => None,
                     }
                 });
-                let pos = auto_pos.unwrap_or_else(|| ORDERED_POSITIONS[idx % 5]);
-                let pos_idx = ORDERED_POSITIONS.iter().position(|&op| op == pos).unwrap_or(idx % 5);
+                let (pos, pos_cn) = if let Some(p) = auto_pos {
+                    let p_idx = ORDERED_POSITIONS.iter().position(|&op| op == p).unwrap_or(0);
+                    (p.to_string(), SHORT_POS_NAMES_CN[p_idx].to_string())
+                } else {
+                    ("NONE".to_string(), "对局".to_string())
+                };
 
                 let is_local = if let Some(ref lp) = local_puuid {
                     !puuid.is_empty() && puuid == *lp
@@ -3257,8 +3261,8 @@ impl PlayerHistoryManager {
                     puuid,
                     summoner_name,
                     champion_id: cid,
-                    position: pos.to_string(),
-                    position_cn: SHORT_POS_NAMES_CN[pos_idx].to_string(),
+                    position: pos,
+                    position_cn: pos_cn,
                     is_local_player: is_local,
                     profile: None,
                     team_id,
