@@ -56,10 +56,19 @@ impl BenchOverlay {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
         self.is_showing.store(false, Ordering::SeqCst);
+        if let Ok(mut gz) = super::win32_hud::GLOBAL_HOTZONES.write() {
+            gz.bench_champs.clear();
+        }
         GLOBAL_HUD.hide();
     }
 
     pub fn show_bench_heroes(&self, champions: Vec<BenchChampView>) {
+        if let Ok(cfg) = self.config.try_read() {
+            if !cfg.enabled {
+                self.stop();
+                return;
+            }
+        }
         if crate::vision::ScreenCapture::get_lol_game_rect().is_some() || !crate::vision::ScreenCapture::is_lol_client_active() {
             self.stop();
             return;

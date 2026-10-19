@@ -206,10 +206,14 @@ pub struct HudHotzones {
     pub item_algo_btns: Vec<((i32, i32, i32, i32), String)>,
     pub item_main_tabs: Vec<((i32, i32, i32, i32), String)>,
     pub item_subtabs: Vec<((i32, i32, i32, i32), String)>,
+    pub bench_champs: Vec<((i32, i32, i32, i32), i32)>,
 }
 
 impl HudHotzones {
     pub fn is_point_interactive(&self, px: i32, py: i32) -> bool {
+        for ((x1, y1, x2, y2), _) in &self.bench_champs {
+            if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 { return true; }
+        }
         if let Some((x1, y1, x2, y2)) = self.item_close_btn {
             if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
         }
@@ -314,6 +318,7 @@ lazy_static::lazy_static! {
     pub static ref ACTIVE_ALGORITHM: std::sync::RwLock<String> = std::sync::RwLock::new("SMART".to_string());
     pub static ref GLOBAL_ITEM_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::ItemOverlay>>> = std::sync::RwLock::new(None);
     pub static ref GLOBAL_DRAFT_MGR: std::sync::RwLock<Option<Arc<tokio::sync::RwLock<crate::engine::RankedDraftManager>>>> = std::sync::RwLock::new(None);
+    pub static ref GLOBAL_BENCH_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::BenchOverlay>>> = std::sync::RwLock::new(None);
     static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32, FontKind), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
@@ -690,6 +695,21 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
                 inter.inspect_scroll_offset = next;
                 repaint_needed = true;
             }
+            break;
+        }
+    }
+
+    // 13. Bench Champion click to swap
+    for ((x1, y1, x2, y2), champ_id) in &hotzones.bench_champs {
+        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            let cid = *champ_id;
+            crate::spawn_task(async move {
+                if let Ok(guard) = GLOBAL_LCU.read() {
+                    if let Some(ref lcu) = *guard {
+                        let _ = lcu.swap_bench_champion(&cid.to_string()).await;
+                    }
+                }
+            });
             break;
         }
     }
@@ -1317,7 +1337,21 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
         };
-        let is_interactive = matches!(&content_type, HudContent::Ranked(_) | HudContent::Item(_));
+        let is_interactive = match &content_type {
+            HudContent::Ranked(_) | HudContent::Item(_) => true,
+            HudContent::Bench(_) => {
+                if let Ok(guard) = GLOBAL_BENCH_OVERLAY.read() {
+                    if let Some(ref bo) = *guard {
+                        bo.config.try_read().map(|c| c.click_to_swap).unwrap_or(true)
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        };
         let current_ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
         let desired_ex = if is_interactive {
             current_ex & !(WS_EX_TRANSPARENT.0)
@@ -1945,20 +1979,50 @@ unsafe fn render_bench_hud(
     data: &BenchOverlayData,
 ) {
     if data.champions.is_empty() {
+        if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
+            gz.bench_champs.clear();
+        }
+        return;
+    }
+
+    let (enabled, click_to_swap, badge_position, v_offset, h_offset) = if let Ok(guard) = GLOBAL_BENCH_OVERLAY.read() {
+        if let Some(ref bo) = *guard {
+            if let Ok(cfg) = bo.config.try_read() {
+                (cfg.enabled, cfg.click_to_swap, cfg.badge_position.clone(), cfg.vertical_offset, cfg.horizontal_offset)
+            } else {
+                (true, true, "bottom".to_string(), 0, 0)
+            }
+        } else {
+            (true, true, "bottom".to_string(), 0, 0)
+        }
+    } else {
+        (true, true, "bottom".to_string(), 0, 0)
+    };
+
+    if !enabled {
+        if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
+            gz.bench_champs.clear();
+        }
         return;
     }
 
     let sx = width as f64 / 1280.0;
     let sy = height as f64 / 720.0;
 
+    let offset_x = (h_offset as f64 * sx).round() as i32;
+    let offset_y = (v_offset as f64 * sy).round() as i32;
+
     // 1280x720 baseline geometry constants from Python bench_overlay.py:
     // BENCH_START_X = 355.0, BENCH_PITCH_X = 58.0, BENCH_ICON_W = 46.0, BENCH_BADGE_Y = 59.0, BENCH_BADGE_H = 16.0
     let badge_w = (46.0 * sx).round() as i32;
     let badge_h = (16.0 * sy).round().max(14.0) as i32;
-    let badge_y = (59.0 * sy).round() as i32;
+    let base_badge_y = if badge_position == "top" { 8.0 } else { 59.0 };
+    let badge_y = (base_badge_y * sy).round() as i32 + offset_y;
+
+    let mut new_bench_champs = Vec::new();
 
     for champ in &data.champions {
-        let slot_x = ((355.0 + champ.slot_index as f64 * 58.0) * sx).round() as i32;
+        let slot_x = ((355.0 + champ.slot_index as f64 * 58.0) * sx).round() as i32 + offset_x;
         let wr_pct = champ.win_rate * 100.0;
 
         let (bg_col, border_col, text_col, prefix) = if wr_pct >= 52.0 {
@@ -2003,6 +2067,16 @@ unsafe fn render_bench_hud(
             text_col,
             &badge_text,
         );
+
+        if click_to_swap {
+            let top_y = badge_y.min(((10.0 * sy).round() as i32) + offset_y);
+            let bot_y = (badge_y + badge_h).max(((56.0 * sy).round() as i32) + offset_y);
+            new_bench_champs.push(((slot_x, top_y, slot_x + badge_w, bot_y), champ.champion_id));
+        }
+    }
+
+    if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
+        gz.bench_champs = new_bench_champs;
     }
 }
 

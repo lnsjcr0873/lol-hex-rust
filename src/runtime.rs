@@ -173,6 +173,9 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
     if let Ok(mut gdm) = win32_hud::GLOBAL_DRAFT_MGR.write() {
         *gdm = Some(draft_mgr.clone());
     }
+    if let Ok(mut gbo) = win32_hud::GLOBAL_BENCH_OVERLAY.write() {
+        *gbo = Some(bench_overlay.clone());
+    }
 
     // Warm up OP.GG tier list in background
     let opgg_warmup = opgg.clone();
