@@ -286,14 +286,18 @@ interface PairedRow {
 }
 
 const pairedLaneRows = computed<PairedRow[]>(() => {
-  if (sortBy.value !== 'position') {
+  const allPlayers = [...enhancedBlueTeam.value, ...enhancedRedTeam.value]
+  const canyonLanes = new Set(['TOP', 'JUG', 'JUNGLE', 'MID', 'MIDDLE', 'BOT', 'BOTTOM', 'ADC', 'SUP', 'UTILITY', 'SUPPORT', '1', '2', '3', '4', '5'])
+  const isNonCanyonOrNoLanes = allPlayers.length > 0 && !allPlayers.some(p => p.assigned_position && canyonLanes.has(p.assigned_position.toUpperCase()))
+
+  if (sortBy.value !== 'position' || isNonCanyonOrNoLanes) {
     const maxLen = Math.max(enhancedBlueTeam.value.length, enhancedRedTeam.value.length, 5)
     const metricLabels: Record<string, string> = {
       kda: 'KDA 对比',
       winrate: '胜率 对比',
       premade: '车队 梯队'
     }
-    const label = metricLabels[sortBy.value] || '战力 顺位'
+    const label = isNonCanyonOrNoLanes ? '对位 席位' : (metricLabels[sortBy.value] || '战力 顺位')
     const rows: PairedRow[] = []
     for (let i = 0; i < maxLen; i++) {
       rows.push({

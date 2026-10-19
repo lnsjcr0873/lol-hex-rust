@@ -317,12 +317,9 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
             }
         } else if wparam == 0x0100 || wparam == 0x0104 {
             // WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
-            // ONLY trigger when LoL or HexBrain is active in the foreground
-            if (is_left_bracket || is_right_bracket) && !is_allowed_foreground_for_hotkey() {
-                return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-            }
-
             // ONLY trigger on the rising edge (false -> true). Ignore all Windows auto-repeat keydown events!
+            // Defer foreground window inspection to async task to keep the low-level hook callback under 1 microsecond,
+            // preventing Windows from silently unhooking on system load or anti-virus OpenProcess hooks.
             if is_left_bracket {
                 if !IS_KEY_DOWN_LEFT.swap(true, Ordering::SeqCst) {
                     let now = GetTickCount64();
@@ -330,6 +327,9 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
                     if now.saturating_sub(last) > 300 {
                         SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
                         crate::spawn_task(async move {
+                            if !is_allowed_foreground_for_hotkey() {
+                                return;
+                            }
                             if let Ok(guard) = CALLBACK_LEFT.lock() {
                                 if let Some(ref cb) = *guard {
                                     cb();
@@ -345,6 +345,9 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
                     if now.saturating_sub(last) > 300 {
                         SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
                         crate::spawn_task(async move {
+                            if !is_allowed_foreground_for_hotkey() {
+                                return;
+                            }
                             if let Ok(guard) = CALLBACK_RIGHT.lock() {
                                 if let Some(ref cb) = *guard {
                                     cb();

@@ -57,7 +57,7 @@ export function getKillDamageEfficiencyStatus(
   analysis: AggregatedAnalysis
 ): { kind: 'high' | 'low' | 'normal'; value: number } {
   const kde = analysis.summary?.avgKillDamageEfficiency
-  if (!kde || !Number.isFinite(kde) || kde <= 0.05) {
+  if (kde === undefined || kde === null || !Number.isFinite(kde) || kde < 0) {
     return { kind: 'normal', value: 1 }
   }
   if (kde > KILL_DAMAGE_EFFICIENCY_HIGH_THRESHOLD) {

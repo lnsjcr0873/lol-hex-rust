@@ -137,6 +137,7 @@ pub fn get_preset_definitions() -> HashMap<String, PresetDefinition> {
 pub struct ConfigManager {
     pub config: Arc<RwLock<RecommendationConfig>>,
     pub config_file_path: String,
+    save_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
@@ -378,6 +379,7 @@ impl ConfigManager {
         Self {
             config: Arc::new(RwLock::new(initial)),
             config_file_path: resolved.to_string_lossy().to_string(),
+            save_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -386,6 +388,7 @@ impl ConfigManager {
     }
 
     pub async fn save_to_disk(&self) -> bool {
+        let _guard = self.save_lock.lock().await;
         let (json_str, file_path) = {
             let cfg = self.config.read().await;
             (

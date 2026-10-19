@@ -255,6 +255,14 @@ pub async fn update_ranked_draft_overlay(
         return;
     }
 
+    if !d.state.my_locked {
+        if let Ok(mut inter) = super::win32_hud::RANKED_INTERACTION.write() {
+            if inter.last_local_locked {
+                inter.last_local_locked = false;
+            }
+        }
+    }
+
     let sample_limit = history.sample_count.load(std::sync::atomic::Ordering::Relaxed);
     let mut current_sig = format!("S:{};", sample_limit);
     for s in &d.state.my_team {

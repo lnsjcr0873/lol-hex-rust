@@ -541,17 +541,21 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
             // Verify players are not opponents in current match (including fallback team assignment when team_id == 0)
             let tid_i = if players[i].team_id > 0 {
                 players[i].team_id
-            } else if n == 10 {
-                if i < 5 { 100 } else { 200 }
+            } else if queue_id == 1700 || queue_id == 1710 {
+                (i / 2) as i32 + 1
+            } else if n % 2 == 0 {
+                if i < n / 2 { 100 } else { 200 }
             } else {
-                0
+                (i + 1) as i32
             };
             let tid_j = if players[j].team_id > 0 {
                 players[j].team_id
-            } else if n == 10 {
-                if j < 5 { 100 } else { 200 }
+            } else if queue_id == 1700 || queue_id == 1710 {
+                (j / 2) as i32 + 1
+            } else if n % 2 == 0 {
+                if j < n / 2 { 100 } else { 200 }
             } else {
-                0
+                (j + 1) as i32
             };
             if tid_i > 0 && tid_j > 0 && tid_i != tid_j {
                 continue;

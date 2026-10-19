@@ -1083,11 +1083,18 @@ unsafe extern "system" fn overlay_wndproc(
                         FillRect(mem_dc, &client_rect, bg_brush);
                         let _ = DeleteObject(bg_brush);
 
-                        // Read snapshot and render HUD content
-                        if let Ok(st) = GLOBAL_HUD.state.read() {
+                        // Read snapshot and render HUD content without holding GLOBAL_HUD.state lock during rendering
+                        let content_to_render = if let Ok(st) = GLOBAL_HUD.state.read() {
                             if st.is_visible {
-                                render_hud(mem_dc, width, height, &st.content);
+                                Some(st.content.clone())
+                            } else {
+                                None
                             }
+                        } else {
+                            None
+                        };
+                        if let Some(ref content) = content_to_render {
+                            render_hud(mem_dc, width, height, content);
                         }
 
                         // BitBlt memory buffer to screen
@@ -1631,12 +1638,14 @@ unsafe fn render_item_hud(
     let min_s = sx.min(sy);
 
     let is_analytics = data.active_main_tab == "analytics";
-    let box_w = ((440.0 * sx) as i32).clamp(380, width - 40);
-    let box_h = if is_analytics {
-        ((356.0 * sy) as i32).clamp(320, height - 60)
-    } else {
-        ((252.0 * sy) as i32).clamp(240, height - 60)
-    };
+    let min_box_w = 380;
+    let max_box_w = (width - 40).max(min_box_w);
+    let box_w = ((440.0 * sx) as i32).clamp(min_box_w, max_box_w);
+
+    let min_box_h = if is_analytics { 320 } else { 240 };
+    let max_box_h = (height - 60).max(min_box_h);
+    let target_box_h = if is_analytics { (356.0 * sy) as i32 } else { (252.0 * sy) as i32 };
+    let box_h = target_box_h.clamp(min_box_h, max_box_h);
     let box_x = (18.0 * sx) as i32;
     // 避开游戏原生英雄属性面板 (左下角 0~260px) 与技能加点热区 (+ 号按钮，底部向上约 260px)
     let bottom_clearance = (270.0 * sy) as i32;
@@ -2822,7 +2831,9 @@ unsafe fn render_ranked_hud(
             };
 
             let base_y = actual_offset_y + ((100.0 + slot_index as f64 * 92.0 - 15.0) * sy) as i32;
-            let f_y = base_y.clamp(actual_offset_y + (42.0 * sy) as i32, (actual_offset_y + ch) - f_h - 10);
+            let min_fy = actual_offset_y + (42.0 * sy) as i32;
+            let max_fy = ((actual_offset_y + ch) - f_h - 10).max(min_fy);
+            let f_y = base_y.clamp(min_fy, max_fy);
 
             // Card container
             let border_col = if is_my_team { rgb(14, 165, 233) } else { rgb(244, 63, 94) };

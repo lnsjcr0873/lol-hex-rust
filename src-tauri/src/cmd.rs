@@ -706,7 +706,7 @@ pub async fn get_raw_match_history(
 
     let b_idx = beg_index.unwrap_or(0);
     let e_idx = end_index.unwrap_or_else(|| b_idx.saturating_add(19)).max(b_idx);
-    let needed_count = e_idx.saturating_sub(b_idx).saturating_add(1).clamp(1, 100);
+    let needed_count = e_idx.saturating_sub(b_idx).saturating_add(1).clamp(1, 200);
 
     let qid = queue_id.unwrap_or(0);
     if qid <= 0 {
@@ -727,7 +727,7 @@ pub async fn get_raw_match_history(
     let mut base_template: Option<Value> = None;
     let mut lcu_cursor = 0usize;
     let chunk_size = 60usize;
-    let max_lcu_scan = 300usize;
+    let max_lcu_scan = 400usize;
 
     while matching_games.len() < target_total && lcu_cursor < max_lcu_scan {
         let lcu_end = lcu_cursor.saturating_add(chunk_size).saturating_sub(1);

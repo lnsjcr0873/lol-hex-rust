@@ -1293,6 +1293,7 @@ impl LcuClient {
         }
 
         let _in_flight_guard = if let Some(gid) = parsed_id {
+            let mut retries = 0usize;
             loop {
                 if self.is_negative_cached_detail(gid) {
                     return None;
@@ -1310,6 +1311,10 @@ impl LcuClient {
                     }
                 };
                 if is_in_flight {
+                    retries += 1;
+                    if retries > 2 {
+                        return None;
+                    }
                     let notified = self.cache_notify.notified();
                     if self.is_negative_cached_detail(gid) {
                         return None;
@@ -1418,24 +1423,30 @@ impl LcuClient {
             return Some(cached);
         }
 
-        let _in_flight_guard = loop {
-            if self.is_negative_cached_timeline(game_id) {
-                return None;
-            }
-            if let Some(cached) = self.get_cached_match_timeline(game_id) {
-                return Some(cached);
-            }
-            let is_in_flight = {
-                let mut set = self.in_flight_timelines.lock().ok()?;
-                if set.contains(&game_id) {
-                    true
-                } else {
-                    set.insert(game_id);
-                    false
+        let _in_flight_guard = {
+            let mut retries = 0usize;
+            loop {
+                if self.is_negative_cached_timeline(game_id) {
+                    return None;
                 }
-            };
-            if is_in_flight {
-                let notified = self.cache_notify.notified();
+                if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                    return Some(cached);
+                }
+                let is_in_flight = {
+                    let mut set = self.in_flight_timelines.lock().ok()?;
+                    if set.contains(&game_id) {
+                        true
+                    } else {
+                        set.insert(game_id);
+                        false
+                    }
+                };
+                if is_in_flight {
+                    retries += 1;
+                    if retries > 2 {
+                        return None;
+                    }
+                    let notified = self.cache_notify.notified();
                 if self.is_negative_cached_timeline(game_id) {
                     return None;
                 }

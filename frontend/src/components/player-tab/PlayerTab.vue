@@ -351,7 +351,7 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
   const myPart = (selfPuuid && (!game.participantIdentities || game.participantIdentities.length === 0))
     ? (game.participants?.find((p: any) => p.puuid === selfPuuid) || game.participants?.[0])
     : (game.participants?.find(p => p.participantId === myPid) || game.participants?.[0])
-  const stats = myPart?.stats
+  const stats = (myPart?.stats || (myPart as any) || {}) as any
 
   // Evaluate MVP and SVP across all participants in the match
   const rawParts = game.participants || []
@@ -361,13 +361,16 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
   let bestLossScore = -Infinity
 
   for (const p of rawParts) {
-    const s = p.stats
-    if (!s) continue
-    const kda = ((s.kills || 0) + (s.assists || 0) * 0.7) / Math.max(1, s.deaths || 0)
-    const dmg = s.totalDamageDealtToChampions || 0
-    const cs = (s.totalMinionsKilled || 0) + (s.neutralMinionsKilled || 0)
+    const s = (p.stats || (p as any) || {}) as any
+    const kills = s.kills ?? (p as any).kills ?? 0
+    const deaths = s.deaths ?? (p as any).deaths ?? 0
+    const assists = s.assists ?? (p as any).assists ?? 0
+    const kda = (kills + assists * 0.7) / Math.max(1, deaths)
+    const dmg = s.totalDamageDealtToChampions ?? (p as any).totalDamageDealtToChampions ?? 0
+    const cs = (s.totalMinionsKilled ?? (p as any).totalMinionsKilled ?? 0) + (s.neutralMinionsKilled ?? (p as any).neutralMinionsKilled ?? 0)
     const score = kda * 3.0 + dmg / 5000.0 + cs / 50.0
-    if (s.win) {
+    const isWin = Boolean(s.win ?? (p as any).win)
+    if (isWin) {
       if (score > bestWinScore) {
         bestWinScore = score
         bestWinPart = p
@@ -386,6 +389,7 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
   const participantsPreview = rawParts.map(p => {
     const ident = game.participantIdentities?.find(i => i.participantId === p.participantId)
     const pAny = p as any
+    const pStats = p.stats || pAny
     return {
       participant_id: p.participantId,
       puuid: pAny.puuid || ident?.player?.puuid || '',
@@ -397,12 +401,17 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
       champion_id: p.championId,
       champion_name: '',
       champion_icon: p.championId ? `https://game.gtimg.cn/images/lol/act/img/skinloading/${p.championId}000.jpg` : 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg',
-      is_win: p.stats?.win ?? false,
-      kills: p.stats?.kills,
-      deaths: p.stats?.deaths,
-      assists: p.stats?.assists
+      is_win: Boolean(pStats.win),
+      kills: pStats.kills ?? 0,
+      deaths: pStats.deaths ?? 0,
+      assists: pStats.assists ?? 0
     }
   })
+
+  const myKills = stats.kills ?? (myPart as any)?.kills ?? 0
+  const myDeaths = stats.deaths ?? (myPart as any)?.deaths ?? 0
+  const myAssists = stats.assists ?? (myPart as any)?.assists ?? 0
+  const myKdaRatio = Math.round(((myKills + myAssists) / Math.max(1, myDeaths)) * 10) / 10
 
   return {
     game_id: game.gameId,
@@ -411,25 +420,33 @@ function convertRawGameToMatchItem(game: Game, selfPuuid?: string): MatchHistory
     game_mode: game.gameMode,
     queue_id: game.queueId,
     queue_name: '',
-    is_win: stats?.win ?? false,
+    is_win: Boolean(stats.win ?? (myPart as any)?.win ?? false),
     team_id: myPart?.teamId,
     is_blue: myPart?.teamId === 100,
     champion_id: myPart?.championId ?? 0,
     champion_name: '',
     champion_icon: (myPart?.championId ?? 0) > 0 ? `https://game.gtimg.cn/images/lol/act/img/skinloading/${myPart?.championId}000.jpg` : 'https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg',
-    role: myPart?.timeline?.lane || '',
-    kills: stats?.kills ?? 0,
-    deaths: stats?.deaths ?? 0,
-    assists: stats?.assists ?? 0,
-    kda_ratio: stats ? Math.round((((stats.kills ?? 0) + (stats.assists ?? 0)) / Math.max(1, stats.deaths ?? 0)) * 10) / 10 : 0,
+    role: myPart?.timeline?.lane || (myPart as any)?.lane || '',
+    kills: myKills,
+    deaths: myDeaths,
+    assists: myAssists,
+    kda_ratio: myKdaRatio,
     is_mvp: isMvp,
     is_svp: isSvp,
-    items: [stats?.item0 ?? 0, stats?.item1 ?? 0, stats?.item2 ?? 0, stats?.item3 ?? 0, stats?.item4 ?? 0, stats?.item5 ?? 0, stats?.item6 ?? 0],
-    total_damage: stats?.totalDamageDealtToChampions ?? 0,
+    items: [
+      stats.item0 ?? (myPart as any)?.item0 ?? 0,
+      stats.item1 ?? (myPart as any)?.item1 ?? 0,
+      stats.item2 ?? (myPart as any)?.item2 ?? 0,
+      stats.item3 ?? (myPart as any)?.item3 ?? 0,
+      stats.item4 ?? (myPart as any)?.item4 ?? 0,
+      stats.item5 ?? (myPart as any)?.item5 ?? 0,
+      stats.item6 ?? (myPart as any)?.item6 ?? 0,
+    ],
+    total_damage: stats.totalDamageDealtToChampions ?? (myPart as any)?.totalDamageDealtToChampions ?? 0,
     damage_share_pct: 0,
-    damage_taken: stats?.totalDamageTaken ?? 0,
-    gold_earned: stats?.goldEarned ?? 0,
-    minions_killed: (stats?.totalMinionsKilled ?? 0) + (stats?.neutralMinionsKilled ?? 0),
+    damage_taken: stats.totalDamageTaken ?? (myPart as any)?.totalDamageTaken ?? 0,
+    gold_earned: stats.goldEarned ?? (myPart as any)?.goldEarned ?? 0,
+    minions_killed: (stats.totalMinionsKilled ?? (myPart as any)?.totalMinionsKilled ?? 0) + (stats.neutralMinionsKilled ?? (myPart as any)?.neutralMinionsKilled ?? 0),
     participants_preview: participantsPreview
   }
 }
