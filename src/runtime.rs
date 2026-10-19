@@ -592,6 +592,12 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                 last_swapped_champion_id = 0;
                 last_draft_sig.clear();
                 cached_ranked_data = None;
+                {
+                    let mut d = draft_bg.write().await;
+                    if !d.manual_positions.is_empty() {
+                        d.reset_manual_positions();
+                    }
+                }
                 if last_level > 0 {
                     last_level = 0;
                     is_aram_bg.store(false, Ordering::SeqCst);
