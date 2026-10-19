@@ -197,27 +197,30 @@ pub fn run() {
 
                     // A. ARAM Bench Auto Swap
                     if is_aram && cfg.auto_swap_bench && !cfg.bench_preferred_champions.is_empty() {
-                        if let Some(bench) = session.get("benchChampions").and_then(|v| v.as_array()) {
-                            let bench_ids: Vec<i64> = bench.iter()
-                                .filter_map(|b| b.get("championId").and_then(|v| v.as_i64()))
-                                .collect();
+                        // Global swap cooldown check (at least 3 seconds between any bench swaps)
+                        if last_swap_instant.elapsed() >= std::time::Duration::from_secs(3) {
+                            if let Some(bench) = session.get("benchChampions").and_then(|v| v.as_array()) {
+                                let bench_ids: Vec<i64> = bench.iter()
+                                    .filter_map(|b| b.get("championId").and_then(|v| v.as_i64()))
+                                    .collect();
 
-                            for pref_str in &cfg.bench_preferred_champions {
-                                let pref_id_opt = pref_str.parse::<i64>().ok().or_else(|| {
-                                    db_bg.resolve_hero_id(pref_str).and_then(|s| s.parse::<i64>().ok())
-                                });
-                                if let Some(pref_id) = pref_id_opt {
-                                    if my_champion_id == pref_id {
-                                        break;
-                                    }
-                                    let allow_swap = pref_id != last_swapped_champion_id || last_swap_instant.elapsed() > std::time::Duration::from_secs(3);
-                                    if bench_ids.contains(&pref_id) && allow_swap {
-                                        let swapped = lcu_bg.swap_bench_champion(&pref_id.to_string()).await;
-                                        if swapped {
-                                            tracing::info!("⚡ [HexBrain Tauri] 自动秒抢备战席心愿英雄: {}", pref_id);
-                                            last_swapped_champion_id = pref_id;
-                                            last_swap_instant = std::time::Instant::now();
+                                for pref_str in &cfg.bench_preferred_champions {
+                                    let pref_id_opt = pref_str.parse::<i64>().ok().or_else(|| {
+                                        db_bg.resolve_hero_id(pref_str).and_then(|s| s.parse::<i64>().ok())
+                                    });
+                                    if let Some(pref_id) = pref_id_opt {
+                                        // If player already holds this preferred champion (or a higher one processed previously), stop searching
+                                        if my_champion_id == pref_id {
                                             break;
+                                        }
+                                        if bench_ids.contains(&pref_id) {
+                                            let swapped = lcu_bg.swap_bench_champion(&pref_id.to_string()).await;
+                                            if swapped {
+                                                tracing::info!("⚡ [HexBrain Tauri] 自动秒抢备战席心愿英雄: {}", pref_id);
+                                                last_swapped_champion_id = pref_id;
+                                                last_swap_instant = std::time::Instant::now();
+                                                break;
+                                            }
                                         }
                                     }
                                 }
