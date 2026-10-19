@@ -87,6 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Database;
+    use crate::overlay::InGameOverlay;
     use crate::data::recipe_data::calculate_item_net_cost;
     use crate::engine::decision::calc_wilson_lower_bound;
     use crate::vision::OcrScanner;
