@@ -511,18 +511,22 @@ pub async fn get_match_history(
     let filtered: Vec<Value> = paginated_matches
         .into_iter()
         .map(|m| {
-            let (pos_code, role_cn) = match m.queue_id {
-                450 => ("ARAM", "乱斗"),
-                1700 | 1710 => ("CHERRY", "斗魂"),
-                _ => {
-                    let typ = lol_hex_rust::engine::player_history::infer_typical_position(m.champion_id);
-                    match typ {
-                        "TOP" => ("TOP", "上单"),
-                        "JUNGLE" => ("JUNGLE", "打野"),
-                        "MIDDLE" | "MID" => ("MID", "中单"),
-                        "BOTTOM" | "ADC" => ("ADC", "下路"),
-                        "UTILITY" | "SUPPORT" => ("SUPPORT", "辅助"),
-                        _ => ("UNKNOWN", "对局"),
+            let (pos_code, role_cn) = if !m.role.is_empty() && !m.role_cn.is_empty() {
+                (m.role.as_str(), m.role_cn.as_str())
+            } else {
+                match m.queue_id {
+                    450 => ("ARAM", "乱斗"),
+                    1700 | 1710 => ("CHERRY", "斗魂"),
+                    _ => {
+                        let typ = lol_hex_rust::engine::player_history::infer_typical_position(m.champion_id);
+                        match typ {
+                            "TOP" => ("TOP", "上单"),
+                            "JUNGLE" => ("JUNGLE", "打野"),
+                            "MIDDLE" | "MID" => ("MID", "中单"),
+                            "BOTTOM" | "ADC" => ("ADC", "下路"),
+                            "UTILITY" | "SUPPORT" => ("SUPPORT", "辅助"),
+                            _ => ("UNKNOWN", "对局"),
+                        }
                     }
                 }
             };
@@ -541,6 +545,7 @@ pub async fn get_match_history(
                 "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", m.champion_id),
                 "role": pos_code,
                 "role_cn": role_cn,
+                "lane": m.lane,
                 "spell1_id": m.spell1_id,
                 "spell2_id": m.spell2_id,
                 "kills": m.kills,

@@ -149,6 +149,9 @@ pub struct ParsedMatchRecord {
     pub primary_rune: i32,
     pub secondary_rune: i32,
     pub participants_preview: Vec<ParticipantPreviewItem>,
+    pub lane: String,
+    pub role: String,
+    pub role_cn: String,
 }
 
 #[derive(Debug, Clone)]
@@ -759,16 +762,63 @@ pub fn queue_id_to_mode_cn(queue_id: i32) -> &'static str {
 pub fn infer_typical_position(champion_id: i32) -> &'static str {
     match champion_id {
         // TOP
-        14 | 266 | 24 | 122 | 86 | 114 | 164 | 92 | 58 | 39 | 98 | 54 | 516 | 82 | 875 | 150 | 897 | 17 | 6 | 31 | 75 | 420 | 41 | 126 | 887 | 78 | 133 | 240 => "TOP",
+        14 | 266 | 24 | 122 | 86 | 114 | 164 | 92 | 58 | 39 | 98 | 54 | 516 | 82 | 875 | 150 | 897 | 17 | 6 | 31 | 75 | 420 | 41 | 126 | 887 | 78 | 133 | 240 | 80 | 83 | 2 | 10 => "TOP",
         // JUNGLE
-        64 | 141 | 5 | 59 | 11 | 254 | 56 | 120 | 234 | 104 | 245 | 60 | 28 | 876 | 203 | 19 | 35 | 154 | 32 | 113 | 107 | 121 | 76 | 200 | 233 | 77 | 421 => "JUNGLE",
+        64 | 141 | 5 | 59 | 11 | 254 | 56 | 120 | 234 | 104 | 245 | 60 | 28 | 876 | 203 | 19 | 35 | 154 | 32 | 113 | 107 | 121 | 76 | 200 | 233 | 77 | 421 | 9 | 20 | 33 | 79 | 102 | 106 | 131 => "JUNGLE",
         // MID
-        8 | 103 | 517 | 157 | 777 | 238 | 55 | 134 | 112 | 61 | 7 | 711 | 84 | 4 | 45 | 1 | 38 | 91 | 910 | 800 | 127 | 136 | 268 | 3 | 69 => "MID",
+        8 | 103 | 517 | 157 | 777 | 238 | 55 | 134 | 112 | 61 | 7 | 711 | 84 | 4 | 45 | 1 | 38 | 91 | 910 | 800 | 127 | 136 | 268 | 3 | 69 | 13 | 26 | 34 | 90 | 101 | 105 | 115 | 142 => "MID",
         // ADC
         51 | 145 | 81 | 222 | 67 | 202 | 22 | 360 | 236 | 18 | 21 | 498 | 29 | 119 | 523 | 221 | 15 | 110 | 96 | 429 | 901 => "ADC",
         // SUPPORT
-        412 | 111 | 53 | 89 | 117 | 267 | 350 | 40 | 555 | 497 | 16 | 25 | 99 | 235 | 43 | 201 | 12 | 432 | 37 | 526 | 44 | 902 | 888 | 143 => "SUPPORT",
+        412 | 111 | 53 | 89 | 117 | 267 | 350 | 40 | 555 | 497 | 16 | 25 | 99 | 235 | 43 | 201 | 12 | 432 | 37 | 526 | 44 | 902 | 888 | 143 | 57 => "SUPPORT",
         _ => "",
+    }
+}
+
+pub fn resolve_match_position(
+    raw_lane: &str,
+    raw_role: &str,
+    team_pos: &str,
+    champion_id: i32,
+) -> (&'static str, &'static str) {
+    match team_pos.to_uppercase().as_str() {
+        "TOP" => return ("TOP", "上单"),
+        "JUNGLE" => return ("JUNGLE", "打野"),
+        "MIDDLE" | "MID" => return ("MID", "中单"),
+        "BOTTOM" | "BOT" => return ("ADC", "下路"),
+        "UTILITY" | "SUPPORT" => return ("SUPPORT", "辅助"),
+        _ => {}
+    }
+
+    let lane_upper = raw_lane.to_uppercase();
+    let role_upper = raw_role.to_uppercase();
+
+    match lane_upper.as_str() {
+        "TOP" => return ("TOP", "上单"),
+        "JUNGLE" => return ("JUNGLE", "打野"),
+        "MIDDLE" | "MID" => return ("MID", "中单"),
+        "BOTTOM" | "BOT" => {
+            if role_upper.contains("SUPPORT") || role_upper == "DUO_SUPPORT" {
+                return ("SUPPORT", "辅助");
+            } else {
+                return ("ADC", "下路");
+            }
+        }
+        _ => {}
+    }
+
+    if role_upper.contains("SUPPORT") || role_upper == "DUO_SUPPORT" {
+        return ("SUPPORT", "辅助");
+    }
+
+    let typ = infer_typical_position(champion_id);
+    match typ {
+        "TOP" => ("TOP", "上单"),
+        "JUNGLE" => ("JUNGLE", "打野"),
+        "MIDDLE" | "MID" => ("MID", "中单"),
+        "BOTTOM" | "ADC" => ("ADC", "下路"),
+        "UTILITY" | "SUPPORT" => ("SUPPORT", "辅助"),
+        _ => ("UNKNOWN", "对局"),
     }
 }
 
@@ -1917,6 +1967,33 @@ impl PlayerHistoryManager {
                 let is_mvp = my_eval.map(|e| e.is_mvp).unwrap_or(false);
                 let is_svp = my_eval.map(|e| e.is_svp).unwrap_or(false);
 
+                let raw_lane = part.get("timeline")
+                    .and_then(|t| t.get("lane"))
+                    .or_else(|| part.get("lane"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let raw_role = part.get("timeline")
+                    .and_then(|t| t.get("role"))
+                    .or_else(|| part.get("role"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let raw_team_pos = part.get("teamPosition")
+                    .or_else(|| part.get("individualPosition"))
+                    .or_else(|| stats.and_then(|s| s.get("teamPosition")))
+                    .or_else(|| stats.and_then(|s| s.get("individualPosition")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let (pos_code, pos_cn) = if queue_id == 450 {
+                    ("ARAM", "乱斗")
+                } else if queue_id == 1700 || queue_id == 1710 {
+                    ("CHERRY", "斗魂")
+                } else {
+                    resolve_match_position(raw_lane, raw_role, raw_team_pos, cid)
+                };
+
                 parsed_matches.push(ParsedMatchRecord {
                     game_id,
                     game_creation,
@@ -1959,6 +2036,9 @@ impl PlayerHistoryManager {
                     primary_rune: rune_primary,
                     secondary_rune: rune_sub,
                     participants_preview,
+                    lane: raw_lane.to_string(),
+                    role: pos_code.to_string(),
+                    role_cn: pos_cn.to_string(),
                 });
             }
         }
@@ -2122,6 +2202,9 @@ impl PlayerHistoryManager {
                 primary_rune: 8000,
                 secondary_rune: 8100,
                 participants_preview: Vec::new(),
+                lane: "MID".to_string(),
+                role: "MID".to_string(),
+                role_cn: "中单".to_string(),
             });
         }
 
