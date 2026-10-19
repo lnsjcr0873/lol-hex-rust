@@ -8,54 +8,139 @@ use tokio::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug, Clone)]
+struct LruNode<K, V> {
+    key: K,
+    value: V,
+    prev: Option<usize>,
+    next: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
 pub struct LruStore<K: std::hash::Hash + Eq + Clone, V: Clone> {
     capacity: usize,
-    map: HashMap<K, V>,
-    order: VecDeque<K>,
+    map: HashMap<K, usize>,
+    nodes: Vec<Option<LruNode<K, V>>>,
+    free_indices: Vec<usize>,
+    head: Option<usize>, // least recently used
+    tail: Option<usize>, // most recently used
 }
 
 impl<K: std::hash::Hash + Eq + Clone, V: Clone> LruStore<K, V> {
     pub fn new(capacity: usize) -> Self {
+        let cap = capacity.max(1);
         Self {
-            capacity: capacity.max(1),
-            map: HashMap::new(),
-            order: VecDeque::new(),
+            capacity: cap,
+            map: HashMap::with_capacity(cap),
+            nodes: Vec::with_capacity(cap),
+            free_indices: Vec::new(),
+            head: None,
+            tail: None,
+        }
+    }
+
+    fn detach(&mut self, idx: usize) {
+        let prev = self.nodes[idx].as_ref().and_then(|n| n.prev);
+        let next = self.nodes[idx].as_ref().and_then(|n| n.next);
+
+        if let Some(p) = prev {
+            if let Some(n) = &mut self.nodes[p] {
+                n.next = next;
+            }
+        } else {
+            self.head = next;
+        }
+
+        if let Some(n) = next {
+            if let Some(node) = &mut self.nodes[n] {
+                node.prev = prev;
+            }
+        } else {
+            self.tail = prev;
+        }
+
+        if let Some(node) = &mut self.nodes[idx] {
+            node.prev = None;
+            node.next = None;
+        }
+    }
+
+    fn attach_to_tail(&mut self, idx: usize) {
+        if let Some(t) = self.tail {
+            if let Some(node) = &mut self.nodes[idx] {
+                node.prev = Some(t);
+                node.next = None;
+            }
+            if let Some(last_node) = &mut self.nodes[t] {
+                last_node.next = Some(idx);
+            }
+            self.tail = Some(idx);
+        } else {
+            if let Some(node) = &mut self.nodes[idx] {
+                node.prev = None;
+                node.next = None;
+            }
+            self.head = Some(idx);
+            self.tail = Some(idx);
         }
     }
 
     pub fn get(&mut self, key: &K) -> Option<V> {
-        if let Some(val) = self.map.get(key) {
-            let val = val.clone();
-            if let Some(pos) = self.order.iter().position(|x| x == key) {
-                self.order.remove(pos);
-            }
-            self.order.push_back(key.clone());
-            Some(val)
-        } else {
-            None
+        let &idx = self.map.get(key)?;
+        let val = self.nodes[idx].as_ref()?.value.clone();
+        if self.tail != Some(idx) {
+            self.detach(idx);
+            self.attach_to_tail(idx);
         }
+        Some(val)
     }
 
     pub fn insert(&mut self, key: K, value: V) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key.clone(), value);
-            if let Some(pos) = self.order.iter().position(|x| x == &key) {
-                self.order.remove(pos);
+        if let Some(&idx) = self.map.get(&key) {
+            if let Some(node) = &mut self.nodes[idx] {
+                node.value = value;
             }
-            self.order.push_back(key);
+            if self.tail != Some(idx) {
+                self.detach(idx);
+                self.attach_to_tail(idx);
+            }
             return;
         }
 
         while self.map.len() >= self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.map.remove(&oldest);
+            if let Some(oldest_idx) = self.head {
+                let oldest_key = self.nodes[oldest_idx].as_ref().map(|n| n.key.clone());
+                self.detach(oldest_idx);
+                if let Some(k) = oldest_key {
+                    self.map.remove(&k);
+                }
+                self.nodes[oldest_idx] = None;
+                self.free_indices.push(oldest_idx);
             } else {
                 break;
             }
         }
 
-        self.map.insert(key.clone(), value);
-        self.order.push_back(key);
+        let new_idx = if let Some(free_idx) = self.free_indices.pop() {
+            self.nodes[free_idx] = Some(LruNode {
+                key: key.clone(),
+                value,
+                prev: None,
+                next: None,
+            });
+            free_idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(Some(LruNode {
+                key: key.clone(),
+                value,
+                prev: None,
+                next: None,
+            }));
+            idx
+        };
+
+        self.attach_to_tail(new_idx);
+        self.map.insert(key, new_idx);
     }
 
     pub fn len(&self) -> usize {
@@ -76,7 +161,10 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> LruStore<K, V> {
 
     pub fn clear(&mut self) {
         self.map.clear();
-        self.order.clear();
+        self.nodes.clear();
+        self.free_indices.clear();
+        self.head = None;
+        self.tail = None;
     }
 }
 
@@ -1665,6 +1753,43 @@ mod tests {
         let result = client.fetch_match_history_batch(dead_port, &headers, "some-other-puuid", 0, 10).await;
         assert!(result.is_none());
         assert!(client.get_consecutive_failures() > 0);
+    }
+
+    #[test]
+    fn test_lru_store_eviction_and_recency() {
+        let mut store = LruStore::new(3);
+        store.insert(1, "one");
+        store.insert(2, "two");
+        store.insert(3, "three");
+        assert_eq!(store.len(), 3);
+
+        // Access 1, making 2 the oldest
+        assert_eq!(store.get(&1), Some("one"));
+
+        // Insert 4, which should evict 2
+        store.insert(4, "four");
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.get(&2), None);
+        assert_eq!(store.get(&1), Some("one"));
+        assert_eq!(store.get(&3), Some("three"));
+        assert_eq!(store.get(&4), Some("four"));
+
+        // Update existing key 3
+        store.insert(3, "three_updated");
+        assert_eq!(store.get(&3), Some("three_updated"));
+
+        // Insert 5, which should evict 1
+        store.insert(5, "five");
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.get(&1), None);
+        assert_eq!(store.get(&3), Some("three_updated"));
+        assert_eq!(store.get(&4), Some("four"));
+        assert_eq!(store.get(&5), Some("five"));
+
+        store.clear();
+        assert_eq!(store.len(), 0);
+        assert!(store.is_empty());
+        assert_eq!(store.get(&3), None);
     }
 }
 
