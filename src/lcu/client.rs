@@ -432,6 +432,7 @@ impl LcuClient {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_response(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
         match res_result {
             Ok(res) => {
@@ -459,6 +460,7 @@ impl LcuClient {
     /// Invalidates credentials on 401 Unauthorized so that restarted/expired sessions trigger re-auth.
     /// Does not increment consecutive_failures on connection error, ensuring failures are only recorded
     /// if all fallback candidates fail.
+    #[allow(dead_code)]
     async fn handle_response_fallback_candidate(&self, res_result: Result<reqwest::Response, reqwest::Error>) -> Option<reqwest::Response> {
         match res_result {
             Ok(res) => {
@@ -475,6 +477,103 @@ impl LcuClient {
             }
             Err(_) => None,
         }
+    }
+
+    pub async fn send_request_with_protocol_fallback(
+        &self,
+        method: reqwest::Method,
+        port: u16,
+        headers: &HeaderMap,
+        path_and_query: &str,
+        body: Option<&Value>,
+    ) -> Option<reqwest::Response> {
+        let scheme = self.get_protocol().await;
+        let url = format!("{}://127.0.0.1:{}{}", scheme, port, path_and_query);
+        let mut builder = self.client.request(method.clone(), &url).headers(headers.clone());
+        if let Some(b) = body {
+            builder = builder.json(b);
+        }
+        let req_res = builder.send().await;
+        if let Ok(res) = req_res {
+            let status = res.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.invalidate_credentials().await;
+                return None;
+            }
+            if status.is_success() {
+                self.record_success();
+                return Some(res);
+            }
+            return None;
+        } else if scheme == "https" {
+            let alt_url = format!("http://127.0.0.1:{}{}", port, path_and_query);
+            let mut alt_builder = self.client.request(method, &alt_url).headers(headers.clone());
+            if let Some(b) = body {
+                alt_builder = alt_builder.json(b);
+            }
+            let alt_req_res = alt_builder.send().await;
+            if let Ok(alt_res) = alt_req_res {
+                let status = alt_res.status();
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    self.invalidate_credentials().await;
+                    return None;
+                }
+                if status.is_success() {
+                    self.set_protocol("http").await;
+                    self.record_success();
+                    return Some(alt_res);
+                }
+                return None;
+            } else if let Err(ref e) = alt_req_res {
+                if e.is_connect() {
+                    self.record_failure().await;
+                }
+            }
+        } else if let Err(ref e) = req_res {
+            if e.is_connect() {
+                self.record_failure().await;
+            }
+        }
+        None
+    }
+
+    pub async fn send_get_with_protocol_fallback(
+        &self,
+        port: u16,
+        headers: &HeaderMap,
+        path_and_query: &str,
+    ) -> Option<reqwest::Response> {
+        self.send_request_with_protocol_fallback(reqwest::Method::GET, port, headers, path_and_query, None).await
+    }
+
+    pub async fn send_post_with_protocol_fallback(
+        &self,
+        port: u16,
+        headers: &HeaderMap,
+        path_and_query: &str,
+        body: Option<&Value>,
+    ) -> Option<reqwest::Response> {
+        self.send_request_with_protocol_fallback(reqwest::Method::POST, port, headers, path_and_query, body).await
+    }
+
+    pub async fn send_put_with_protocol_fallback(
+        &self,
+        port: u16,
+        headers: &HeaderMap,
+        path_and_query: &str,
+        body: Option<&Value>,
+    ) -> Option<reqwest::Response> {
+        self.send_request_with_protocol_fallback(reqwest::Method::PUT, port, headers, path_and_query, body).await
+    }
+
+    pub async fn send_patch_with_protocol_fallback(
+        &self,
+        port: u16,
+        headers: &HeaderMap,
+        path_and_query: &str,
+        body: Option<&Value>,
+    ) -> Option<reqwest::Response> {
+        self.send_request_with_protocol_fallback(reqwest::Method::PATCH, port, headers, path_and_query, body).await
     }
 
 
@@ -535,8 +634,7 @@ impl LcuClient {
             None => return "None".to_string(),
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-gameflow/v1/gameflow-phase", port);
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-gameflow/v1/gameflow-phase").await {
             if let Ok(text) = res.text().await {
                 let phase = text.trim().trim_matches('"').to_string();
                 let mut p_guard = self.current_phase.write().await;
@@ -560,8 +658,7 @@ impl LcuClient {
             None => return Value::Null,
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-champ-select/v1/session", port);
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-champ-select/v1/session").await {
             if let Ok(data) = res.json::<Value>().await {
                 let mut s_guard = self.current_session.write().await;
                 *s_guard = data.clone();
@@ -584,8 +681,7 @@ impl LcuClient {
             None => return Value::Null,
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-gameflow/v1/session", port);
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-gameflow/v1/session").await {
             if let Ok(data) = res.json::<Value>().await {
                 return data;
             }
@@ -600,8 +696,7 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!("https://127.0.0.1:{}/lol-rso-auth/v1/authorization/access-token", port);
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = self.send_get_with_protocol_fallback(port, &headers, "/lol-rso-auth/v1/authorization/access-token").await?;
         res.json::<Value>().await.ok()
     }
 
@@ -618,11 +713,8 @@ impl LcuClient {
             None => return false,
         };
 
-        let url = format!(
-            "https://127.0.0.1:{}/lol-champ-select/v1/session/bench/swap/{}",
-            port, champion_id
-        );
-        self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
+        let path = format!("/lol-champ-select/v1/session/bench/swap/{}", champion_id);
+        self.send_post_with_protocol_fallback(port, &headers, &path, None).await.is_some()
     }
 
     pub async fn reroll_champion(&self) -> bool {
@@ -638,11 +730,7 @@ impl LcuClient {
             None => return false,
         };
 
-        let url = format!(
-            "https://127.0.0.1:{}/lol-champ-select/v1/session/my-selection/reroll",
-            port
-        );
-        self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
+        self.send_post_with_protocol_fallback(port, &headers, "/lol-champ-select/v1/session/my-selection/reroll", None).await.is_some()
     }
 
     pub async fn get_champion_mastery(&self, puuid: &str) -> Option<Value> {
@@ -658,13 +746,13 @@ impl LcuClient {
             None => return None,
         };
 
-        let url = if puuid.is_empty() || puuid.starts_with("mock_") {
-            format!("https://127.0.0.1:{}/lol-champion-mastery/v1/local-player/champion-mastery", port)
+        let path = if puuid.is_empty() || puuid.starts_with("mock_") {
+            "/lol-champion-mastery/v1/local-player/champion-mastery".to_string()
         } else {
-            format!("https://127.0.0.1:{}/lol-champion-mastery/v1/{}/champion-mastery", port, puuid)
+            format!("/lol-champion-mastery/v1/{}/champion-mastery", puuid)
         };
 
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path).await {
             if let Ok(val) = res.json::<Value>().await {
                 return Some(val);
             }
@@ -685,14 +773,13 @@ impl LcuClient {
             None => return None,
         };
 
-        let protocol = self.get_protocol().await;
-        let url = if puuid.is_empty() || puuid.starts_with("mock_") {
-            format!("{}://127.0.0.1:{}/lol-challenges/v1/summary-player-data/local-player", protocol, port)
+        let path = if puuid.is_empty() || puuid.starts_with("mock_") {
+            "/lol-challenges/v1/summary-player-data/local-player".to_string()
         } else {
-            format!("{}://127.0.0.1:{}/lol-challenges/v1/summary-player-data/player/{}", protocol, port, puuid)
+            format!("/lol-challenges/v1/summary-player-data/player/{}", puuid)
         };
 
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path).await {
             if let Ok(val) = res.json::<Value>().await {
                 return Some(val);
             }
@@ -713,16 +800,12 @@ impl LcuClient {
             None => return false,
         };
 
-        let url = format!(
-            "https://127.0.0.1:{}/lol-champ-select/v1/session/my-selection",
-            port
-        );
         let payload = json!({
             "spell1Id": spell1_id,
             "spell2Id": spell2_id
         });
 
-        self.handle_response(self.client.patch(&url).headers(headers).json(&payload).send().await).await.is_some()
+        self.send_patch_with_protocol_fallback(port, &headers, "/lol-champ-select/v1/session/my-selection", Some(&payload)).await.is_some()
     }
 
     pub async fn get_perk_pages(&self) -> Vec<Value> {
@@ -738,8 +821,7 @@ impl LcuClient {
             None => return Vec::new(),
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages", port);
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-perks/v1/pages").await {
             if let Ok(pages) = res.json::<Vec<Value>>().await {
                 return pages;
             }
@@ -784,15 +866,14 @@ impl LcuClient {
 
         // 1. If an existing HexBrain page is found, update it via PUT
         if let Some(pid) = hexbrain_page_id {
-            let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages/{}", port, pid);
-            if self.handle_response(self.client.put(&url).headers(headers.clone()).json(&page_payload).send().await).await.is_some() {
+            let path = format!("/lol-perks/v1/pages/{}", pid);
+            if self.send_put_with_protocol_fallback(port, &headers, &path, Some(&page_payload)).await.is_some() {
                 return true;
             }
         }
 
         // 2. Otherwise create a dedicated HexBrain page via POST (never overwrite user's custom pages)
-        let url = format!("https://127.0.0.1:{}/lol-perks/v1/pages", port);
-        self.handle_response(self.client.post(&url).headers(headers).json(&page_payload).send().await).await.is_some()
+        self.send_post_with_protocol_fallback(port, &headers, "/lol-perks/v1/pages", Some(&page_payload)).await.is_some()
     }
 
     pub async fn do_apply_runes_and_spells(
@@ -934,11 +1015,8 @@ impl LcuClient {
         };
 
         let encoded_room_id = percent_encode_path_segment(chat_room_id);
-        let url = format!(
-            "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/participants",
-            port, encoded_room_id
-        );
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        let path = format!("/lol-chat/v1/conversations/{}/participants", encoded_room_id);
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path).await {
             if let Ok(list) = res.json::<Vec<Value>>().await {
                 return list;
             }
@@ -953,11 +1031,8 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!(
-            "https://127.0.0.1:{}/lol-ranked/v1/ranked-stats/{}",
-            port, puuid
-        );
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let path = format!("/lol-ranked/v1/ranked-stats/{}", puuid);
+        let res = self.send_get_with_protocol_fallback(port, &headers, &path).await?;
         res.json::<Value>().await.ok()
     }
 
@@ -969,19 +1044,11 @@ impl LcuClient {
         beg_index: usize,
         end_index: usize,
     ) -> Option<Value> {
-        let scheme = self.get_protocol().await;
-        let url = format!(
-            "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
-            scheme, port, puuid, beg_index, end_index
+        let path = format!(
+            "/lol-match-history/v1/products/lol/{}/matches?begIndex={}&endIndex={}",
+            puuid, beg_index, end_index
         );
-        let mut connect_err = false;
-        let req_res = self.client.get(&url).headers(headers.clone()).send().await;
-        if let Err(ref e) = req_res {
-            if e.is_connect() {
-                connect_err = true;
-            }
-        }
-        if let Some(res) = self.handle_response_fallback_candidate(req_res).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, headers, &path).await {
             if let Ok(val) = res.json::<Value>().await {
                 if val.get("games").is_some() || val.get("matches").is_some() {
                     return Some(val);
@@ -999,20 +1066,17 @@ impl LcuClient {
         };
 
         if is_current {
-            let cur_url = format!(
-                "{}://127.0.0.1:{}/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
-                scheme, port, beg_index, end_index
+            let cur_path = format!(
+                "/lol-match-history/v1/products/lol/current-summoner/matches?begIndex={}&endIndex={}",
+                beg_index, end_index
             );
-            let cur_res = self.client.get(&cur_url).headers(headers.clone()).send().await;
-            if let Some(res) = self.handle_response(cur_res).await {
+            if let Some(res) = self.send_get_with_protocol_fallback(port, headers, &cur_path).await {
                 if let Ok(val) = res.json::<Value>().await {
                     if val.get("games").is_some() || val.get("matches").is_some() {
                         return Some(val);
                     }
                 }
             }
-        } else if connect_err {
-            self.record_failure().await;
         }
         None
     }
@@ -1130,8 +1194,7 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!("https://127.0.0.1:{}/lol-summoner/v1/current-summoner", port);
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = self.send_get_with_protocol_fallback(port, &headers, "/lol-summoner/v1/current-summoner").await?;
         res.json::<Value>().await.ok()
     }
 
@@ -1148,8 +1211,7 @@ impl LcuClient {
             None => return Vec::new(),
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-chat/v1/conversations", port);
-        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-chat/v1/conversations").await {
             if let Ok(list) = res.json::<Vec<Value>>().await {
                 return list;
             }
@@ -1252,12 +1314,8 @@ impl LcuClient {
             }
         }
 
-        let scheme = self.get_protocol().await;
-        let url = format!(
-            "{}://127.0.0.1:{}/lol-match-history/v1/games/{}",
-            scheme, port, game_id
-        );
-        let res_opt = self.handle_response(self.client.get(&url).headers(headers).send().await).await;
+        let path = format!("/lol-match-history/v1/games/{}", game_id);
+        let res_opt = self.send_get_with_protocol_fallback(port, &headers, &path).await;
 
         let res = match res_opt {
             Some(r) => r,
@@ -1364,12 +1422,8 @@ impl LcuClient {
             return Some(cached);
         }
 
-        let scheme = self.get_protocol().await;
-        let url = format!(
-            "{}://127.0.0.1:{}/lol-match-history/v1/game-timelines/{}",
-            scheme, port, game_id
-        );
-        let res_opt = self.handle_response(self.client.get(&url).headers(headers).send().await).await;
+        let path = format!("/lol-match-history/v1/game-timelines/{}", game_id);
+        let res_opt = self.send_get_with_protocol_fallback(port, &headers, &path).await;
         let res = match res_opt {
             Some(r) => r,
             None => {
@@ -1403,9 +1457,7 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let scheme = self.get_protocol().await;
-        let url = format!("{}://127.0.0.1:{}/entitlements/v1/token", scheme, port);
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = self.send_get_with_protocol_fallback(port, &headers, "/entitlements/v1/token").await?;
         res.json::<Value>().await.ok()
     }
 
@@ -1416,9 +1468,7 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let scheme = self.get_protocol().await;
-        let url = format!("{}://127.0.0.1:{}/lol-league-session/v1/league-session-token", scheme, port);
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = self.send_get_with_protocol_fallback(port, &headers, "/lol-league-session/v1/league-session-token").await?;
         let text = res.text().await.ok()?;
         let trimmed = text.trim();
         if trimmed.is_empty() || trimmed == "null" {
@@ -1469,15 +1519,12 @@ impl LcuClient {
         };
 
         let encoded_room_id = percent_encode_path_segment(chat_room_id);
-        let url = format!(
-            "https://127.0.0.1:{}/lol-chat/v1/conversations/{}/messages",
-            port, encoded_room_id
-        );
+        let path = format!("/lol-chat/v1/conversations/{}/messages", encoded_room_id);
         let payload = json!({
             "body": message,
             "type": "chat"
         });
-        self.handle_response(self.client.post(&url).headers(headers).json(&payload).send().await).await.is_some()
+        self.send_post_with_protocol_fallback(port, &headers, &path, Some(&payload)).await.is_some()
     }
 
     pub async fn get_summoner_by_name(&self, name: &str) -> Option<Value> {
@@ -1493,13 +1540,9 @@ impl LcuClient {
             name.trim()
         };
 
-        let scheme = self.get_protocol().await;
-        let url = format!(
-            "{}://127.0.0.1:{}/lol-summoner/v1/summoners",
-            scheme, port
-        );
-        let req = self.client.get(&url).headers(headers).query(&[("name", query_name)]);
-        if let Some(res) = self.handle_response(req.send().await).await {
+        let encoded_name = percent_encode_path_segment(query_name);
+        let path = format!("/lol-summoner/v1/summoners?name={}", encoded_name);
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path).await {
             if let Ok(val) = res.json::<Value>().await {
                 if !val.is_null() && (val.get("puuid").is_some() || val.get("displayName").is_some() || val.get("gameName").is_some()) {
                     return Some(val);
@@ -1520,11 +1563,8 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url_v2 = format!(
-            "https://127.0.0.1:{}/lol-summoner/v2/summoners/puuid/{}",
-            port, puuid
-        );
-        if let Some(res) = self.handle_response(self.client.get(&url_v2).headers(headers.clone()).send().await).await {
+        let path_v2 = format!("/lol-summoner/v2/summoners/puuid/{}", puuid);
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path_v2).await {
             if let Ok(val) = res.json::<Value>().await {
                 if !val.is_null() && (val.get("gameName").is_some() || val.get("displayName").is_some()) {
                     return Some(val);
@@ -1532,11 +1572,8 @@ impl LcuClient {
             }
         }
 
-        let url_v1 = format!(
-            "https://127.0.0.1:{}/lol-summoner/v1/summoners/by-puuid/{}",
-            port, puuid
-        );
-        let res = self.handle_response(self.client.get(&url_v1).headers(headers).send().await).await?;
+        let path_v1 = format!("/lol-summoner/v1/summoners/by-puuid/{}", puuid);
+        let res = self.send_get_with_protocol_fallback(port, &headers, &path_v1).await?;
         res.json::<Value>().await.ok()
     }
 
@@ -1547,8 +1584,7 @@ impl LcuClient {
         let port = self.get_port().await?;
         let headers = self.get_auth_header().await?;
 
-        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check", port);
-        let res = self.handle_response(self.client.get(&url).headers(headers).send().await).await?;
+        let res = self.send_get_with_protocol_fallback(port, &headers, "/lol-matchmaking/v1/ready-check").await?;
         res.json::<Value>().await.ok()
     }
 
@@ -1565,8 +1601,7 @@ impl LcuClient {
             None => return false,
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/accept", port);
-        self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
+        self.send_post_with_protocol_fallback(port, &headers, "/lol-matchmaking/v1/ready-check/accept", None).await.is_some()
     }
 
     pub async fn decline_ready_check(&self) -> bool {
@@ -1582,8 +1617,7 @@ impl LcuClient {
             None => return false,
         };
 
-        let url = format!("https://127.0.0.1:{}/lol-matchmaking/v1/ready-check/decline", port);
-        self.handle_response(self.client.post(&url).headers(headers).send().await).await.is_some()
+        self.send_post_with_protocol_fallback(port, &headers, "/lol-matchmaking/v1/ready-check/decline", None).await.is_some()
     }
 
     /// Retrieves region code and platform ID from LCU endpoints (e.g. "TENCENT", Some("HN1")).
@@ -1604,8 +1638,7 @@ impl LcuClient {
         let mut platform_id = None;
 
         // 1. /riotclient/region-locale
-        let url_rl = format!("https://127.0.0.1:{}/riotclient/region-locale", port);
-        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&url_rl).headers(headers.clone()).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/riotclient/region-locale").await {
             if let Ok(v) = res.json::<Value>().await {
                 if let Some(r) = v.get("region").and_then(|s| s.as_str()) {
                     region = r.to_string();
@@ -1614,8 +1647,7 @@ impl LcuClient {
         }
 
         // 2. /lol-platform-config/v1/namespaces/LoginDataPacket/platformId
-        let url_pid = format!("https://127.0.0.1:{}/lol-platform-config/v1/namespaces/LoginDataPacket/platformId", port);
-        if let Some(res) = self.handle_response_fallback_candidate(self.client.get(&url_pid).headers(headers.clone()).send().await).await {
+        if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-platform-config/v1/namespaces/LoginDataPacket/platformId").await {
             if let Ok(t) = res.text().await {
                 let trimmed = t.trim().trim_matches('"');
                 if !trimmed.is_empty() {
@@ -1790,6 +1822,33 @@ mod tests {
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
         assert_eq!(store.get(&3), None);
+    }
+
+    #[tokio::test]
+    async fn test_protocol_fallback_switches_to_http() {
+        let app = axum::Router::new().route("/lol-summoner/v1/current-summoner", axum::routing::get(|| async {
+            axum::Json(serde_json::json!({
+                "displayName": "MockSummoner",
+                "puuid": "mock-puuid-12345"
+            }))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = LcuClient::new();
+        // Initially credentials default to https
+        client.set_credentials(port, "dummy_token").await;
+        assert_eq!(client.get_protocol().await, "https");
+
+        // get_current_summoner should fail on https, fall back to http, succeed, and switch protocol to "http"
+        let summoner = client.get_current_summoner().await;
+        assert!(summoner.is_some());
+        let val = summoner.unwrap();
+        assert_eq!(val["displayName"], "MockSummoner");
+        assert_eq!(client.get_protocol().await, "http");
     }
 }
 
