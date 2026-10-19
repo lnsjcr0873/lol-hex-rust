@@ -604,6 +604,17 @@ pub async fn get_player_challenges(
                 { "id": 504003, "currentValue": 12 },
                 { "id": 504002, "currentValue": 88 },
                 { "id": 504004, "currentValue": 45 }
+            ],
+            "totalPoints": {
+                "current": 2150,
+                "level": "GOLD"
+            },
+            "categoryProgress": [
+                { "category": "COLLECTION", "current": 600, "level": "PLATINUM" },
+                { "category": "EXPERTISE", "current": 400, "level": "GOLD" },
+                { "category": "VETERANCY", "current": 500, "level": "SILVER" },
+                { "category": "TEAMWORK", "current": 350, "level": "SILVER" },
+                { "category": "IMAGINATION", "current": 300, "level": "BRONZE" }
             ]
         }));
     }

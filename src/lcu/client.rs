@@ -773,12 +773,53 @@ impl LcuClient {
             None => return None,
         };
 
-        let path = if puuid.is_empty() || puuid.starts_with("mock_") {
-            "/lol-challenges/v1/summary-player-data/local-player".to_string()
-        } else {
-            format!("/lol-challenges/v1/summary-player-data/player/{}", puuid)
-        };
+        let is_local = puuid.is_empty() || puuid == "me" || puuid == "current" || puuid.starts_with("mock_");
 
+        if is_local {
+            let mut player_challenges: Vec<Value> = Vec::new();
+            if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-challenges/v1/challenges/local-player").await {
+                if let Ok(val) = res.json::<Value>().await {
+                    if let Some(obj) = val.as_object() {
+                        for (k, v) in obj {
+                            if let Some(mut item_obj) = v.as_object().cloned() {
+                                if !item_obj.contains_key("id") {
+                                    if let Ok(id_num) = k.parse::<i64>() {
+                                        item_obj.insert("id".to_string(), json!(id_num));
+                                    }
+                                }
+                                player_challenges.push(Value::Object(item_obj));
+                            } else if let Some(n) = v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)) {
+                                if let Ok(id_num) = k.parse::<i64>() {
+                                    player_challenges.push(json!({ "id": id_num, "currentValue": n }));
+                                }
+                            }
+                        }
+                    } else if let Some(arr) = val.as_array() {
+                        player_challenges = arr.clone();
+                    }
+                }
+            }
+
+            let mut summary_val = if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, "/lol-challenges/v1/summary-player-data/local-player").await {
+                res.json::<Value>().await.ok()
+            } else {
+                None
+            };
+
+            if let Some(ref mut s) = summary_val {
+                if let Some(map) = s.as_object_mut() {
+                    map.insert("playerChallenges".to_string(), json!(player_challenges));
+                    return summary_val;
+                }
+            }
+
+            if !player_challenges.is_empty() {
+                return Some(json!({ "playerChallenges": player_challenges }));
+            }
+            return summary_val;
+        }
+
+        let path = format!("/lol-challenges/v1/summary-player-data/player/{}", puuid);
         if let Some(res) = self.send_get_with_protocol_fallback(port, &headers, &path).await {
             if let Ok(val) = res.json::<Value>().await {
                 return Some(val);

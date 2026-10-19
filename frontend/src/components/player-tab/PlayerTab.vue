@@ -914,6 +914,17 @@ async function loadData() {
           { id: 504003, currentValue: 12 },
           { id: 504002, currentValue: 88 },
           { id: 504004, currentValue: 45 }
+        ],
+        totalPoints: {
+          current: 2150,
+          level: 'GOLD'
+        },
+        categoryProgress: [
+          { category: 'COLLECTION', current: 600, level: 'PLATINUM' },
+          { category: 'EXPERTISE', current: 400, level: 'GOLD' },
+          { category: 'VETERANCY', current: 500, level: 'SILVER' },
+          { category: 'TEAMWORK', current: 350, level: 'SILVER' },
+          { category: 'IMAGINATION', current: 300, level: 'BRONZE' }
         ]
       }
     } else {
@@ -925,7 +936,7 @@ async function loadData() {
       }
       try {
         const cData = await getPlayerChallenges(props.tab.puuid)
-        challengesData.value = cData?.playerChallenges ? cData : { playerChallenges: [] }
+        challengesData.value = cData || { playerChallenges: [] }
       } catch (e) {
         console.warn('Failed to load player challenges:', e)
         challengesData.value = { playerChallenges: [] }
