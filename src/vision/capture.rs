@@ -65,34 +65,41 @@ impl ScreenCapture {
         #[cfg(windows)]
         {
             if let Some(rect) = Self::get_lol_window_rect() {
-                let vw = rect.width as f64;
-                let vh = rect.height as f64;
-                let aspect = if vh > 0.0 { vw / vh } else { 1.7777778 };
+                if rect.width >= 100 && rect.height >= 100 {
+                    let vw = rect.width as f64;
+                    let vh = rect.height as f64;
+                    let aspect = if vh > 0.0 { vw / vh } else { 1.7777778 };
 
-                if aspect > 1.82 {
-                    // 21:9 or 32:9 Ultrawide
-                    let eff_w = (vh * (16.0 / 9.0)) as i32;
-                    let eff_h = rect.height;
-                    let off_x = rect.x + (rect.width - eff_w) / 2;
-                    return ViewportRect {
-                        x: off_x,
-                        y: rect.y,
-                        width: eff_w,
-                        height: eff_h,
-                    };
-                } else if aspect < 1.72 {
-                    // 16:10 or 4:3
-                    let eff_w = rect.width;
-                    let eff_h = (vw * (9.0 / 16.0)) as i32;
-                    let off_y = rect.y + (rect.height - eff_h) / 2;
-                    return ViewportRect {
-                        x: rect.x,
-                        y: off_y,
-                        width: eff_w,
-                        height: eff_h,
-                    };
-                } else {
-                    return rect;
+                    if aspect > 1.82 {
+                        // 21:9 or 32:9 Ultrawide
+                        let eff_w = ((vh * (16.0 / 9.0)) as i32).max(600);
+                        let eff_h = rect.height.max(400);
+                        let off_x = rect.x + (rect.width - eff_w) / 2;
+                        return ViewportRect {
+                            x: off_x,
+                            y: rect.y,
+                            width: eff_w,
+                            height: eff_h,
+                        };
+                    } else if aspect < 1.72 {
+                        // 16:10 or 4:3
+                        let eff_w = rect.width.max(600);
+                        let eff_h = ((vw * (9.0 / 16.0)) as i32).max(400);
+                        let off_y = rect.y + (rect.height - eff_h) / 2;
+                        return ViewportRect {
+                            x: rect.x,
+                            y: off_y,
+                            width: eff_w,
+                            height: eff_h,
+                        };
+                    } else {
+                        return ViewportRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width.max(600),
+                            height: rect.height.max(400),
+                        };
+                    }
                 }
             }
         }
@@ -107,8 +114,8 @@ impl ScreenCapture {
                 return ViewportRect {
                     x: 0,
                     y: 0,
-                    width: sw,
-                    height: sh,
+                    width: sw.max(600),
+                    height: sh.max(400),
                 };
             }
         }
