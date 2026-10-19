@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlayerTabsStore } from '../src/stores/player-tabs'
 import { getMockChampionMastery } from '../src/api/mockData'
-import { getChampionName, getChampionTitle } from '../src/components/match-card/utils/resources'
+import { getChampionName, getChampionTitle, getPerkIconUrl, getPerkName } from '../src/components/match-card/utils/resources'
 
 describe('Phase 3: Player Tabs System & Champion Mastery Modal (1:1 LeagueAkari Alignment)', () => {
   const storeMap = new Map<string, string>()
@@ -279,6 +279,45 @@ describe('Phase 3: Player Tabs System & Champion Mastery Modal (1:1 LeagueAkari 
       expect(parse(nullPayload)).toEqual([])
       expect(parse(emptyPayload)).toEqual([])
       expect(parse(malformedPayload)).toEqual([])
+    })
+  })
+
+  // =========================================================================
+  // 4. Perk Resource Resolution & Error Fallback
+  // =========================================================================
+  describe('4. Perk Resources & Icon URL Resolution', () => {
+    it('correctly resolves keystone rune icon URLs to CommunityDragon paths', () => {
+      expect(getPerkIconUrl(8005)).toContain('v1/perk-images/styles/precision/presstheattack/presstheattack.png')
+      expect(getPerkIconUrl(8010)).toContain('v1/perk-images/styles/precision/conqueror/conqueror.png')
+      expect(getPerkIconUrl(8112)).toContain('v1/perk-images/styles/domination/electrocute/electrocute.png')
+      expect(getPerkIconUrl(8369)).toContain('v1/perk-images/styles/inspiration/firststrike/firststrike.png')
+    })
+
+    it('correctly maps stat shards to their respective icons', () => {
+      expect(getPerkIconUrl(5008)).toContain('v1/perk-images/statmods/statmodsadaptiveforceicon.png')
+      expect(getPerkIconUrl(5001)).toContain('v1/perk-images/statmods/statmodshealthplusicon.png')
+      expect(getPerkIconUrl(5010)).toContain('v1/perk-images/statmods/statmodsmovementspeedicon.png')
+    })
+
+    it('handles primary/secondary style IDs by returning tree style icons', () => {
+      expect(getPerkIconUrl(8000)).toContain('7201_precision.png')
+      expect(getPerkIconUrl(8100)).toContain('7200_domination.png')
+      expect(getPerkIconUrl(8200)).toContain('7202_sorcery.png')
+      expect(getPerkIconUrl(8300)).toContain('7203_whimsy.png')
+      expect(getPerkIconUrl(8400)).toContain('7204_resolve.png')
+    })
+
+    it('returns empty string for non-positive IDs and fallback for unknown IDs', () => {
+      expect(getPerkIconUrl(0)).toBe('')
+      expect(getPerkIconUrl(-1)).toBe('')
+      expect(getPerkIconUrl(999999)).toContain('runesicon.png')
+    })
+
+    it('correctly resolves perk names with fallback', () => {
+      expect(getPerkName(8005)).toBe('强攻')
+      expect(getPerkName(8010)).toBe('征服者')
+      expect(getPerkName(5008)).toBe('自适应之力')
+      expect(getPerkName(999999)).toBe('符文999999')
     })
   })
 })
