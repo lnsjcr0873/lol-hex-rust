@@ -313,6 +313,7 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_HISTORY: std::sync::RwLock<Option<Arc<crate::engine::PlayerHistoryManager>>> = std::sync::RwLock::new(None);
     pub static ref ACTIVE_ALGORITHM: std::sync::RwLock<String> = std::sync::RwLock::new("SMART".to_string());
     pub static ref GLOBAL_ITEM_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::ItemOverlay>>> = std::sync::RwLock::new(None);
+    pub static ref GLOBAL_DRAFT_MGR: std::sync::RwLock<Option<Arc<tokio::sync::RwLock<crate::engine::RankedDraftManager>>>> = std::sync::RwLock::new(None);
     static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32, FontKind), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
@@ -428,6 +429,7 @@ fn truncate_text_to_half_width(s: &str, max_hw: usize) -> String {
 }
 
 fn cycle_slot_position(is_my_team: bool, slot_index: usize) {
+    let mut updated_pos = None;
     if let Ok(mut st) = GLOBAL_HUD.state.write() {
         if let HudContent::Ranked(ref mut data) = st.content {
             let team = if is_my_team { &mut data.my_team } else { &mut data.their_team };
@@ -439,6 +441,20 @@ fn cycle_slot_position(is_my_team: bool, slot_index: usize) {
                 slot.position = roles[next_idx].to_string();
                 slot.position_cn = roles_cn[next_idx].to_string();
                 slot.is_manual_pos = true;
+                updated_pos = Some(roles[next_idx].to_string());
+            }
+        }
+    }
+    if let Some(new_pos) = updated_pos {
+        let team_key = if is_my_team { "my" } else { "their" };
+        if let Ok(guard) = GLOBAL_DRAFT_MGR.read() {
+            if let Some(ref dm) = *guard {
+                let dm_clone = dm.clone();
+                let team_str = team_key.to_string();
+                crate::spawn_task(async move {
+                    let mut d = dm_clone.write().await;
+                    d.set_slot_position(&team_str, slot_index, &new_pos);
+                });
             }
         }
     }
