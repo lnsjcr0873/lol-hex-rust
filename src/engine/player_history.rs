@@ -160,6 +160,7 @@ pub struct CachedPlayerRecord {
     pub summoner_name: String,
     pub tier_str: String,
     pub tier: String,
+    pub division: String,
     pub tier_color: String,
     pub lp: i32,
     pub ranked_wins: i32,
@@ -1363,12 +1364,26 @@ impl PlayerHistoryManager {
 
         let top_champions = top_champs.iter().map(|tc| tc.champion_id.to_string()).collect();
 
-        let division = record.raw_ranked
-            .get("solo")
-            .and_then(|s| s.get("division"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let division = if !record.division.is_empty() {
+            record.division.clone()
+        } else {
+            let div_str = record.raw_ranked
+                .get("queueMap")
+                .and_then(|qm| qm.get("RANKED_SOLO_5x5"))
+                .and_then(|s| s.get("division"))
+                .or_else(|| {
+                    record.raw_ranked
+                        .get("solo")
+                        .and_then(|s| s.get("division"))
+                })
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if div_str == "NA" || div_str == "NONE" {
+                String::new()
+            } else {
+                div_str.to_string()
+            }
+        };
 
         PlayerTacticalProfile {
             tier: record.tier.clone(),
@@ -2065,6 +2080,7 @@ impl PlayerHistoryManager {
             tier_str,
             tier_color: get_tier_color(&raw_tier).to_string(),
             tier: raw_tier,
+            division: raw_division.clone(),
             lp,
             ranked_wins,
             ranked_losses,
@@ -2108,6 +2124,7 @@ impl PlayerHistoryManager {
         let final_record = if let Some(existing) = guard.get_mut(puuid) {
             existing.tier_str = record.tier_str.clone();
             existing.tier = record.tier.clone();
+            existing.division = record.division.clone();
             existing.tier_color = record.tier_color.clone();
             existing.lp = record.lp;
             existing.ranked_wins = record.ranked_wins;
@@ -2218,11 +2235,14 @@ impl PlayerHistoryManager {
             });
         }
 
+        let mock_division = cfg.1.split_whitespace().nth(1).unwrap_or("").to_string();
+
         CachedPlayerRecord {
             puuid: format!("mock_puuid_{}", slot_index),
             summoner_name: name.to_string(),
             tier_str: cfg.1.to_string(),
             tier: cfg.0.to_string(),
+            division: mock_division.clone(),
             tier_color: get_tier_color(cfg.0).to_string(),
             lp: cfg.2,
             ranked_wins: (cfg.3 * 100.0).round() as i32,
@@ -2241,7 +2261,7 @@ impl PlayerHistoryManager {
             raw_ranked: json!({
                 "solo": {
                     "tier": cfg.0,
-                    "division": "III",
+                    "division": mock_division,
                     "tier_str": cfg.1,
                     "lp": cfg.2,
                     "wins": (cfg.3 * 100.0).round() as i32,
