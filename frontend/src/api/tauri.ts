@@ -23,13 +23,29 @@ export const isTauri = (): boolean => {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 };
 
-async function safeInvoke<T>(command: string, args?: Record<string, unknown>, fallback?: T): Promise<T> {
+interface SafeInvokeOptions {
+  /** If true, return fallback even when running in Tauri container if invoke throws an error */
+  allowFallbackOnTauriError?: boolean;
+}
+
+async function safeInvoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+  fallback?: T,
+  options?: SafeInvokeOptions
+): Promise<T> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<T>(command, args);
     } catch (err) {
-      console.warn(`[Tauri IPC] '${command}' failed, falling back to mock:`, err);
+      console.warn(`[Tauri IPC] '${command}' failed:`, err);
+      if (options?.allowFallbackOnTauriError) {
+        if (fallback !== undefined) return fallback;
+      }
+      if (options?.allowFallbackOnTauriError === false) {
+        throw err;
+      }
       if (fallback !== undefined) return fallback;
       throw err;
     }
@@ -154,11 +170,7 @@ export async function getMatchHistory(
       begIndex,
       endIndex,
       page,
-      pageSize,
-      queue_id: queueId ?? null,
-      beg_index: begIndex,
-      end_index: endIndex,
-      page_size: pageSize
+      pageSize
     },
     []
   );
@@ -194,13 +206,11 @@ export async function getRawMatchHistory(
     {
       puuid,
       queueId: queueId ?? null,
-      queue_id: queueId ?? null,
       begIndex,
-      beg_index: begIndex,
-      endIndex,
-      end_index: endIndex
+      endIndex
     },
-    isTauri() ? tauriFailureFallback : webMockFallback
+    isTauri() ? tauriFailureFallback : webMockFallback,
+    { allowFallbackOnTauriError: isMockPuuid }
   );
 }
 
@@ -211,21 +221,16 @@ export async function getRawMatchTimeline(gameId: number): Promise<GameTimeline>
 
   return safeInvoke<GameTimeline>(
     'get_raw_match_timeline',
-    {
-      gameId,
-      game_id: gameId
-    },
-    isTauri() ? tauriFailureFallback : webMockFallback
+    { gameId },
+    isTauri() ? tauriFailureFallback : webMockFallback,
+    { allowFallbackOnTauriError: isMockGame }
   );
 }
 
 export async function getRawMatchDetail(gameId: number): Promise<any> {
   return safeInvoke<any>(
     'get_raw_match_detail',
-    {
-      gameId,
-      game_id: gameId
-    },
+    { gameId },
     null
   );
 }
