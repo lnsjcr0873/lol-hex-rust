@@ -61,13 +61,19 @@ import { NPopover } from 'naive-ui'
 import type { EnhancedPlayerCard } from '../../../types'
 import { evaluateTacticalTags, type EvaluatedTag, type TacticalTagContext } from '../../../../../shared/data-adapter/tactical-tags'
 import { adaptPlayerCardToAggregatedAnalysis } from '../../../utils/player-adapter'
-import { useOngoingGamePanel } from '../../../context'
+import { useOngoingGamePanelOptional } from '../../../context'
 
 const props = defineProps<{
   player: EnhancedPlayerCard
+  selfPuuid?: string
 }>()
 
-const { selfPuuid } = useOngoingGamePanel()
+const ongoingContext = useOngoingGamePanelOptional()
+const resolvedSelfPuuid = computed(() => {
+  if (props.selfPuuid) return props.selfPuuid
+  if (ongoingContext?.selfPuuid?.value) return ongoingContext.selfPuuid.value
+  return ''
+})
 
 const tagEmojiMap: Record<string, string> = {
   'self': '👤',
@@ -119,10 +125,11 @@ const hasPopover = (tag: EvaluatedTag) => {
 }
 
 const tags = computed<EvaluatedTag[]>(() => {
+  if (!props.player) return []
   const analysis = adaptPlayerCardToAggregatedAnalysis(props.player)
   const ctx: TacticalTagContext = {
     puuid: props.player.puuid,
-    selfPuuid: selfPuuid.value,
+    selfPuuid: resolvedSelfPuuid.value,
     analysis,
     summoner: {
       gameName: props.player.game_name,

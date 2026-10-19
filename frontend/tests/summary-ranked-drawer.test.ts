@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { isUnrankedTier, formatTierName, isMasterPlus } from '../src/components/player-tab/widgets/RankedPane.vue'
 import { QUEUE_NAME_MAP } from '../src/components/player-tab/SummaryPane.vue'
 import { createSynthesizedJungleAnalysis } from '../src/components/ongoing-game-panel/utils/player-adapter'
+import { useOngoingGamePanel, useOngoingGamePanelOptional } from '../src/components/ongoing-game-panel/context'
 
 describe('RankedPane Unranked & Tier Formatting Tests', () => {
   it('correctly identifies unranked tiers without false negatives', () => {
@@ -216,5 +217,25 @@ describe('SummaryPane Queue Mapping & Dynamic Computations', () => {
     expect(analysis!.firstClearCamp.blueGames).toBeGreaterThan(0)
     expect(analysis!.minutePositions.length).toBeGreaterThan(0)
     expect(analysis!.gankPositions.length).toBeGreaterThan(0)
+  })
+
+  it('safely handles missing OngoingGamePanel context without throwing in standalone drawers', () => {
+    // Calling useOngoingGamePanel outside provider throws
+    expect(() => useOngoingGamePanel()).toThrow('useOngoingGamePanel must be used within OngoingGamePanel')
+
+    // Calling useOngoingGamePanelOptional outside provider returns null safely
+    const optionalCtx = useOngoingGamePanelOptional()
+    expect(optionalCtx).toBeNull()
+
+    // Standalone resolution helper behaves safely when context is null
+    const resolveSafeSelfPuuid = (propSelfPuuid?: string, ctx: any = null) => {
+      if (propSelfPuuid) return propSelfPuuid
+      if (ctx?.selfPuuid?.value) return ctx.selfPuuid.value
+      return ''
+    }
+
+    expect(resolveSafeSelfPuuid(undefined, null)).toBe('')
+    expect(resolveSafeSelfPuuid('custom-puuid', null)).toBe('custom-puuid')
+    expect(resolveSafeSelfPuuid(undefined, { selfPuuid: { value: 'ctx-puuid' } })).toBe('ctx-puuid')
   })
 })

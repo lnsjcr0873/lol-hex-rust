@@ -184,8 +184,8 @@ export function mapLcuDataToPerks(participant: Participant): MatchParticipantPer
 }
 
 export function resolveParticipantPosition(
-  stats?: { teamPosition?: string; individualPosition?: string; role?: string; lane?: string },
-  timeline?: { lane?: string; role?: string }
+  stats?: { teamPosition?: string; individualPosition?: string; role?: string; lane?: string; [key: string]: any },
+  timeline?: { lane?: string; role?: string; [key: string]: any }
 ): string | null {
   const rawPos = stats?.teamPosition || stats?.individualPosition
   if (rawPos && rawPos !== 'NONE' && rawPos !== 'Invalid') {

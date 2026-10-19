@@ -200,6 +200,7 @@
     <PlayerDetailDrawer
       v-if="selectedPlayer"
       :player="selectedPlayer"
+      :self-puuid="matchData?.my_puuid || (isDemoMode ? 'p-blue-1' : '')"
       @close="selectedPlayer = null"
       @inspect-history="handleInspectHistory"
     />

@@ -1,4 +1,4 @@
-import { InjectionKey, Ref, inject, provide } from 'vue'
+import { InjectionKey, Ref, inject, provide, hasInjectionContext } from 'vue'
 import type { EnhancedPlayerCard } from './types'
 
 export interface OngoingGamePanelContext {
@@ -14,11 +14,18 @@ export interface OngoingGamePanelContext {
 export const OngoingGamePanelKey: InjectionKey<OngoingGamePanelContext> = Symbol('OngoingGamePanelKey')
 
 export function useOngoingGamePanel(): OngoingGamePanelContext {
-  const ctx = inject(OngoingGamePanelKey)
+  const ctx = hasInjectionContext() ? inject(OngoingGamePanelKey, null) : null
   if (!ctx) {
     throw new Error('useOngoingGamePanel must be used within OngoingGamePanel')
   }
   return ctx
+}
+
+export function useOngoingGamePanelOptional(): OngoingGamePanelContext | null {
+  if (!hasInjectionContext()) {
+    return null
+  }
+  return inject(OngoingGamePanelKey, null) ?? null
 }
 
 export function provideOngoingGamePanel(context: OngoingGamePanelContext) {

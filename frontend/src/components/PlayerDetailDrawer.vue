@@ -59,7 +59,7 @@
           <h4 class="text-xs font-medium text-slate-300">21 维战术特征标签</h4>
           <span class="text-[10px] text-cyan-400">实时算法判定</span>
         </div>
-        <TagsArea :player="player" />
+        <TagsArea :player="player" :self-puuid="selfPuuid" />
       </div>
 
       <!-- Akari Score 9 Dimensions Breakdown -->
@@ -160,6 +160,7 @@ import { adaptPlayerCardToAggregatedAnalysis, createSynthesizedJungleAnalysis } 
 
 const props = defineProps<{
   player: EnhancedPlayerCard | null
+  selfPuuid?: string
 }>()
 
 defineEmits<{
