@@ -65,39 +65,18 @@
 </template>
 
 <script lang="ts">
-export function isUnrankedTier(tier?: string | null): boolean {
-  if (!tier) return true
-  const upper = tier.trim().toUpperCase()
-  return upper === 'UNRANKED' || upper === 'NONE' || upper === 'NA' || upper === ''
-}
-
-export function formatTierName(tier?: string): string {
-  if (!tier || isUnrankedTier(tier)) return '未定级'
-  const trimmed = tier.trim().toUpperCase()
-  const map: Record<string, string> = {
-    IRON: '黑铁',
-    BRONZE: '青铜',
-    SILVER: '白银',
-    GOLD: '黄金',
-    PLATINUM: '铂金',
-    EMERALD: '翡翠',
-    DIAMOND: '钻石',
-    MASTER: '大师',
-    GRANDMASTER: '宗师',
-    CHALLENGER: '王者'
-  }
-  return map[trimmed] || tier.trim()
-}
-
-export function isMasterPlus(tier?: string): boolean {
-  if (!tier) return false
-  const upper = tier.trim().toUpperCase()
-  return upper === 'MASTER' || upper === 'GRANDMASTER' || upper === 'CHALLENGER'
-}
+export {
+  TIER_NAMES,
+  isUnrankedTier,
+  formatTierName,
+  isMasterPlus,
+  formatTier
+} from '@/shared/utils/ranked'
 </script>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { isUnrankedTier, formatTierName, isMasterPlus } from '@/shared/utils/ranked'
 
 const props = defineProps<{
   profile?: any

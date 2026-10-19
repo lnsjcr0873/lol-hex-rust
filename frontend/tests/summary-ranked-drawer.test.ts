@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { isUnrankedTier, formatTierName, isMasterPlus } from '../src/components/player-tab/widgets/RankedPane.vue'
+import { isUnrankedTier, formatTierName, isMasterPlus, formatTier } from '../src/components/player-tab/widgets/RankedPane.vue'
+import { mapToImagePosition } from '../src/components/match-card/utils/game-map'
 import { QUEUE_NAME_MAP } from '../src/components/player-tab/SummaryPane.vue'
 import { createSynthesizedJungleAnalysis } from '../src/components/ongoing-game-panel/utils/player-adapter'
 import { useOngoingGamePanel, useOngoingGamePanelOptional } from '../src/components/ongoing-game-panel/context'
@@ -45,6 +46,32 @@ describe('RankedPane Unranked & Tier Formatting Tests', () => {
     expect(isMasterPlus('DIAMOND')).toBe(false)
     expect(isMasterPlus('GOLD')).toBe(false)
     expect(isMasterPlus(undefined)).toBe(false)
+  })
+
+  it('unifies formatTier across PlayerDetailDrawer, PlayerInfoCardHeader and RankedPane', () => {
+    expect(formatTier('UNRANKED')).toBe('未定级')
+    expect(formatTier(undefined)).toBe('未定级')
+    expect(formatTier('DIAMOND', 'IV')).toBe('钻石 IV')
+    expect(formatTier('DIAMOND', '钻石 IV')).toBe('钻石 IV')
+    expect(formatTier('DIAMOND', 'DIAMOND IV')).toBe('钻石 IV')
+    expect(formatTier('DIAMOND', 'NA')).toBe('钻石')
+    expect(formatTier('DIAMOND', '')).toBe('钻石')
+    // Master+ omits division
+    expect(formatTier('MASTER', 'I')).toBe('大师')
+    expect(formatTier('GRANDMASTER', 'I')).toBe('宗师')
+    expect(formatTier('CHALLENGER', 'I')).toBe('王者')
+  })
+})
+
+describe('Game Map Coordinate Mapping & Deduplication Tests', () => {
+  it('correctly maps valid and invalid coordinates safely', () => {
+    const pos = mapToImagePosition(7410, 7440, 260, 260, 11)
+    expect(pos.left).toBeGreaterThan(0)
+    expect(pos.top).toBeGreaterThan(0)
+
+    // Invalid coordinates safely return { left: 0, top: 0 }
+    expect(mapToImagePosition(NaN, 100, 260, 260, 11)).toEqual({ left: 0, top: 0 })
+    expect(mapToImagePosition(100, Infinity, 260, 260, 11)).toEqual({ left: 0, top: 0 })
   })
 })
 

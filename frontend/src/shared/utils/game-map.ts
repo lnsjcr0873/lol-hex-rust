@@ -22,11 +22,15 @@ export function mapToImagePosition(
   y: number,
   imageWidth: number,
   imageHeight: number,
-  mapId: MapId = 11,
+  mapId: number = 11,
   options?: { invertY?: boolean; clamp?: boolean }
 ) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return { left: 0, top: 0 }
+  }
+
   const { invertY = true, clamp = true } = options || {}
-  const domain = getMapDomain(mapId)
+  const domain = getMapDomain(mapId as MapId)
 
   const rangeX = domain.maxX - domain.minX
   const rangeY = domain.maxY - domain.minY
@@ -40,6 +44,9 @@ export function mapToImagePosition(
 
   let left = normalizedX * imageWidth
   let top = normalizedY * imageHeight
+
+  if (!Number.isFinite(left)) left = 0
+  if (!Number.isFinite(top)) top = 0
 
   if (clamp) {
     if (left < 0) left = 0

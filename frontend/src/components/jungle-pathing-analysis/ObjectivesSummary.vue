@@ -57,10 +57,10 @@
 
 <script setup lang="ts">
 import type { AggregatedJungleAnalysis } from '../../shared/data-adapter/analysis/player'
-import BaronIcon from '../icons/BaronIcon.vue'
-import DragonIcon from '../icons/DragonIcon.vue'
-import RiftHeraldIcon from '../icons/RiftHeraldIcon.vue'
-import VoidGrubIcon from '../icons/VoidGrubIcon.vue'
+import BaronIcon from '../match-card/icons/Baron.vue'
+import DragonIcon from '../match-card/icons/Dragon.vue'
+import RiftHeraldIcon from '../match-card/icons/RiftHerald.vue'
+import VoidGrubIcon from '../match-card/icons/VoidGrub.vue'
 import { formatTime, roundToTenth } from './format'
 
 defineProps<{

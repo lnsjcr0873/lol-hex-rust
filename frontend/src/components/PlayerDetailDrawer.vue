@@ -157,6 +157,7 @@ import { AkariScorePopoverContent } from './akari-score'
 import { JunglePathingContent } from './jungle-pathing-analysis'
 import TagsArea from './ongoing-game-panel/widgets/player-info-card/player-card-tags/TagsArea.vue'
 import { adaptPlayerCardToAggregatedAnalysis, createSynthesizedJungleAnalysis } from './ongoing-game-panel/utils/player-adapter'
+import { formatTier } from '@/shared/utils/ranked'
 
 const props = defineProps<{
   player: EnhancedPlayerCard | null
@@ -167,28 +168,6 @@ defineEmits<{
   (e: 'close'): void
   (e: 'inspect-history', puuid: string): void
 }>()
-
-const formatTier = (tier?: string, div?: string) => {
-  if (!tier || tier === 'UNRANKED' || tier === 'NONE') return '未定级'
-  const tierMap: Record<string, string> = {
-    IRON: '黑铁',
-    BRONZE: '青铜',
-    SILVER: '白银',
-    GOLD: '黄金',
-    PLATINUM: '铂金',
-    EMERALD: '翡翠',
-    DIAMOND: '钻石',
-    MASTER: '大师',
-    GRANDMASTER: '宗师',
-    CHALLENGER: '王者'
-  }
-  const translated = tierMap[tier.toUpperCase()] || tier
-  if (!div || div === 'NA' || div === 'NONE' || div.trim() === '') {
-    return translated
-  }
-  const cleanDiv = div.replace(translated, '').replace(new RegExp(`^${tier}\\s*`, 'i'), '').trim()
-  return cleanDiv ? `${translated} ${cleanDiv}` : translated
-}
 
 const sampleCount = computed<number>(() => {
   if (props.player?.recent_games_count !== undefined && props.player.recent_games_count > 0) {

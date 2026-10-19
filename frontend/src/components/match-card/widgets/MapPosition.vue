@@ -38,7 +38,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { mapToImagePosition } from '../utils/game-map'
+import { mapToImagePosition } from '@shared/utils/game-map'
 
 const props = withDefaults(
   defineProps<{

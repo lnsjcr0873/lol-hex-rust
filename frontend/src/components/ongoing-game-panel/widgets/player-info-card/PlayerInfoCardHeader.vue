@@ -120,6 +120,7 @@ import ChampionMasteryContent from '../../../champion-analysis/ChampionMasteryCo
 import { adaptPlayerCardToAggregatedAnalysis } from '../../utils/player-adapter'
 import { useOngoingGamePanel } from '../../context'
 import type { ChampionAnalysisMastery } from '../../../champion-analysis/types'
+import { formatTier } from '@/shared/utils/ranked'
 
 const props = defineProps<{
   player: EnhancedPlayerCard
@@ -183,29 +184,6 @@ const rankMedal = computed(() => {
   }
   return RANKED_MEDAL_MAP[tierKey]
 })
-
-const formatTier = (tier?: string, div?: string) => {
-  if (!tier || tier === 'UNRANKED') return '未定级'
-  const tierMap: Record<string, string> = {
-    IRON: '黑铁',
-    BRONZE: '青铜',
-    SILVER: '白银',
-    GOLD: '黄金',
-    PLATINUM: '铂金',
-    EMERALD: '翡翠',
-    DIAMOND: '钻石',
-    MASTER: '大师',
-    GRANDMASTER: '宗师',
-    CHALLENGER: '王者'
-  }
-  const translated = tierMap[tier.toUpperCase()] || tier
-  if (!div || div === 'NA' || div === 'NONE' || div.trim() === '') {
-    return translated
-  }
-  // Sanitize div: if div already contains tier name (e.g. "白银 I" or "SILVER I"), remove the tier prefix
-  const cleanDiv = div.replace(translated, '').replace(new RegExp(`^${tier}\\s*`, 'i'), '').trim()
-  return cleanDiv ? `${translated} ${cleanDiv}` : translated
-}
 
 const playerMastery = computed<ChampionAnalysisMastery | null>(() => {
   if (props.player.masteries && props.player.masteries.length > 0) {
