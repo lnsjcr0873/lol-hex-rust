@@ -1,4 +1,6 @@
 // Resource resolution helper for LoL static game data with reliable CDNs & fallbacks
+import { SPELL_NAME_MAP, type SummonerSpellInfo } from '@shared/constants/summoner-spells'
+export { SPELL_NAME_MAP, type SummonerSpellInfo }
 
 export const CHAMPION_NAMES_MAP: Record<number, string> = {
   266: '暗裔剑魔',
@@ -162,7 +164,15 @@ export const CHAMPION_NAMES_MAP: Record<number, string> = {
   221: '祖安花火',
   115: '爆破鬼才',
   143: '荆棘之兴',
-  142: '暮光星灵'
+  142: '暮光星灵',
+  711: '愁云使者',
+  799: '铁血狼母',
+  800: '议员',
+  888: '炼金男爵',
+  893: '奥秘术士',
+  895: '不羁之悦',
+  901: '炽炎雏龙',
+  902: '明烛'
 }
 
 export function getChampionName(champId: number): string {
@@ -200,24 +210,6 @@ export function getItemFallbackUrl(itemId: number): string {
   return `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/item-icons/${itemId}.png`
 }
 
-export const SPELL_NAME_MAP: Record<number, { name: string; iconKey: string }> = {
-  1: { name: '净化', iconKey: 'summoner_boost' },
-  3: { name: '虚弱', iconKey: 'summoner_exhaust' },
-  4: { name: '闪现', iconKey: 'summoner_flash' },
-  6: { name: '幽灵疾步', iconKey: 'summoner_haste' },
-  7: { name: '治疗术', iconKey: 'summoner_heal' },
-  11: { name: '惩戒', iconKey: 'summoner_smite' },
-  12: { name: '传送', iconKey: 'summoner_teleport' },
-  13: { name: '清晰术', iconKey: 'summoner_mana' },
-  14: { name: '点燃', iconKey: 'summoner_ignite' },
-  21: { name: '屏障', iconKey: 'summoner_barrier' },
-  30: { name: '王者魄罗', iconKey: 'summoner_poro_recall' },
-  31: { name: '魄罗投掷', iconKey: 'summoner_poro_throw' },
-  32: { name: '雪球', iconKey: 'summoner_mark' },
-  39: { name: '雪球标记', iconKey: 'summoner_mark' },
-  2201: { name: '逃跑', iconKey: 'summoner_cherry_flee' },
-  2202: { name: '闪现', iconKey: 'summoner_cherry_flash' }
-}
 
 export const SPELL_GTIMG_MAP: Record<number, string> = {
   1: 'SummonerBoost.png',
