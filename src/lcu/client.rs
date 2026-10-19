@@ -584,6 +584,34 @@ impl LcuClient {
         None
     }
 
+    pub async fn get_player_challenges(&self, puuid: &str) -> Option<Value> {
+        if !self.ensure_credentials().await {
+            return None;
+        }
+        let port = match self.get_port().await {
+            Some(p) => p,
+            None => return None,
+        };
+        let headers = match self.get_auth_header().await {
+            Some(h) => h,
+            None => return None,
+        };
+
+        let protocol = self.get_protocol().await;
+        let url = if puuid.is_empty() || puuid.starts_with("mock_") {
+            format!("{}://127.0.0.1:{}/lol-challenges/v1/summary-player-data/local-player", protocol, port)
+        } else {
+            format!("{}://127.0.0.1:{}/lol-challenges/v1/summary-player-data/player/{}", protocol, port, puuid)
+        };
+
+        if let Some(res) = self.handle_response(self.client.get(&url).headers(headers).send().await).await {
+            if let Ok(val) = res.json::<Value>().await {
+                return Some(val);
+            }
+        }
+        None
+    }
+
     pub async fn apply_summoner_spells(&self, spell1_id: i64, spell2_id: i64) -> bool {
         if !self.ensure_credentials().await {
             return false;

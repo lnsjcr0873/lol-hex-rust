@@ -239,6 +239,20 @@ export async function getChampionMastery(puuid?: string): Promise<any[]> {
   return res || [];
 }
 
+export async function getPlayerChallenges(puuid?: string): Promise<any> {
+  const fallback = {
+    playerChallenges: [
+      { id: 505001, currentValue: 168 },
+      { id: 510001, currentValue: 145 },
+      { id: 510011, currentValue: 38 },
+      { id: 504003, currentValue: 12 },
+      { id: 504002, currentValue: 88 },
+      { id: 504004, currentValue: 45 }
+    ]
+  };
+  return safeInvoke<any>('get_player_challenges', { puuid: puuid || '' }, fallback);
+}
+
 export async function searchSummoner(name: string): Promise<any> {
   return safeInvoke('search_summoner', { name }, null);
 }

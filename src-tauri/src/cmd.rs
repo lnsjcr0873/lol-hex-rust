@@ -530,6 +530,35 @@ pub async fn get_champion_mastery(
 }
 
 #[tauri::command]
+pub async fn get_player_challenges(
+    state: State<'_, TauriAppState>,
+    puuid: Option<String>,
+) -> Result<Value, String> {
+    let p = puuid.unwrap_or_default();
+    let target = if p == "me" || p == "current" {
+        String::new()
+    } else {
+        p
+    };
+    if target.starts_with("mock_") {
+        return Ok(json!({
+            "playerChallenges": [
+                { "id": 505001, "currentValue": 168 },
+                { "id": 510001, "currentValue": 145 },
+                { "id": 510011, "currentValue": 38 },
+                { "id": 504003, "currentValue": 12 },
+                { "id": 504002, "currentValue": 88 },
+                { "id": 504004, "currentValue": 45 }
+            ]
+        }));
+    }
+    if let Some(challenges) = state.lcu.get_player_challenges(&target).await {
+        return Ok(challenges);
+    }
+    Ok(json!({ "playerChallenges": [] }))
+}
+
+#[tauri::command]
 pub async fn get_match_detail(
     state: State<'_, TauriAppState>,
     game_id: i64,

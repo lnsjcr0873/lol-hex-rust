@@ -35,7 +35,7 @@
       <div class="max-w-[1580px] mx-auto grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-5 items-start">
         <!-- Left Sidebar Sticky Content -->
         <div class="sticky top-0 space-y-3">
-          <NormalTagBlock :privacy="profile?.privacy" :tags="tags" />
+          <NormalTagBlock :privacy="profile?.privacy" :tags="tags" @delete-tag="handleDeleteTag" />
           <SummaryPane
             :analysis="analysis"
             :profile-summary="profile?.recent_summary"
@@ -208,6 +208,7 @@ import {
   getRawMatchTimeline,
   getRawMatchDetail,
   getChampionMastery,
+  getPlayerChallenges,
   getMatchDetail,
   getMatchTimeline,
   getMockSummonerProfile
@@ -216,6 +217,8 @@ import { getMockRawMatchHistory, getMockRawMatchTimeline } from '../../api/mockD
 import type { LcuOrSgpGameSummary, LcuOrSgpGameDetails } from '@shared/data-adapter/wrapper'
 import type { Game, GameTimeline, MatchHistory, Participant, ParticipantIdentity } from '@shared/types/league-client/match-history'
 import { analyzeGames } from '@shared/data-adapter/analysis/player'
+import { evaluateTacticalTags } from '@shared/data-adapter/tactical-tags'
+import { QUEUE_NAME_MAP } from '../match-card/utils/resources'
 import PlayerTabHeader from './PlayerTabHeader.vue'
 import NormalTagBlock from './NormalTagBlock.vue'
 import SummaryPane from './SummaryPane.vue'
@@ -224,7 +227,7 @@ import PlayerChallenges from './widgets/PlayerChallenges.vue'
 import RecentlyPlayers from './RecentlyPlayers.vue'
 import MatchHistoryPagination from './widgets/MatchHistoryPagination.vue'
 import { MatchHistoryCard, provideMatchHistoryCardViewport } from './widgets/match-history-card'
-import type { PlayerTabItem } from '../../stores/player-tabs'
+import { usePlayerTabsStore, type PlayerTabItem } from '../../stores/player-tabs'
 import MatchHistoryFilters from './widgets/match-history-filters/MatchHistoryFilters.vue'
 import CollectModeProgress from './widgets/match-history-filters/CollectModeProgress.vue'
 import {
@@ -243,7 +246,11 @@ provideMatchHistoryCardViewport({ active: true })
 const props = defineProps<{
   tab: PlayerTabItem
   isActive?: boolean
+  selfPuuid?: string
 }>()
+
+const playerTabsStore = usePlayerTabsStore()
+const effectiveSelfPuuid = computed(() => props.selfPuuid || playerTabsStore.tabs.find(t => t.isSelf)?.puuid || '')
 
 const emit = defineEmits<{
   selectSummoner: [puuid: string]
@@ -916,14 +923,154 @@ async function loadData() {
         emit('profileUpdated', p)
         realMasteries.value = (await getChampionMastery(p.puuid)) || []
       }
+      try {
+        const cData = await getPlayerChallenges(props.tab.puuid)
+        challengesData.value = cData?.playerChallenges ? cData : { playerChallenges: [] }
+      } catch (e) {
+        console.warn('Failed to load player challenges:', e)
+        challengesData.value = { playerChallenges: [] }
+      }
     }
     await fetchPageMatches(1, pageSize.value, activeQueue.value)
+    updateEncounteredGames()
+    loadPlayerTags()
   } catch (err) {
     console.error('loadData error for tab:', props.tab.id, err)
   } finally {
     isLoadingMatches.value = false
   }
 }
+
+function loadPlayerTags() {
+  const targetPuuid = profile.value.puuid || props.tab.puuid
+  if (!targetPuuid) {
+    tags.value = []
+    return
+  }
+
+  const customTags: Array<{ tag: string; isCustom?: boolean }> = []
+  try {
+    const key = `hexbrain_player_tags_${targetPuuid}`
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item?.tag) customTags.push({ tag: item.tag, isCustom: true })
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const tacticalList: Array<{ tag: string }> = []
+  if (analysis.value) {
+    try {
+      const evaluated = evaluateTacticalTags({
+        puuid: targetPuuid,
+        selfPuuid: effectiveSelfPuuid.value,
+        analysis: analysis.value,
+        encounteredCount: encounteredGames.value.length
+      })
+      for (const t of evaluated.slice(0, 3)) {
+        tacticalList.push({ tag: `${t.label}: ${t.description || ''}` })
+      }
+    } catch (e) {
+      console.warn('Failed to evaluate tactical tags:', e)
+    }
+  }
+
+  tags.value = [...customTags, ...tacticalList]
+}
+
+function handleDeleteTag(idx: number) {
+  const targetPuuid = profile.value.puuid || props.tab.puuid
+  tags.value.splice(idx, 1)
+  if (targetPuuid) {
+    try {
+      const remainingCustom = tags.value.filter((t: any) => t.isCustom)
+      localStorage.setItem(`hexbrain_player_tags_${targetPuuid}`, JSON.stringify(remainingCustom))
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function updateEncounteredGames() {
+  if (isDemoMode.value) {
+    encounteredGames.value = [
+      {
+        gameId: 999901,
+        queueName: '排位赛(单双)',
+        date: '04-15 19:30',
+        isOpponent: true,
+        selfChampionId: 103,
+        selfWin: true,
+        selfKda: '12/2/8',
+        targetChampionId: 157,
+        targetWin: false,
+        targetKda: '3/8/4'
+      },
+      {
+        gameId: 999902,
+        queueName: '极地大乱斗',
+        date: '04-14 21:10',
+        isOpponent: false,
+        selfChampionId: 222,
+        selfWin: true,
+        selfKda: '18/4/15',
+        targetChampionId: 81,
+        targetWin: true,
+        targetKda: '14/5/12'
+      }
+    ]
+    return
+  }
+
+  const selfPuuid = effectiveSelfPuuid.value
+  const targetPuuid = profile.value.puuid || props.tab.puuid
+  if (!selfPuuid || !targetPuuid || selfPuuid === targetPuuid || !rawGames.value || rawGames.value.length === 0) {
+    encounteredGames.value = []
+    return
+  }
+
+  const result: any[] = []
+  for (const g of rawGames.value) {
+    const sIdent = g.participantIdentities?.find(i => i.player?.puuid === selfPuuid)
+    const tIdent = g.participantIdentities?.find(i => i.player?.puuid === targetPuuid)
+    if (sIdent && tIdent) {
+      const sPart = g.participants?.find(p => p.participantId === sIdent.participantId)
+      const tPart = g.participants?.find(p => p.participantId === tIdent.participantId)
+      if (sPart && tPart) {
+        const isOpponent = (sPart as any).teamId !== (tPart as any).teamId
+        const sStats = sPart.stats || ({} as any)
+        const tStats = tPart.stats || ({} as any)
+        const dateStr = g.gameCreation
+          ? new Date(g.gameCreation).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+          : ''
+        result.push({
+          gameId: g.gameId,
+          queueName: QUEUE_NAME_MAP[g.queueId] || '匹配对局',
+          date: dateStr,
+          isOpponent,
+          selfChampionId: sPart.championId,
+          selfWin: Boolean(sStats.win),
+          selfKda: `${sStats.kills ?? 0}/${sStats.deaths ?? 0}/${sStats.assists ?? 0}`,
+          targetChampionId: tPart.championId,
+          targetWin: Boolean(tStats.win),
+          targetKda: `${tStats.kills ?? 0}/${tStats.deaths ?? 0}/${tStats.assists ?? 0}`
+        })
+      }
+    }
+  }
+  encounteredGames.value = result
+}
+
+watch([() => rawGames.value, () => analysis.value], () => {
+  updateEncounteredGames()
+  loadPlayerTags()
+})
 
 function refreshData() {
   loadData()

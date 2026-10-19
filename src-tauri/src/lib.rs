@@ -288,6 +288,7 @@ pub fn run() {
             cmd::get_match_history,
             cmd::get_raw_match_history,
             cmd::get_champion_mastery,
+            cmd::get_player_challenges,
             cmd::get_match_detail,
             cmd::get_raw_match_detail,
             cmd::get_match_timeline,

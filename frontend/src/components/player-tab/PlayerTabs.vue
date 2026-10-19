@@ -23,6 +23,7 @@
           v-for="tab in playerTabsStore.tabs"
           :key="tab.id"
           :tab="tab"
+          :self-puuid="selfProfile?.puuid || playerTabsStore.tabs.find(t => t.isSelf)?.puuid"
           :is-active="tab.id === playerTabsStore.currentTabId"
           v-show="tab.id === playerTabsStore.currentTabId"
           :ref="(el) => setTabRef(tab.id, el)"
