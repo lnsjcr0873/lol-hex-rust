@@ -321,6 +321,27 @@ pub fn resolve_config_path(path: &str) -> std::path::PathBuf {
     p.to_path_buf()
 }
 
+fn save_config_bytes_atomic(path_str: &str, json_str: &str) -> bool {
+    let path = Path::new(path_str);
+    if save_atomic(path, json_str).is_ok() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let dir = std::path::PathBuf::from(appdata).join("HexBrain");
+            let _ = std::fs::create_dir_all(&dir);
+            if let Some(fname) = path.file_name() {
+                let fallback = dir.join(fname);
+                if save_atomic(&fallback, json_str).is_ok() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 impl ConfigManager {
     pub fn new(path: &str) -> Self {
         let resolved = resolve_config_path(path);
@@ -365,27 +386,21 @@ impl ConfigManager {
     }
 
     pub async fn save_to_disk(&self) -> bool {
-        let cfg = self.config.read().await;
-        if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
-            let path = Path::new(&self.config_file_path);
-            if save_atomic(path, &json_str).is_ok() {
-                return true;
-            }
-            #[cfg(windows)]
-            {
-                if let Ok(appdata) = std::env::var("APPDATA") {
-                    let dir = std::path::PathBuf::from(appdata).join("HexBrain");
-                    let _ = std::fs::create_dir_all(&dir);
-                    if let Some(fname) = path.file_name() {
-                        let fallback = dir.join(fname);
-                        if save_atomic(&fallback, &json_str).is_ok() {
-                            return true;
-                        }
-                    }
-                }
-            }
+        let (json_str, file_path) = {
+            let cfg = self.config.read().await;
+            (
+                serde_json::to_string_pretty(&*cfg).unwrap_or_default(),
+                self.config_file_path.clone(),
+            )
+        };
+        if json_str.is_empty() {
+            return false;
         }
-        false
+        tokio::task::spawn_blocking(move || {
+            save_config_bytes_atomic(&file_path, &json_str)
+        })
+        .await
+        .unwrap_or(false)
     }
 
     pub async fn update(
@@ -400,55 +415,55 @@ impl ConfigManager {
         auto_accept_match: Option<bool>,
         auto_accept_delay_seconds: Option<u64>,
     ) -> RecommendationConfig {
-        let mut cfg = self.config.write().await;
-        if let Some(p) = preset {
-            let presets = get_preset_definitions();
-            if let Some(def) = presets.get(&p) {
-                cfg.current_preset = p;
-                cfg.hex_synergy_weight = def.hex_synergy_weight;
-                cfg.archetype_strictness = def.archetype_strictness;
-                cfg.counter_intensity = def.counter_intensity;
-                cfg.trio_mode = def.trio_mode.clone();
+        let result = {
+            let mut cfg = self.config.write().await;
+            if let Some(p) = preset {
+                let presets = get_preset_definitions();
+                if let Some(def) = presets.get(&p) {
+                    cfg.current_preset = p;
+                    cfg.hex_synergy_weight = def.hex_synergy_weight;
+                    cfg.archetype_strictness = def.archetype_strictness;
+                    cfg.counter_intensity = def.counter_intensity;
+                    cfg.trio_mode = def.trio_mode.clone();
+                }
             }
-        }
-        if let Some(rc) = resolve_conflicts {
-            cfg.resolve_conflicts = rc;
-        }
-        if let Some(hw) = hex_synergy_weight {
-            if !hw.is_nan() && !hw.is_infinite() {
-                cfg.hex_synergy_weight = hw.clamp(0.0, 3.0);
+            if let Some(rc) = resolve_conflicts {
+                cfg.resolve_conflicts = rc;
             }
-        }
-        if let Some(as_) = archetype_strictness {
-            if !as_.is_nan() && !as_.is_infinite() {
-                cfg.archetype_strictness = as_.clamp(0.0, 1.0);
+            if let Some(hw) = hex_synergy_weight {
+                if !hw.is_nan() && !hw.is_infinite() {
+                    cfg.hex_synergy_weight = hw.clamp(0.0, 3.0);
+                }
             }
-        }
-        if let Some(ci) = counter_intensity {
-            if !ci.is_nan() && !ci.is_infinite() {
-                cfg.counter_intensity = ci.clamp(0.0, 3.0);
+            if let Some(as_) = archetype_strictness {
+                if !as_.is_nan() && !as_.is_infinite() {
+                    cfg.archetype_strictness = as_.clamp(0.0, 1.0);
+                }
             }
-        }
-        if let Some(gcm) = gold_calc_mode {
-            cfg.gold_calc_mode = gcm;
-        }
-        if let Some(tm) = trio_mode {
-            cfg.trio_mode = tm;
-        }
-        if let Some(aam) = auto_accept_match {
-            cfg.auto_accept_match = aam;
-        }
-        if let Some(aads) = auto_accept_delay_seconds {
-            cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
-        }
+            if let Some(ci) = counter_intensity {
+                if !ci.is_nan() && !ci.is_infinite() {
+                    cfg.counter_intensity = ci.clamp(0.0, 3.0);
+                }
+            }
+            if let Some(gcm) = gold_calc_mode {
+                cfg.gold_calc_mode = gcm;
+            }
+            if let Some(tm) = trio_mode {
+                cfg.trio_mode = tm;
+            }
+            if let Some(aam) = auto_accept_match {
+                cfg.auto_accept_match = aam;
+            }
+            if let Some(aads) = auto_accept_delay_seconds {
+                cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
+            }
+            cfg.clone()
+        };
 
-        // Persist to disk safely via atomic rename
-        if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
-            let path = Path::new(&self.config_file_path);
-            let _ = save_atomic(path, &json_str);
-        }
+        // Persist to disk safely asynchronously without holding write lock, with APPDATA fallback
+        let _ = self.save_to_disk().await;
 
-        cfg.clone()
+        result
     }
 
     pub async fn set_auto_accept(&self, enabled: bool, delay_secs: Option<u64>) -> RecommendationConfig {
@@ -463,30 +478,30 @@ impl ConfigManager {
         auto_apply_runes: Option<bool>,
         bench_preferred_champions: Option<Vec<String>>,
     ) -> RecommendationConfig {
-        let mut cfg = self.config.write().await;
-        if let Some(aam) = auto_accept_match {
-            cfg.auto_accept_match = aam;
-        }
-        if let Some(aads) = auto_accept_delay_seconds {
-            cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
-        }
-        if let Some(asb) = auto_swap_bench {
-            cfg.auto_swap_bench = asb;
-        }
-        if let Some(aar) = auto_apply_runes {
-            cfg.auto_apply_runes = aar;
-        }
-        if let Some(bpc) = bench_preferred_champions {
-            cfg.bench_preferred_champions = bpc;
-        }
+        let result = {
+            let mut cfg = self.config.write().await;
+            if let Some(aam) = auto_accept_match {
+                cfg.auto_accept_match = aam;
+            }
+            if let Some(aads) = auto_accept_delay_seconds {
+                cfg.auto_accept_delay_seconds = aads.clamp(0, MAX_AUTO_ACCEPT_DELAY_SECONDS);
+            }
+            if let Some(asb) = auto_swap_bench {
+                cfg.auto_swap_bench = asb;
+            }
+            if let Some(aar) = auto_apply_runes {
+                cfg.auto_apply_runes = aar;
+            }
+            if let Some(bpc) = bench_preferred_champions {
+                cfg.bench_preferred_champions = bpc;
+            }
+            cfg.clone()
+        };
 
-        // Persist to disk safely via atomic rename
-        if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
-            let path = Path::new(&self.config_file_path);
-            let _ = save_atomic(path, &json_str);
-        }
+        // Persist to disk safely asynchronously without holding write lock, with APPDATA fallback
+        let _ = self.save_to_disk().await;
 
-        cfg.clone()
+        result
     }
 }
 
