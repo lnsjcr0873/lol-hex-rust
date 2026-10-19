@@ -241,13 +241,15 @@ import {
 } from './widgets/match-history-filters/filter-state'
 import type { Predicate } from '@shared/data-adapter/predicates/combinators'
 
-provideMatchHistoryCardViewport({ active: true })
-
 const props = defineProps<{
   tab: PlayerTabItem
   isActive?: boolean
   selfPuuid?: string
 }>()
+
+provideMatchHistoryCardViewport({
+  active: () => (props.isActive !== undefined ? Boolean(props.isActive) : true)
+})
 
 const playerTabsStore = usePlayerTabsStore()
 const effectiveSelfPuuid = computed(() => props.selfPuuid || playerTabsStore.tabs.find(t => t.isSelf)?.puuid || '')
