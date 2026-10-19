@@ -28,7 +28,16 @@ struct MockLiveClientServer {
 
 impl MockLiveClientServer {
     fn start(response_payload: Value) -> Option<Self> {
-        if std::net::TcpListener::bind("127.0.0.1:2999").is_err() {
+        let mut bind_ok = false;
+        let start_bind = Instant::now();
+        while start_bind.elapsed() < Duration::from_millis(600) {
+            if std::net::TcpListener::bind("127.0.0.1:2999").is_ok() {
+                bind_ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        if !bind_ok {
             eprintln!("[INFO] Port 2999 already in use (e.g. active game running). Skipping mock test.");
             return None;
         }
@@ -170,7 +179,7 @@ impl Drop for MockLiveClientServer {
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.temp_dir);
         // Brief pause to ensure socket port 2999 is released by OS
-        std::thread::sleep(Duration::from_millis(60));
+        std::thread::sleep(Duration::from_millis(150));
     }
 }
 

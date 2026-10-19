@@ -34,7 +34,7 @@ impl LiveClientDataReader {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
-            .timeout(Duration::from_millis(600))
+            .timeout(Duration::from_millis(2500))
             .build()
             .unwrap_or_default();
         Self { client }
@@ -42,12 +42,21 @@ impl LiveClientDataReader {
 
     pub async fn get_all_game_data(&self) -> Option<Value> {
         let url = "https://127.0.0.1:2999/liveclientdata/allgamedata";
-        if let Ok(res) = self.client.get(url).send().await {
-            if res.status().is_success() {
-                if let Ok(data) = res.json::<Value>().await {
-                    return Some(data);
+        for _ in 0..4 {
+            if let Ok(res) = self.client.get(url).send().await {
+                if res.status().is_success() {
+                    if let Ok(data) = res.json::<Value>().await {
+                        return Some(data);
+                    }
+                }
+            } else if let Ok(res) = self.client.get("http://127.0.0.1:2999/liveclientdata/allgamedata").send().await {
+                if res.status().is_success() {
+                    if let Ok(data) = res.json::<Value>().await {
+                        return Some(data);
+                    }
                 }
             }
+            tokio::time::sleep(Duration::from_millis(80)).await;
         }
         None
     }
