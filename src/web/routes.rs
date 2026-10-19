@@ -682,7 +682,7 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
             })
         }).collect::<Vec<Value>>(),
         "recent_matches": recent_matches,
-        "matches": card.matches.iter().take(10).map(|m| {
+        "matches": card.matches.iter().take(20).map(|m| {
             json!({
                 "game_id": m.game_id,
                 "game_creation": m.game_creation,
@@ -694,6 +694,7 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
                 "champion_name": m.champion_name,
                 "champion_avatar": m.champion_avatar,
                 "win": m.win,
+                "is_win": m.win,
                 "kills": m.kills,
                 "deaths": m.deaths,
                 "assists": m.assists,
@@ -701,6 +702,20 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
                 "kda_ratio": m.kda_ratio,
                 "cs": m.cs,
                 "cs_per_min": m.cs_per_min,
+                "damage": m.damage,
+                "damage_share_pct": m.damage_share_pct,
+                "damage_taken": m.damage_taken,
+                "damage_mitigated": m.damage_mitigated,
+                "gold": m.gold,
+                "vision_score": m.vision_score,
+                "kp_pct": m.kp_pct,
+                "is_mvp": m.is_mvp,
+                "is_svp": m.is_svp,
+                "lane": m.lane,
+                "role": m.role,
+                "role_cn": m.role_cn,
+                "spell1_id": m.spell1_id,
+                "spell2_id": m.spell2_id,
                 "items": m.items,
                 "all_items": m.all_items
             })

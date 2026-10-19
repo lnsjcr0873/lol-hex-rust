@@ -77,18 +77,28 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         }
       }
 
+      const cDamageShare = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / cCount : 0
+      const cDamage = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage || 0), 0) / cCount : 0
+      const cGold = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.gold || 0), 0) / cCount : 0
+      const cVision = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / cCount : 0
+      const cKp = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / cCount : 0
+      const cDamagePerMin = cCount > 0 ? cMatches.reduce((acc, m) => {
+        const dur = (m.game_duration || 1800) / 60
+        return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
+      }, 0) / cCount : 0
+
       champions[String(cid)] = {
         championId: cid,
         summary: {
           avgKda: cAvgKda,
           winRate: cWinRate,
-          avgChampionDamagePercentageOfTeam: 0,
+          avgChampionDamagePercentageOfTeam: cDamageShare,
           avgDamageTakenPercentageOfTeam: 0,
           avgCsPercentageOfTeam: 0,
           avgCsPerMinute: cCsPerMin,
           avgGoldPercentageOfTeam: 0,
-          avgKillParticipation: 0,
-          avgChampionDamagePerMinute: 0,
+          avgKillParticipation: cKp,
+          avgChampionDamagePerMinute: Math.round(cDamagePerMin),
           kills: Math.round(cKills),
           deaths: Math.round(cDeaths),
           assists: Math.round(cAssists),
@@ -103,9 +113,9 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
           avgTowerDamageRatioToTeamMax: 0,
           avgTowerDamageRatioToMax: 0,
           avgTowerDamagePercentageOfTeam: 0,
-          avgVisionScore: 0,
+          avgVisionScore: cVision > 0 ? Math.round(cVision) : 0,
           avgVisionScorePercentageOfTeam: 0,
-          avgDamageGoldEfficiency: 0,
+          avgDamageGoldEfficiency: cGold > 0 ? Math.round((cDamage / cGold) * 100) / 100 : 0,
           avgKillDamageEfficiency: 1.0,
           kdaCv: 0,
           avgSoloKills: null,
@@ -161,14 +171,24 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       }
     }
 
+    const avgDamageShare = count > 0 ? matches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / count : 0
+    const avgDamage = count > 0 ? matches.reduce((acc, m) => acc + (m.damage || 0), 0) / count : 0
+    const avgGold = count > 0 ? matches.reduce((acc, m) => acc + (m.gold || 0), 0) / count : 0
+    const avgVision = count > 0 ? matches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / count : 0
+    const avgKp = count > 0 ? matches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / count : 0
+    const avgDamagePerMinute = count > 0 ? matches.reduce((acc, m) => {
+      const dur = (m.game_duration || 1800) / 60
+      return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
+    }, 0) / count : 0
+
     const kdaScore = Math.min(1.0, avgKda / 5.0)
     const winRateScore = Math.min(1.0, winRate)
-    const dmgScore = Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
+    const dmgScore = avgDamageShare > 0 ? Math.min(3.0, (avgDamageShare / 30.0) * 3.0) : Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
     const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
-    const csScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-    const goldScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-    const participationScore = Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
-    const visionScore = Math.min(2.0, (player.radar?.vision ?? 0) / 45)
+    const csScore = avgCsPerMinute > 0 ? Math.min(2.0, (avgCsPerMinute / 10.0) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+    const goldScore = avgGold > 0 ? Math.min(2.0, (avgGold / 16000) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
+    const participationScore = avgKp > 0 ? Math.min(2.0, (avgKp / 100.0) * 2.5) : Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
+    const visionScore = avgVision > 0 ? Math.min(2.0, avgVision / 35.0) : Math.min(2.0, (player.radar?.vision ?? 0) / 45)
     const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
     const isExtraordinary = akariTotal >= 13.5 && count >= 5
     const isOutstanding = akariTotal >= 11.5 && count >= 5
@@ -195,8 +215,8 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       summary: {
         avgChampionDamageRatioToTeamMax: 0,
         avgChampionDamageRatioToMax: 0,
-        avgChampionDamagePercentageOfTeam: 0,
-        avgChampionDamagePerMinute: 0,
+        avgChampionDamagePercentageOfTeam: avgDamageShare,
+        avgChampionDamagePerMinute: Math.round(avgDamagePerMinute),
         avgDamageTakenRatioToTeamMax: 0,
         avgDamageTakenRatioToMax: 0,
         avgDamageTakenPercentageOfTeam: 0,
@@ -210,10 +230,10 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         avgTowerDamageRatioToTeamMax: 0,
         avgTowerDamageRatioToMax: 0,
         avgTowerDamagePercentageOfTeam: 0,
-        avgVisionScore: player.radar?.vision ?? 0,
+        avgVisionScore: avgVision > 0 ? Math.round(avgVision) : (player.radar?.vision ?? 0),
         avgVisionScorePercentageOfTeam: 0,
-        avgDamageGoldEfficiency: 0,
-        avgKillParticipation: 0,
+        avgDamageGoldEfficiency: avgGold > 0 ? Math.round((avgDamage / avgGold) * 100) / 100 : 0,
+        avgKillParticipation: avgKp,
         avgKillDamageEfficiency: 1.0,
         kills: Math.round(totalKills / count),
         deaths: Math.round(totalDeaths / count),
