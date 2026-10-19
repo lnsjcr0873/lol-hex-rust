@@ -511,9 +511,20 @@ pub async fn get_match_history(
     let filtered: Vec<Value> = paginated_matches
         .into_iter()
         .map(|m| {
-            let role_cn = match m.queue_id {
-                450 => "乱斗",
-                _ => "对局",
+            let (pos_code, role_cn) = match m.queue_id {
+                450 => ("ARAM", "乱斗"),
+                1700 | 1710 => ("CHERRY", "斗魂"),
+                _ => {
+                    let typ = lol_hex_rust::engine::player_history::infer_typical_position(m.champion_id);
+                    match typ {
+                        "TOP" => ("TOP", "上单"),
+                        "JUNGLE" => ("JUNGLE", "打野"),
+                        "MIDDLE" | "MID" => ("MID", "中单"),
+                        "BOTTOM" | "ADC" => ("ADC", "下路"),
+                        "UTILITY" | "SUPPORT" => ("SUPPORT", "辅助"),
+                        _ => ("UNKNOWN", "对局"),
+                    }
+                }
             };
             json!({
                 "game_id": m.game_id,
@@ -528,7 +539,8 @@ pub async fn get_match_history(
                 "champion_id": m.champion_id,
                 "champion_name": m.champion_name,
                 "champion_icon": format!("https://game.gtimg.cn/images/lol/act/img/skinloading/{}000.jpg", m.champion_id),
-                "role": role_cn,
+                "role": pos_code,
+                "role_cn": role_cn,
                 "spell1_id": m.spell1_id,
                 "spell2_id": m.spell2_id,
                 "kills": m.kills,

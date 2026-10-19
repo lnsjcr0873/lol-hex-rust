@@ -147,6 +147,7 @@ export interface MatchHistoryItem {
   champion_name: string;
   champion_icon: string;
   role: string;
+  role_cn?: string;
   kills: number;
   deaths: number;
   assists: number;
