@@ -17,7 +17,7 @@
 <script lang="ts" setup>
 import { computed, ref, shallowRef, watch } from 'vue'
 import type { LcuOrSgpGameDetails, LcuOrSgpGameSummary } from '@shared/data-adapter/wrapper'
-import { getRawMatchHistory, getRawMatchTimeline, getMatchDetail } from '../../api/tauri'
+import { getRawMatchHistory, getRawMatchTimeline, getMatchDetail, getRawMatchDetail } from '../../api/tauri'
 import MatchPreviewer from './MatchPreviewer.vue'
 
 const props = withDefaults(
@@ -74,26 +74,41 @@ async function fetchSummary() {
   isLoadingGameSummary.value = true
   try {
     let foundGame: any = null
+
+    // 1. Prioritize direct single-game raw match detail (fastest & minimal IPC payload)
     try {
-      const raw = await getRawMatchHistory(props.puuid)
-      const gamesList: any[] = Array.isArray(raw)
-        ? raw
-        : Array.isArray(raw?.games)
-        ? raw.games
-        : Array.isArray(raw?.games?.games)
-        ? raw.games.games
-        : []
-      foundGame = gamesList.find((g: any) => g && g.gameId === targetId)
+      const rawDetail = await getRawMatchDetail(targetId)
+      if (rawDetail) {
+        foundGame = rawDetail.raw_game || rawDetail
+      }
     } catch (e) {
-      // Fallback to getMatchDetail
+      // Fallback
     }
 
+    // 2. Fallback to getMatchDetail (parsed schema with raw_game)
     if (!foundGame) {
       try {
         const detail = await getMatchDetail(targetId)
-        if (detail?.raw_game) {
-          foundGame = detail.raw_game
+        if (detail) {
+          foundGame = detail.raw_game || detail
         }
+      } catch (e) {
+        // Fallback
+      }
+    }
+
+    // 3. Last-resort fallback: only fetch match history list if puuid is provided
+    if (!foundGame && props.puuid) {
+      try {
+        const raw = await getRawMatchHistory(props.puuid)
+        const gamesList: any[] = Array.isArray(raw)
+          ? raw
+          : Array.isArray(raw?.games)
+          ? raw.games
+          : Array.isArray(raw?.games?.games)
+          ? raw.games.games
+          : []
+        foundGame = gamesList.find((g: any) => g && g.gameId === targetId)
       } catch (e) {
         // Handled below
       }
