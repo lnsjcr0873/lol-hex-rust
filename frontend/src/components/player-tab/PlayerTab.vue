@@ -469,8 +469,11 @@ function handleResetFilters() {
   }
   isLoadedByCollectMode.value = false
   collectedGames.value = []
-  if (rawGames.value.length > 0) {
-    matches.value = rawGames.value.map((g) => convertRawGameToMatchItem(g, profile.value.puuid))
+  const selfPuuid = profile.value.puuid || props.tab.puuid
+  if (allMatchSummaries.value.length > 0) {
+    matches.value = allMatchSummaries.value.map((s) => convertRawGameToMatchItem(s.data as Game, selfPuuid))
+  } else if (rawGames.value.length > 0) {
+    matches.value = rawGames.value.map((g) => convertRawGameToMatchItem(g, selfPuuid))
   }
 }
 
@@ -602,10 +605,21 @@ async function enrichCurrentGames(games: Game[], targetFetchId: number) {
           })
           rawSummaries.value = next
 
+          const rIdx = rawGames.value.findIndex((rg) => rg.gameId === g.gameId)
+          if (rIdx !== -1) {
+            rawGames.value[rIdx] = fullDetail
+          }
+
+          const cIdx = collectedGames.value.findIndex((cg) => cg.gameId === g.gameId)
+          if (cIdx !== -1) {
+            collectedGames.value[cIdx] = fullDetail
+          }
+
           const selfPuuid = profile.value.puuid || props.tab.puuid
           const mIdx = matches.value.findIndex((m) => m.game_id === g.gameId)
           if (mIdx !== -1) {
             matches.value[mIdx] = convertRawGameToMatchItem(fullDetail, selfPuuid)
+            matches.value = [...matches.value]
           }
         }
       } catch (err) {
@@ -617,6 +631,9 @@ async function enrichCurrentGames(games: Game[], targetFetchId: number) {
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, toEnrich.length) }, () => worker())
   )
+  if (targetFetchId === currentFetchId.value) {
+    updateEncounteredGames()
+  }
 }
 
 const allMatchSummaries = computed<LcuOrSgpGameSummary[]>(() => {
@@ -1041,13 +1058,15 @@ function updateEncounteredGames() {
 
   const selfPuuid = effectiveSelfPuuid.value
   const targetPuuid = profile.value.puuid || props.tab.puuid
-  if (!selfPuuid || !targetPuuid || selfPuuid === targetPuuid || !rawGames.value || rawGames.value.length === 0) {
+  const pool = allMatchSummaries.value.map((s) => s.data as Game)
+  if (!selfPuuid || !targetPuuid || selfPuuid === targetPuuid || !pool || pool.length === 0) {
     encounteredGames.value = []
     return
   }
 
   const result: any[] = []
-  for (const g of rawGames.value) {
+  for (const g of pool) {
+    if (!g) continue
     const sIdent = g.participantIdentities?.find(i => i.player?.puuid === selfPuuid)
     const tIdent = g.participantIdentities?.find(i => i.player?.puuid === targetPuuid)
     if (sIdent && tIdent) {
@@ -1078,7 +1097,7 @@ function updateEncounteredGames() {
   encounteredGames.value = result
 }
 
-watch([() => rawGames.value, () => analysis.value], () => {
+watch([() => allMatchSummaries.value, () => analysis.value], () => {
   updateEncounteredGames()
   loadPlayerTags()
 })
