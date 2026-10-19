@@ -170,14 +170,31 @@ impl RankedDraftManager {
                 (format!("队友{}", idx + 1), String::new())
             };
 
-            // Ranked ladder win rate and tier strictly from OP.GG (neutral 50.0% / T3 if loading)
+            // 1. Ranked ladder win rate and tier from OP.GG
             let mut cwr = 0.500;
             let mut ctier = 3;
+            let mut has_opgg = false;
             if let Some(op) = opgg {
                 if !cid.is_empty() {
                     if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {
                         cwr = op_wr;
                         ctier = op_tier;
+                        has_opgg = true;
+                    }
+                }
+            }
+
+            // 2. Offline / cache-miss fallback: fall back to local database
+            if (!has_opgg || (cwr == 0.500 && ctier == 3)) && !cid.is_empty() {
+                if let Some(database) = db {
+                    let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
+                    if let Some(hero_summary) = database.heroes_map.get(&resolved_id) {
+                        if hero_summary.win_rate > 0.0 {
+                            cwr = hero_summary.win_rate;
+                        }
+                        if let Some(t) = hero_summary.tier {
+                            ctier = t;
+                        }
                     }
                 }
             }
@@ -258,14 +275,31 @@ impl RankedDraftManager {
                     (format!("对手{}", idx + 1), String::new())
                 };
 
-                // Ranked ladder win rate and tier strictly from OP.GG (neutral 50.0% / T3 if loading)
+                // 1. Ranked ladder win rate and tier from OP.GG
                 let mut cwr = 0.500;
                 let mut ctier = 3;
+                let mut has_opgg = false;
                 if let Some(op) = opgg {
                     if !cid.is_empty() {
                         if let Some((op_wr, op_tier)) = op.get_cached_stats(&cid, &pos) {
                             cwr = op_wr;
                             ctier = op_tier;
+                            has_opgg = true;
+                        }
+                    }
+                }
+
+                // 2. Offline / cache-miss fallback: fall back to local database
+                if (!has_opgg || (cwr == 0.500 && ctier == 3)) && !cid.is_empty() {
+                    if let Some(database) = db {
+                        let resolved_id = database.resolve_hero_id(&cid).unwrap_or_else(|| cid.clone());
+                        if let Some(hero_summary) = database.heroes_map.get(&resolved_id) {
+                            if hero_summary.win_rate > 0.0 {
+                                cwr = hero_summary.win_rate;
+                            }
+                            if let Some(t) = hero_summary.tier {
+                                ctier = t;
+                            }
                         }
                     }
                 }

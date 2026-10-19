@@ -93,6 +93,14 @@ impl OpggClient {
             ),
         );
         headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json, text/plain, */*"),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT_LANGUAGE,
+            reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"),
+        );
+        headers.insert(
             reqwest::header::REFERER,
             reqwest::header::HeaderValue::from_static("https://www.op.gg/"),
         );
@@ -101,9 +109,16 @@ impl OpggClient {
             reqwest::header::HeaderValue::from_static("https://www.op.gg"),
         );
         headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json, text/plain, */*"),
+            "sec-ch-ua",
+            reqwest::header::HeaderValue::from_static(
+                "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+            ),
         );
+        headers.insert("sec-ch-ua-mobile", reqwest::header::HeaderValue::from_static("?0"));
+        headers.insert("sec-ch-ua-platform", reqwest::header::HeaderValue::from_static("\"Windows\""));
+        headers.insert("sec-fetch-dest", reqwest::header::HeaderValue::from_static("empty"));
+        headers.insert("sec-fetch-mode", reqwest::header::HeaderValue::from_static("cors"));
+        headers.insert("sec-fetch-site", reqwest::header::HeaderValue::from_static("same-site"));
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(6))
@@ -371,21 +386,21 @@ impl OpggClient {
             Ok(resp) => {
                 let status = resp.status();
                 if status.as_u16() == 403 || status.as_u16() == 429 {
-                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    warn!("OP.GG rate-limited or challenged ({}), pausing for 5s", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 } else if status.is_server_error() {
-                    warn!("OP.GG server error ({}), entering 15s cooldown", status);
+                    warn!("OP.GG server error ({}), entering 5s cooldown", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(15));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 }
             }
             Err(e) => {
                 warn!("Failed to fetch OP.GG ranked tier list: {}", e);
                 if let Ok(mut lock) = self.cooldown_until.write() {
-                    *lock = Some(Instant::now() + Duration::from_secs(10));
+                    *lock = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
         }
@@ -489,7 +504,7 @@ impl OpggClient {
 
         // 3. Fetch directly from OP.GG API
         let url = format!(
-            "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}",
+            "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}?tier=all",
             region, champion_id, pos_lower
         );
         info!("Fetching OP.GG champion detail: {}", url);
@@ -711,21 +726,21 @@ impl OpggClient {
             Ok(resp) => {
                 let status = resp.status();
                 if status.as_u16() == 403 || status.as_u16() == 429 {
-                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    warn!("OP.GG rate-limited or challenged ({}), pausing for 5s", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 } else if status.is_server_error() {
-                    warn!("OP.GG server error ({}), entering 15s cooldown", status);
+                    warn!("OP.GG server error ({}), entering 5s cooldown", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(15));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 }
             }
             Err(e) => {
                 warn!("Failed to fetch OP.GG champion detail: {}", e);
                 if let Ok(mut lock) = self.cooldown_until.write() {
-                    *lock = Some(Instant::now() + Duration::from_secs(10));
+                    *lock = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
         }
@@ -961,7 +976,7 @@ impl OpggClient {
         }
 
         let url = format!(
-            "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}/synergies",
+            "https://lol-api-champion.op.gg/api/{}/champions/ranked/{}/{}/synergies?tier=all",
             region, champion_id, pos_lower
         );
         info!("Fetching OP.GG champion synergies: {}", url);
@@ -1026,21 +1041,21 @@ impl OpggClient {
             Ok(resp) => {
                 let status = resp.status();
                 if status.as_u16() == 403 || status.as_u16() == 429 {
-                    warn!("OP.GG rate-limited ({}), entering 60s cooldown to protect connection", status);
+                    warn!("OP.GG rate-limited or challenged ({}), pausing for 5s", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(60));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 } else if status.is_server_error() {
-                    warn!("OP.GG server error ({}), entering 15s cooldown", status);
+                    warn!("OP.GG server error ({}), entering 5s cooldown", status);
                     if let Ok(mut lock) = self.cooldown_until.write() {
-                        *lock = Some(Instant::now() + Duration::from_secs(15));
+                        *lock = Some(Instant::now() + Duration::from_secs(5));
                     }
                 }
             }
             Err(e) => {
                 warn!("Failed to fetch OP.GG synergies: {}", e);
                 if let Ok(mut lock) = self.cooldown_until.write() {
-                    *lock = Some(Instant::now() + Duration::from_secs(10));
+                    *lock = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
         }

@@ -81,6 +81,97 @@ impl RankedOverlay {
     }
 }
 
+pub async fn get_position_meta_picks(
+    opgg: &crate::crawler::OpggClient,
+    db: &crate::data::loader::Database,
+    position: &str,
+) -> Vec<super::win32_hud::CounterHeroItem> {
+    let mut picks = Vec::new();
+    let pos_upper = position.to_uppercase();
+
+    // 1. Try OP.GG tier list first
+    let tier_list = opgg.get_ranked_tier_list(false).await;
+    if let Some(champs) = tier_list.get("champions").and_then(|v| v.as_object()) {
+        let mut meta_picks: Vec<(i32, String, i32, f64, i64)> = Vec::new();
+        for (cid_str, cval) in champs {
+            let pos_lookup = cval.get("positions").and_then(|p| {
+                p.get(&pos_upper)
+                    .or_else(|| if pos_upper == "ADC" { p.get("BOT").or_else(|| p.get("BOTTOM")) } else { None })
+                    .or_else(|| if pos_upper == "SUPPORT" { p.get("UTILITY") } else { None })
+                    .or_else(|| if pos_upper == "MID" { p.get("MIDDLE") } else { None })
+            });
+            if let Some(pos_obj) = pos_lookup {
+                let tier = pos_obj.get("tier").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let wr = pos_obj.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let pr = pos_obj.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let games = (pr * 1000.0).round() as i64;
+                let name = db.resolve_hero_name(cid_str).unwrap_or_else(|| format!("Hero-{}", cid_str));
+                let cid_num = cid_str.parse::<i32>().unwrap_or(0);
+                meta_picks.push((cid_num, name, tier, wr, games));
+            }
+        }
+        meta_picks.sort_by(|a, b| {
+            let effective_tier_a = if a.2 <= 0 { 99 } else { a.2 };
+            let effective_tier_b = if b.2 <= 0 { 99 } else { b.2 };
+            effective_tier_a.cmp(&effective_tier_b)
+                .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| b.4.cmp(&a.4))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        for (cid_num, name, tier, wr, games) in meta_picks.into_iter().take(8) {
+            picks.push(super::win32_hud::CounterHeroItem {
+                champion_id: cid_num,
+                name,
+                tier,
+                counter_win_rate: wr,
+                overall_win_rate: wr,
+                games,
+            });
+        }
+    }
+
+    // 2. Fallback to local Database (1157w+ matches) if OP.GG tier list is empty/offline
+    if picks.is_empty() {
+        let pos_norm = match pos_upper.as_str() {
+            "TOP" => "TOP",
+            "JUG" | "JUNGLE" => "JUNGLE",
+            "MID" | "MIDDLE" => "MID",
+            "ADC" | "BOT" | "BOTTOM" => "ADC",
+            "SUP" | "SUPPORT" | "UTILITY" => "SUPPORT",
+            _ => "MID",
+        };
+        let mut db_picks: Vec<_> = db.heroes_summary.iter().filter(|h| {
+            h.roles.iter().any(|r| {
+                let ru = r.to_uppercase();
+                ru == pos_norm || (pos_norm == "ADC" && (ru == "BOT" || ru == "BOTTOM")) || (pos_norm == "SUPPORT" && ru == "UTILITY")
+            })
+        }).collect();
+        if db_picks.is_empty() {
+            db_picks = db.heroes_summary.iter().collect();
+        }
+        db_picks.sort_by(|a, b| {
+            let t_a = a.tier.unwrap_or(99);
+            let t_b = b.tier.unwrap_or(99);
+            t_a.cmp(&t_b)
+                .then_with(|| b.win_rate.partial_cmp(&a.win_rate).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        for h in db_picks.into_iter().take(8) {
+            if let Ok(id_num) = h.id.parse::<i32>() {
+                picks.push(super::win32_hud::CounterHeroItem {
+                    champion_id: id_num,
+                    name: h.name.clone(),
+                    tier: h.tier.unwrap_or(3),
+                    counter_win_rate: h.win_rate,
+                    overall_win_rate: h.win_rate,
+                    games: h.games,
+                });
+            }
+        }
+    }
+
+    picks
+}
+
 pub async fn fetch_slot_counters_and_synergies(
     opgg: &crate::crawler::OpggClient,
     db: &crate::data::loader::Database,
@@ -88,7 +179,8 @@ pub async fn fetch_slot_counters_and_synergies(
     pos: &str,
 ) -> (Vec<super::win32_hud::CounterHeroItem>, Vec<super::win32_hud::CounterHeroItem>) {
     if cid_str.is_empty() || cid_str == "0" {
-        return (Vec::new(), Vec::new());
+        let meta = get_position_meta_picks(opgg, db, pos).await;
+        return (meta, Vec::new());
     }
 
     let (c_data, syn_data) = tokio::join!(
@@ -199,9 +291,7 @@ pub async fn update_ranked_draft_overlay(
         slot_opt: Option<&crate::engine::ranked_draft::DraftSlot>,
     ) -> (Vec<super::win32_hud::CounterHeroItem>, Vec<super::win32_hud::CounterHeroItem>) {
         if let Some(s) = slot_opt {
-            if !s.champion_id.is_empty() {
-                return fetch_slot_counters_and_synergies(opgg, db, &s.champion_id, &s.position).await;
-            }
+            return fetch_slot_counters_and_synergies(opgg, db, &s.champion_id, &s.position).await;
         }
         (Vec::new(), Vec::new())
     }
@@ -370,46 +460,9 @@ pub async fn update_ranked_draft_overlay(
             }
         }
 
-        if lane_counters.is_empty() && !local_pos.is_empty() {
-            let tier_list = opgg.get_ranked_tier_list(false).await;
-            if let Some(champs) = tier_list.get("champions").and_then(|v| v.as_object()) {
-                let mut meta_picks: Vec<(i32, String, i32, f64, i64)> = Vec::new();
-                for (cid_str, cval) in champs {
-                    let pos_lookup = cval.get("positions").and_then(|p| {
-                        p.get(&local_pos)
-                            .or_else(|| if local_pos == "ADC" { p.get("BOT").or_else(|| p.get("BOTTOM")) } else { None })
-                            .or_else(|| if local_pos == "SUPPORT" { p.get("UTILITY") } else { None })
-                            .or_else(|| if local_pos == "MID" { p.get("MIDDLE") } else { None })
-                    });
-                    if let Some(pos_obj) = pos_lookup {
-                        let tier = pos_obj.get("tier").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                        let wr = pos_obj.get("winRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let pr = pos_obj.get("pickRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let games = (pr * 1000.0).round() as i64;
-                        let name = db.resolve_hero_name(cid_str).unwrap_or_else(|| format!("Hero-{}", cid_str));
-                        let cid_num = cid_str.parse::<i32>().unwrap_or(0);
-                        meta_picks.push((cid_num, name, tier, wr, games));
-                    }
-                }
-                meta_picks.sort_by(|a, b| {
-                    let effective_tier_a = if a.2 <= 0 { 99 } else { a.2 };
-                    let effective_tier_b = if b.2 <= 0 { 99 } else { b.2 };
-                    effective_tier_a.cmp(&effective_tier_b)
-                        .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
-                        .then_with(|| b.4.cmp(&a.4))
-                        .then_with(|| a.0.cmp(&b.0))
-                });
-                for (cid_num, name, tier, wr, games) in meta_picks.into_iter().take(8) {
-                    lane_counters.push(super::win32_hud::CounterHeroItem {
-                        champion_id: cid_num,
-                        name,
-                        tier,
-                        counter_win_rate: wr,
-                        overall_win_rate: wr,
-                        games,
-                    });
-                }
-            }
+        if lane_counters.is_empty() {
+            let pos_fallback = if !local_pos.is_empty() { &local_pos } else { "MID" };
+            lane_counters = get_position_meta_picks(opgg, db, pos_fallback).await;
         }
     }
 
