@@ -115,6 +115,8 @@ function handleLoadSummoner(puuid: string) {
 
 defineExpose({
   loadSummoner: handleLoadSummoner,
+  refresh: handleRefreshCurrent,
+  refreshCurrentTab: handleRefreshCurrent,
   rawGames,
   allMatchSummaries,
   detailsMap,

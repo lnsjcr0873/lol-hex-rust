@@ -89,11 +89,15 @@ const handleNavigateToSummoner = async (puuid: string) => {
   }
 };
 
-const handleRefresh = () => {
+const handleRefresh = async () => {
   if (currentTab.value === 'ongoing' && ongoingRef.value) {
-    // Refresh ongoing
+    if (typeof (ongoingRef.value as any).refreshData === 'function') {
+      await (ongoingRef.value as any).refreshData();
+    }
   } else if (currentTab.value === 'history' && historyRef.value) {
-    // Refresh history
+    if (typeof (historyRef.value as any).refresh === 'function') {
+      await (historyRef.value as any).refresh();
+    }
   }
 };
 </script>
