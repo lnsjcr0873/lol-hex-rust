@@ -11,6 +11,7 @@ pub mod overlay;
 pub mod sgp;
 pub mod vision;
 pub mod web;
+pub mod runtime;
 
 pub static GLOBAL_TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 
