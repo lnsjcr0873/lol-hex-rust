@@ -11,7 +11,7 @@ export interface AggregatedPositionAnalysis {
 export function computeAggregatedPositions(
   games: PreparedGame[]
 ): AggregatedPositionAnalysis | null {
-  if (!games[0]?.participant.position) {
+  if (!games.length) {
     return null
   }
 
@@ -23,11 +23,14 @@ export function computeAggregatedPositions(
     UTILITY: 0
   }
 
+  let validCount = 0
+
   for (const { participant } of games) {
-    if (participant.position) {
-      positions[participant.position] += 1
+    if (participant.position && participant.position in positions) {
+      positions[participant.position as keyof AggregatedPositionAnalysis] += 1
+      validCount += 1
     }
   }
 
-  return positions
+  return validCount > 0 ? positions : null
 }

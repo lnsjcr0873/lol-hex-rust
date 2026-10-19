@@ -18,6 +18,8 @@ import {
   type LcuGameSummary,
   type LcuGameTimeline
 } from '../src/shared/data-adapter'
+import { resolveParticipantPosition } from '../src/shared/data-adapter/match-history/participants'
+import { computeAggregatedPositions } from '../src/shared/data-adapter/analysis/player/aggregate/positions'
 
 describe('Milestone 2 (R2): Lossless Frontend Data Pipeline & Direct Contract Alignment', () => {
   // =========================================================================
@@ -285,6 +287,42 @@ describe('Milestone 2 (R2): Lossless Frontend Data Pipeline & Direct Contract Al
       const page2_20 = getMockRawMatchHistory(450, 20, 39)
       expect(page2_20.games.games).toHaveLength(20)
       expect(page2_20.games.games.every((g) => g.queueId === 450)).toBe(true)
+    })
+  })
+
+  // =========================================================================
+  // 8. Position Resolution and NaN-safe Position Aggregation
+  // =========================================================================
+  describe('8. Position Resolution and NaN-safe Position Aggregation', () => {
+    it('correctly maps Support and ADC lane/role to UTILITY and BOTTOM', () => {
+      // Support: lane BOTTOM, role DUO_SUPPORT -> UTILITY
+      expect(resolveParticipantPosition({}, { lane: 'BOTTOM', role: 'DUO_SUPPORT' })).toBe('UTILITY')
+      // Support: lane NONE, role DUO_SUPPORT -> UTILITY
+      expect(resolveParticipantPosition({}, { lane: 'NONE', role: 'DUO_SUPPORT' })).toBe('UTILITY')
+      // ADC: lane BOTTOM, role DUO_CARRY -> BOTTOM
+      expect(resolveParticipantPosition({}, { lane: 'BOTTOM', role: 'DUO_CARRY' })).toBe('BOTTOM')
+      // Mid: lane MIDDLE -> MIDDLE
+      expect(resolveParticipantPosition({}, { lane: 'MIDDLE', role: 'SOLO' })).toBe('MIDDLE')
+      // SGP stats teamPosition SUPPORT -> UTILITY
+      expect(resolveParticipantPosition({ teamPosition: 'SUPPORT' }, {})).toBe('UTILITY')
+    })
+
+    it('safely aggregates positions without producing NaN for NONE or unassigned lanes', () => {
+      const mockGames: any[] = [
+        { participant: { position: 'UTILITY' } },
+        { participant: { position: 'NONE' } },
+        { participant: { position: 'TOP' } },
+        { participant: { position: null } },
+        { participant: { position: 'UTILITY' } },
+      ]
+      const aggregated = computeAggregatedPositions(mockGames)
+      expect(aggregated).not.toBeNull()
+      expect(aggregated!.UTILITY).toBe(2)
+      expect(aggregated!.TOP).toBe(1)
+      expect(aggregated!.BOTTOM).toBe(0)
+      expect(aggregated!.MIDDLE).toBe(0)
+      expect(aggregated!.JUNGLE).toBe(0)
+      expect(Number.isNaN((aggregated as any).NONE)).toBe(false)
     })
   })
 })

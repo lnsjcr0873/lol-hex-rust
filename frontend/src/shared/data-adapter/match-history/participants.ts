@@ -174,6 +174,45 @@ function mapLcuDataToPerks(participant: Participant): MatchParticipantPerks {
   }
 }
 
+export function resolveParticipantPosition(
+  stats?: { teamPosition?: string; individualPosition?: string; role?: string; lane?: string },
+  timeline?: { lane?: string; role?: string }
+): string | null {
+  const rawPos = stats?.teamPosition || stats?.individualPosition
+  if (rawPos && rawPos !== 'NONE' && rawPos !== 'Invalid') {
+    const upper = rawPos.toUpperCase()
+    if (upper === 'SUPPORT') return 'UTILITY'
+    if (upper === 'MID') return 'MIDDLE'
+    if (upper === 'BOT' || upper === 'ADC') return 'BOTTOM'
+    return upper
+  }
+
+  const lane = (timeline?.lane || stats?.lane || '').toUpperCase()
+  const role = (timeline?.role || stats?.role || '').toUpperCase()
+
+  if (role === 'DUO_SUPPORT' || role === 'SUPPORT') {
+    return 'UTILITY'
+  }
+  if (lane === 'BOTTOM' || lane === 'BOT') {
+    if (role === 'DUO_SUPPORT') return 'UTILITY'
+    return 'BOTTOM'
+  }
+  if (lane === 'MIDDLE' || lane === 'MID') {
+    return 'MIDDLE'
+  }
+  if (lane === 'TOP') {
+    return 'TOP'
+  }
+  if (lane === 'JUNGLE') {
+    return 'JUNGLE'
+  }
+  if (lane === 'UTILITY') {
+    return 'UTILITY'
+  }
+
+  return null
+}
+
 export function toParticipants(
   summary: LcuOrSgpGameSummary,
   basicInfo?: MatchBasicInfo
@@ -213,7 +252,7 @@ export function toParticipants(
         tagLine: p.riotIdTagline || '',
         profileIconId: p.profileIcon || 0,
         championId: p.championId || 0,
-        position: p.teamPosition || null,
+        position: resolveParticipantPosition(p, (p as any).timeline),
         teamId: p.teamId || 0,
         playerSubteamId: p.playerSubteamId || 0,
         teamIdentifier,
@@ -342,7 +381,7 @@ export function toParticipants(
         tagLine: player?.tagLine || (participant as any).tagLine || '',
         profileIconId: player?.profileIcon || player?.profileIconId || (participant as any).profileIcon || 0,
         championId: participant.championId || 0,
-        position: (participant as any).stats?.teamPosition || (participant as any).stats?.individualPosition || participant.timeline?.lane || null,
+        position: resolveParticipantPosition(participant.stats, participant.timeline),
         teamId: participant.teamId || 0,
         playerSubteamId: stats.playerSubteamId || 0,
         teamIdentifier,
