@@ -1,8 +1,21 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+struct InFlightGuard<'a, V> {
+    mutex: &'a Mutex<HashMap<String, V>>,
+    key: String,
+}
+
+impl<'a, V> Drop for InFlightGuard<'a, V> {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.mutex.lock() {
+            map.remove(&self.key);
+        }
+    }
+}
 
 pub struct OpggClient {
     client: reqwest::Client,
@@ -11,9 +24,9 @@ pub struct OpggClient {
     champion_details_cache: RwLock<HashMap<String, (Instant, Value)>>,
     synergies_cache: RwLock<HashMap<String, (Instant, Value)>>,
     cooldown_until: RwLock<Option<Instant>>,
-    in_flight_tier_list: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
-    in_flight_details: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Option<Value>>>>>,
-    in_flight_synergies: tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
+    in_flight_tier_list: Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
+    in_flight_details: Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Option<Value>>>>>,
+    in_flight_synergies: Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<Value>>>>,
 }
 
 /// Normalizes LCU region and platform ID into an OP.GG API region parameter.
@@ -133,9 +146,9 @@ impl OpggClient {
             champion_details_cache: RwLock::new(HashMap::new()),
             synergies_cache: RwLock::new(HashMap::new()),
             cooldown_until: RwLock::new(None),
-            in_flight_tier_list: tokio::sync::Mutex::new(HashMap::new()),
-            in_flight_details: tokio::sync::Mutex::new(HashMap::new()),
-            in_flight_synergies: tokio::sync::Mutex::new(HashMap::new()),
+            in_flight_tier_list: Mutex::new(HashMap::new()),
+            in_flight_details: Mutex::new(HashMap::new()),
+            in_flight_synergies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -274,16 +287,24 @@ impl OpggClient {
         // In-flight deduplication: merge concurrent tier list requests
         let mut rx_opt = None;
         let mut tx_opt = None;
-        {
-            let mut in_flight = self.in_flight_tier_list.lock().await;
-            if let Some(rx) = in_flight.get(&region) {
-                rx_opt = Some(rx.clone());
+        let _guard = {
+            if let Ok(mut in_flight) = self.in_flight_tier_list.lock() {
+                if let Some(rx) = in_flight.get(&region) {
+                    rx_opt = Some(rx.clone());
+                    None
+                } else {
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    in_flight.insert(region.clone(), rx);
+                    tx_opt = Some(tx);
+                    Some(InFlightGuard {
+                        mutex: &self.in_flight_tier_list,
+                        key: region.clone(),
+                    })
+                }
             } else {
-                let (tx, rx) = tokio::sync::watch::channel(None);
-                in_flight.insert(region.clone(), rx);
-                tx_opt = Some(tx);
+                None
             }
-        }
+        };
 
         if let Some(mut rx) = rx_opt {
             if rx.changed().await.is_ok() {
@@ -375,10 +396,9 @@ impl OpggClient {
                     }
 
                     if let Some(tx) = tx_opt {
-                        let mut in_flight = self.in_flight_tier_list.lock().await;
-                        in_flight.remove(&region);
                         let _ = tx.send(Some(result.clone()));
                     }
+                    drop(_guard);
 
                     return result;
                 }
@@ -417,10 +437,9 @@ impl OpggClient {
         };
 
         if let Some(tx) = tx_opt {
-            let mut in_flight = self.in_flight_tier_list.lock().await;
-            in_flight.remove(&region);
             let _ = tx.send(Some(fallback_val.clone()));
         }
+        drop(_guard);
 
         fallback_val
     }
@@ -477,16 +496,24 @@ impl OpggClient {
         // In-flight deduplication: merge concurrent detail requests for the same champion & position
         let mut rx_opt = None;
         let mut tx_opt = None;
-        {
-            let mut in_flight = self.in_flight_details.lock().await;
-            if let Some(rx) = in_flight.get(&cache_key) {
-                rx_opt = Some(rx.clone());
+        let _guard = {
+            if let Ok(mut in_flight) = self.in_flight_details.lock() {
+                if let Some(rx) = in_flight.get(&cache_key) {
+                    rx_opt = Some(rx.clone());
+                    None
+                } else {
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    in_flight.insert(cache_key.clone(), rx);
+                    tx_opt = Some(tx);
+                    Some(InFlightGuard {
+                        mutex: &self.in_flight_details,
+                        key: cache_key.clone(),
+                    })
+                }
             } else {
-                let (tx, rx) = tokio::sync::watch::channel(None);
-                in_flight.insert(cache_key.clone(), rx);
-                tx_opt = Some(tx);
+                None
             }
-        }
+        };
 
         if let Some(mut rx) = rx_opt {
             if rx.changed().await.is_ok() {
@@ -715,10 +742,9 @@ impl OpggClient {
                     }
 
                     if let Some(tx) = tx_opt {
-                        let mut in_flight = self.in_flight_details.lock().await;
-                        in_flight.remove(&cache_key);
                         let _ = tx.send(Some(Some(detail_result.clone())));
                     }
+                    drop(_guard);
 
                     return Some(detail_result);
                 }
@@ -746,10 +772,9 @@ impl OpggClient {
         }
 
         if let Some(tx) = tx_opt {
-            let mut in_flight = self.in_flight_details.lock().await;
-            in_flight.remove(&cache_key);
             let _ = tx.send(Some(None));
         }
+        drop(_guard);
 
         None
     }
@@ -946,16 +971,24 @@ impl OpggClient {
         // In-flight deduplication: merge concurrent synergy requests for the same champion & position
         let mut rx_opt = None;
         let mut tx_opt = None;
-        {
-            let mut in_flight = self.in_flight_synergies.lock().await;
-            if let Some(rx) = in_flight.get(&cache_key) {
-                rx_opt = Some(rx.clone());
+        let _guard = {
+            if let Ok(mut in_flight) = self.in_flight_synergies.lock() {
+                if let Some(rx) = in_flight.get(&cache_key) {
+                    rx_opt = Some(rx.clone());
+                    None
+                } else {
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    in_flight.insert(cache_key.clone(), rx);
+                    tx_opt = Some(tx);
+                    Some(InFlightGuard {
+                        mutex: &self.in_flight_synergies,
+                        key: cache_key.clone(),
+                    })
+                }
             } else {
-                let (tx, rx) = tokio::sync::watch::channel(None);
-                in_flight.insert(cache_key.clone(), rx);
-                tx_opt = Some(tx);
+                None
             }
-        }
+        };
 
         if let Some(mut rx) = rx_opt {
             if rx.changed().await.is_ok() {
@@ -1030,10 +1063,9 @@ impl OpggClient {
                     }
 
                     if let Some(tx) = tx_opt {
-                        let mut in_flight = self.in_flight_synergies.lock().await;
-                        in_flight.remove(&cache_key);
                         let _ = tx.send(Some(res.clone()));
                     }
+                    drop(_guard);
 
                     return res;
                 }
@@ -1067,10 +1099,9 @@ impl OpggClient {
         });
 
         if let Some(tx) = tx_opt {
-            let mut in_flight = self.in_flight_synergies.lock().await;
-            in_flight.remove(&cache_key);
             let _ = tx.send(Some(fallback.clone()));
         }
+        drop(_guard);
 
         fallback
     }

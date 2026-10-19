@@ -118,16 +118,6 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(30));
 
-        // If low-level hook is registered successfully and active, do not poll to eliminate double-firing!
-        let hook_active = if let Ok(guard) = HOOK_HANDLE.lock() {
-            guard.is_some()
-        } else {
-            false
-        };
-        if hook_active {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            continue;
-        }
 
         if !is_allowed_foreground_for_hotkey() {
             std::thread::sleep(std::time::Duration::from_millis(150));

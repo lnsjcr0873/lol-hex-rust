@@ -215,7 +215,11 @@ export async function getRawMatchHistory(
 }
 
 export async function getRawMatchTimeline(gameId: number): Promise<GameTimeline> {
-  const isMockGame = (gameId >= 7000000000 && gameId < 8000000000) || gameId >= 99990000;
+  const isMockGame =
+    (gameId >= 7012345671 && gameId <= 7012345700) ||
+    gameId === 99991234 ||
+    gameId === 100200300 ||
+    gameId < 0;
   const webMockFallback = getMockRawMatchTimeline(gameId);
   const tauriFailureFallback = isMockGame ? webMockFallback : ({ frames: [] } as any);
 

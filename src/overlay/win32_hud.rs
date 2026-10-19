@@ -320,6 +320,8 @@ lazy_static::lazy_static! {
     pub static ref GLOBAL_DRAFT_MGR: std::sync::RwLock<Option<Arc<tokio::sync::RwLock<crate::engine::RankedDraftManager>>>> = std::sync::RwLock::new(None);
     pub static ref GLOBAL_BENCH_OVERLAY: std::sync::RwLock<Option<Arc<crate::overlay::BenchOverlay>>> = std::sync::RwLock::new(None);
     static ref FONT_CACHE: std::sync::Mutex<std::collections::HashMap<(i32, i32, FontKind), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
+    static ref BRUSH_CACHE: std::sync::Mutex<std::collections::HashMap<u32, isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
+    static ref PEN_CACHE: std::sync::Mutex<std::collections::HashMap<(u32, i32), isize>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
 #[cfg(windows)]
@@ -362,12 +364,61 @@ unsafe fn get_cached_font(size: i32, weight: i32) -> windows::Win32::Graphics::G
     get_cached_font_kind(size, weight, FontKind::Text)
 }
 
-/// Frees all cached Win32 HFONT handles using DeleteObject and clears the cache map.
+#[cfg(windows)]
+unsafe fn get_cached_brush(color: windows::Win32::Foundation::COLORREF) -> windows::Win32::Graphics::Gdi::HBRUSH {
+    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, HBRUSH};
+    if let Ok(mut cache) = BRUSH_CACHE.lock() {
+        if let Some(&handle) = cache.get(&color.0) {
+            return HBRUSH(handle as *mut core::ffi::c_void);
+        }
+        let brush = CreateSolidBrush(color);
+        cache.insert(color.0, brush.0 as isize);
+        brush
+    } else {
+        CreateSolidBrush(color)
+    }
+}
+
+#[cfg(windows)]
+unsafe fn get_cached_pen(width: i32, color: windows::Win32::Foundation::COLORREF) -> windows::Win32::Graphics::Gdi::HPEN {
+    use windows::Win32::Graphics::Gdi::{CreatePen, HPEN, PS_SOLID};
+    if let Ok(mut cache) = PEN_CACHE.lock() {
+        let key = (color.0, width);
+        if let Some(&handle) = cache.get(&key) {
+            return HPEN(handle as *mut core::ffi::c_void);
+        }
+        let pen = CreatePen(PS_SOLID, width, color);
+        cache.insert(key, pen.0 as isize);
+        pen
+    } else {
+        CreatePen(PS_SOLID, width, color)
+    }
+}
+
+/// Frees all cached Win32 HFONT, HBRUSH, and HPEN handles using DeleteObject and clears the cache map.
 pub fn cleanup_font_cache() {
     #[cfg(windows)]
     {
         use windows::Win32::Graphics::Gdi::{DeleteObject, HGDIOBJ};
         if let Ok(mut cache) = FONT_CACHE.lock() {
+            for (_, handle) in cache.drain() {
+                if handle != 0 {
+                    unsafe {
+                        let _ = DeleteObject(HGDIOBJ(handle as *mut core::ffi::c_void));
+                    }
+                }
+            }
+        }
+        if let Ok(mut cache) = BRUSH_CACHE.lock() {
+            for (_, handle) in cache.drain() {
+                if handle != 0 {
+                    unsafe {
+                        let _ = DeleteObject(HGDIOBJ(handle as *mut core::ffi::c_void));
+                    }
+                }
+            }
+        }
+        if let Ok(mut cache) = PEN_CACHE.lock() {
             for (_, handle) in cache.drain() {
                 if handle != 0 {
                     unsafe {
@@ -1079,9 +1130,8 @@ unsafe extern "system" fn overlay_wndproc(
                         let old_bmp = SelectObject(mem_dc, mem_bmp);
 
                         // Clear memory buffer with Chroma Key (RGB 1, 1, 1)
-                        let bg_brush = CreateSolidBrush(COLORREF(0x00010101));
+                        let bg_brush = get_cached_brush(COLORREF(0x00010101));
                         FillRect(mem_dc, &client_rect, bg_brush);
-                        let _ = DeleteObject(bg_brush);
 
                         // Read snapshot and render HUD content without holding GLOBAL_HUD.state lock during rendering
                         let content_to_render = if let Ok(st) = GLOBAL_HUD.state.read() {
@@ -1560,15 +1610,14 @@ unsafe fn render_augment_hud(
 
         // 卡牌外围高亮推荐边框 (圆角矩形，厚度 2px)
         let border_pen_col = if all_traps { rgb(244, 63, 94) } else { rgb(10, 200, 185) };
-        use windows::Win32::Graphics::Gdi::{CreatePen, DeleteObject, SelectObject, RoundRect, PS_SOLID, NULL_BRUSH, GetStockObject};
-        let pen = CreatePen(PS_SOLID, 2, border_pen_col);
+        use windows::Win32::Graphics::Gdi::{SelectObject, RoundRect, NULL_BRUSH, GetStockObject};
+        let pen = get_cached_pen(2, border_pen_col);
         let old_pen = SelectObject(hdc, pen);
         let null_brush = GetStockObject(NULL_BRUSH);
         let old_brush = SelectObject(hdc, null_brush);
         let _ = RoundRect(hdc, card_bx, card_by, card_bx + card_w, card_by + card_h, 12, 12);
         let _ = SelectObject(hdc, old_brush);
         let _ = SelectObject(hdc, old_pen);
-        let _ = DeleteObject(pen);
     }
 
     // 3.2 绘制 3 个槽位的透明大字胶囊 (Card Badges)
@@ -3010,9 +3059,9 @@ unsafe fn draw_dot(
     fill_color: windows::Win32::Foundation::COLORREF,
     border_color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{CreatePen, CreateSolidBrush, DeleteObject, Ellipse, SelectObject, PS_SOLID};
-    let brush = CreateSolidBrush(fill_color);
-    let pen = CreatePen(PS_SOLID, 1, border_color);
+    use windows::Win32::Graphics::Gdi::{Ellipse, SelectObject};
+    let brush = get_cached_brush(fill_color);
+    let pen = get_cached_pen(1, border_color);
     let old_brush = SelectObject(hdc, brush);
     let old_pen = SelectObject(hdc, pen);
 
@@ -3020,8 +3069,6 @@ unsafe fn draw_dot(
 
     let _ = SelectObject(hdc, old_brush);
     let _ = SelectObject(hdc, old_pen);
-    let _ = DeleteObject(brush);
-    let _ = DeleteObject(pen);
 }
 
 #[cfg(windows)]
@@ -3032,13 +3079,12 @@ unsafe fn draw_h_line(
     x2: i32,
     color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{CreatePen, DeleteObject, LineTo, MoveToEx, SelectObject, PS_SOLID};
-    let pen = CreatePen(PS_SOLID, 1, color);
+    use windows::Win32::Graphics::Gdi::{LineTo, MoveToEx, SelectObject};
+    let pen = get_cached_pen(1, color);
     let old_pen = SelectObject(hdc, pen);
     let _ = MoveToEx(hdc, x1, y, None);
     let _ = LineTo(hdc, x2, y);
     let _ = SelectObject(hdc, old_pen);
-    let _ = DeleteObject(pen);
 }
 
 #[cfg(windows)]
@@ -3051,10 +3097,10 @@ unsafe fn draw_card_rect(
     bg_color: windows::Win32::Foundation::COLORREF,
     border_color: windows::Win32::Foundation::COLORREF,
 ) {
-    use windows::Win32::Graphics::Gdi::{CreatePen, CreateSolidBrush, DeleteObject, RoundRect, SelectObject, PS_SOLID};
+    use windows::Win32::Graphics::Gdi::{RoundRect, SelectObject};
 
-    let pen = CreatePen(PS_SOLID, 1, border_color);
-    let brush = CreateSolidBrush(bg_color);
+    let pen = get_cached_pen(1, border_color);
+    let brush = get_cached_brush(bg_color);
     let old_pen = SelectObject(hdc, pen);
     let old_brush = SelectObject(hdc, brush);
 
@@ -3062,8 +3108,6 @@ unsafe fn draw_card_rect(
 
     let _ = SelectObject(hdc, old_brush);
     let _ = SelectObject(hdc, old_pen);
-    let _ = DeleteObject(brush);
-    let _ = DeleteObject(pen);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3207,12 +3251,10 @@ unsafe fn draw_pill_badge(
     text_color: windows::Win32::Foundation::COLORREF,
     text: &str,
 ) {
-    use windows::Win32::Graphics::Gdi::{
-        CreatePen, CreateSolidBrush, DeleteObject, RoundRect, SelectObject, PS_SOLID,
-    };
+    use windows::Win32::Graphics::Gdi::{RoundRect, SelectObject};
 
-    let pen = CreatePen(PS_SOLID, 1, border_color);
-    let brush = CreateSolidBrush(bg_color);
+    let pen = get_cached_pen(1, border_color);
+    let brush = get_cached_brush(bg_color);
     let old_pen = SelectObject(hdc, pen);
     let old_brush = SelectObject(hdc, brush);
 
@@ -3220,8 +3262,6 @@ unsafe fn draw_pill_badge(
 
     let _ = SelectObject(hdc, old_brush);
     let _ = SelectObject(hdc, old_pen);
-    let _ = DeleteObject(brush);
-    let _ = DeleteObject(pen);
 
     let (total_w, text_h) = measure_text_custom(hdc, text, 11, 600);
     let text_x = x + (w - total_w) / 2;
@@ -3311,10 +3351,16 @@ mod tests {
                 let _f1 = get_cached_font(12, 400);
                 let _f2 = get_cached_font(14, 700);
                 let _f3 = get_cached_font_kind(12, 400, FontKind::Emoji);
+                let _b1 = get_cached_brush(windows::Win32::Foundation::COLORREF(0x00010101));
+                let _p1 = get_cached_pen(1, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
             }
             assert!(!FONT_CACHE.lock().unwrap().is_empty());
+            assert!(!BRUSH_CACHE.lock().unwrap().is_empty());
+            assert!(!PEN_CACHE.lock().unwrap().is_empty());
             cleanup_font_cache();
             assert!(FONT_CACHE.lock().unwrap().is_empty());
+            assert!(BRUSH_CACHE.lock().unwrap().is_empty());
+            assert!(PEN_CACHE.lock().unwrap().is_empty());
         }
     }
 

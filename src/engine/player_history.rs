@@ -497,7 +497,7 @@ pub fn compute_radar(matches: &[ParsedMatchRecord]) -> HashMap<String, i32> {
 
 fn get_combinations(indices: &[usize], k: usize) -> Vec<Vec<usize>> {
     let mut result = Vec::new();
-    if k == 0 || k > indices.len() {
+    if k == 0 || k > indices.len() || indices.len() > 8 {
         return result;
     }
     fn backtrack(indices: &[usize], start: usize, k: usize, current: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
@@ -617,17 +617,21 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
     let max_party_size = if queue_id == 420 { 2 } else { 5 };
 
     // Group player indices by team_id
-    // If team_id is <= 0 (e.g. ChampSelect or unassigned), in a standard 10-player match
-    // indices 0..5 are Team 100 (Blue) and 5..10 are Team 200 (Red).
-    // Otherwise, assign individual negative IDs to prevent opposing players from grouping into a fake cross-team premade.
+    // Group player indices by team_id
+    // If team_id is <= 0 (e.g. ChampSelect or unassigned):
+    // - In Arena modes (1700/1710): 2 players per team ((i / 2) + 1)
+    // - In even-split matches (like standard 5v5 or 3v3): first half Team 100, second half Team 200
+    // - Otherwise: isolated individual IDs to prevent opposing players from grouping into a cross-team premade.
     let mut team_groups: HashMap<i32, Vec<usize>> = HashMap::new();
     for i in 0..n {
         let eff_team_id = if players[i].team_id > 0 {
             players[i].team_id
-        } else if n == 10 {
-            if i < 5 { 100 } else { 200 }
+        } else if queue_id == 1700 || queue_id == 1710 {
+            (i / 2) as i32 + 1
+        } else if n % 2 == 0 {
+            if i < n / 2 { 100 } else { 200 }
         } else {
-            0
+            (i + 1) as i32
         };
         team_groups.entry(eff_team_id).or_default().push(i);
     }
@@ -644,9 +648,12 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
     let mut components = Vec::new();
 
     for tid in sorted_teams {
-        let indices = team_groups.remove(&tid).unwrap_or_default();
+        let mut indices = team_groups.remove(&tid).unwrap_or_default();
         if indices.len() < 2 {
             continue;
+        }
+        if indices.len() > 8 {
+            indices.truncate(8);
         }
 
         let max_k = indices.len().min(max_party_size);

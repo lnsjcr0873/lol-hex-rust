@@ -168,6 +168,12 @@ export function provideMatchHistoryCardViewport(options: { active: MaybeRefOrGet
         notifyCurrentViewport()
         observer.resume()
         refreshObserver()
+        void nextTick(() => {
+          if (shouldObserve.value) {
+            notifyCurrentViewport()
+            refreshObserver()
+          }
+        })
       } else {
         observer.pause()
       }

@@ -36,11 +36,11 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       }
     }
 
-    const totalKills = matches.reduce((acc, m) => acc + (m.kills || 0), 0)
-    const totalDeaths = matches.reduce((acc, m) => acc + (m.deaths || 0), 0)
-    const totalAssists = matches.reduce((acc, m) => acc + (m.assists || 0), 0)
+    const totalKills = matches.reduce((acc, m) => acc + (Number.isFinite(m.kills) ? m.kills : 0), 0)
+    const totalDeaths = matches.reduce((acc, m) => acc + (Number.isFinite(m.deaths) ? m.deaths : 0), 0)
+    const totalAssists = matches.reduce((acc, m) => acc + (Number.isFinite(m.assists) ? m.assists : 0), 0)
     const avgKda = totalDeaths === 0 ? (totalKills + totalAssists) : (totalKills + totalAssists) / totalDeaths
-    const avgCsPerMinute = count > 0 ? matches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / count : 0
+    const avgCsPerMinute = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.cs_per_min) ? m.cs_per_min : 0), 0) / count : 0
 
     // Spells
     const isFlashD = player.spell1_id === 4
@@ -64,11 +64,11 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       const cWins = cMatches.filter((m) => m.win).length
       const cLosses = cCount - cWins
       const cWinRate = cCount > 0 ? cWins / cCount : 0
-      const cTotalKills = cMatches.reduce((acc, m) => acc + (m.kills || 0), 0)
-      const cTotalDeaths = cMatches.reduce((acc, m) => acc + (m.deaths || 0), 0)
-      const cTotalAssists = cMatches.reduce((acc, m) => acc + (m.assists || 0), 0)
+      const cTotalKills = cMatches.reduce((acc, m) => acc + (Number.isFinite(m.kills) ? m.kills : 0), 0)
+      const cTotalDeaths = cMatches.reduce((acc, m) => acc + (Number.isFinite(m.deaths) ? m.deaths : 0), 0)
+      const cTotalAssists = cMatches.reduce((acc, m) => acc + (Number.isFinite(m.assists) ? m.assists : 0), 0)
       const cAvgKda = cTotalDeaths === 0 ? (cTotalKills + cTotalAssists) : (cTotalKills + cTotalAssists) / cTotalDeaths
-      const cCsPerMin = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.cs_per_min || 0), 0) / cCount : 0
+      const cCsPerMin = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.cs_per_min) ? m.cs_per_min : 0), 0) / cCount : 0
 
       let cWinStreak = 0
       let cLoseStreak = 0
@@ -82,16 +82,17 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         }
       }
 
-      const cRawDamageShare = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / cCount : 0
+      const cRawDamageShare = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.damage_share_pct) ? m.damage_share_pct : 0), 0) / cCount : 0
       const cDamageShare = normalizeRate(cRawDamageShare)
-      const cDamage = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.damage || 0), 0) / cCount : 0
-      const cGold = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.gold || 0), 0) / cCount : 0
-      const cVision = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / cCount : 0
-      const cRawKp = cCount > 0 ? cMatches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / cCount : 0
+      const cDamage = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.damage) ? m.damage : 0), 0) / cCount : 0
+      const cGold = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.gold) ? m.gold : 0), 0) / cCount : 0
+      const cVision = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.vision_score) ? m.vision_score : 0), 0) / cCount : 0
+      const cRawKp = cCount > 0 ? cMatches.reduce((acc, m) => acc + (Number.isFinite(m.kp_pct) ? m.kp_pct : 0), 0) / cCount : 0
       const cKp = normalizeRate(cRawKp)
       const cDamagePerMin = cCount > 0 ? cMatches.reduce((acc, m) => {
         const dur = (m.game_duration || 1800) / 60
-        return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
+        const dmg = Number.isFinite(m.damage) ? m.damage : 0
+        return acc + (dur > 0 ? dmg / dur : 0)
       }, 0) / cCount : 0
 
       champions[String(cid)] = {
@@ -178,16 +179,17 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       }
     }
 
-    const rawAvgDamageShare = count > 0 ? matches.reduce((acc, m) => acc + (m.damage_share_pct || 0), 0) / count : 0
+    const rawAvgDamageShare = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.damage_share_pct) ? m.damage_share_pct : 0), 0) / count : 0
     const avgDamageShare = normalizeRate(rawAvgDamageShare)
-    const avgDamage = count > 0 ? matches.reduce((acc, m) => acc + (m.damage || 0), 0) / count : 0
-    const avgGold = count > 0 ? matches.reduce((acc, m) => acc + (m.gold || 0), 0) / count : 0
-    const avgVision = count > 0 ? matches.reduce((acc, m) => acc + (m.vision_score || 0), 0) / count : 0
-    const rawAvgKp = count > 0 ? matches.reduce((acc, m) => acc + (m.kp_pct || 0), 0) / count : 0
+    const avgDamage = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.damage) ? m.damage : 0), 0) / count : 0
+    const avgGold = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.gold) ? m.gold : 0), 0) / count : 0
+    const avgVision = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.vision_score) ? m.vision_score : 0), 0) / count : 0
+    const rawAvgKp = count > 0 ? matches.reduce((acc, m) => acc + (Number.isFinite(m.kp_pct) ? m.kp_pct : 0), 0) / count : 0
     const avgKp = normalizeRate(rawAvgKp)
     const avgDamagePerMinute = count > 0 ? matches.reduce((acc, m) => {
       const dur = (m.game_duration || 1800) / 60
-      return acc + (dur > 0 ? (m.damage || 0) / dur : 0)
+      const dmg = Number.isFinite(m.damage) ? m.damage : 0
+      return acc + (dur > 0 ? dmg / dur : 0)
     }, 0) / count : 0
 
     const kdaScore = Math.min(1.0, avgKda / 5.0)
@@ -467,12 +469,18 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
   if (player.top_champs && player.top_champs.length > 0) {
     for (const tc of player.top_champs) {
       if (tc.champion_id > 0) {
-        const tcWinRate = (tc.win_rate || (tc.win_rate_pct / 100))
-        const tcWins = Math.round(tcWinRate * tc.games)
+        const tcWinRate = Number.isFinite(tc.win_rate)
+          ? (tc.win_rate > 1 ? tc.win_rate / 100 : Math.max(0, tc.win_rate))
+          : Number.isFinite(tc.win_rate_pct)
+            ? Math.max(0, tc.win_rate_pct / 100)
+            : 0
+        const tcGames = Number.isFinite(tc.games) ? tc.games : 0
+        const tcWins = Math.round(tcWinRate * tcGames)
+        const tcKda = Number.isFinite(tc.kda) ? tc.kda : 0
         champions[String(tc.champion_id)] = {
           championId: tc.champion_id,
           summary: {
-            avgKda: tc.kda,
+            avgKda: tcKda,
             winRate: tcWinRate,
             avgChampionDamagePercentageOfTeam: 0,
             avgDamageTakenPercentageOfTeam: 0,
@@ -542,8 +550,8 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       }
     }
   } else if (player.champion_id > 0 && player.champ_recent_games && player.champ_recent_games > 0) {
-    const cCount = player.champ_recent_games
-    const cWinRate = (player.champ_recent_win_rate ?? 0) / 100
+    const cCount = Number.isFinite(player.champ_recent_games) ? player.champ_recent_games : 0
+    const cWinRate = Number.isFinite(player.champ_recent_win_rate) ? Math.max(0, player.champ_recent_win_rate / 100) : 0
     const cWins = Math.round(cCount * cWinRate)
     champions[String(player.champion_id)] = {
       championId: player.champion_id,
