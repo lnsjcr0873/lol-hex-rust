@@ -112,29 +112,45 @@ impl InGameOverlay {
 
                 // 3. 动态阶段时序守护 (基于英雄等级 3/7/11/15)
                 let level = stats.level;
-                let max_stage = if level >= 15 {
-                    4
-                } else if level >= 11 {
-                    3
-                } else if level >= 7 {
-                    2
+                let max_stage = if level > 0 {
+                    if level >= 15 {
+                        4
+                    } else if level >= 11 {
+                        3
+                    } else if level >= 7 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
-                    1
+                    // Level is 0 (2999 offline / fallback mode): infer current stage from completed milestones
+                    if completed_milestones.contains("stage_3") {
+                        4
+                    } else if completed_milestones.contains("stage_2") {
+                        3
+                    } else if completed_milestones.contains("stage_1") {
+                        2
+                    } else {
+                        1
+                    }
                 };
 
-                // 阶段自愈防护
-                if level < 15 { completed_milestones.remove("stage_4"); }
-                if level < 11 { completed_milestones.remove("stage_3"); }
-                if level < 7 { completed_milestones.remove("stage_2"); }
+                // 阶段自愈防护 (仅当 live stats 正常提供真实等级时生效，避免 2999 瞬时超时/纯 LCU 模式 level==0 误删标记)
+                if level > 0 {
+                    if level < 15 { completed_milestones.remove("stage_4"); }
+                    if level < 11 { completed_milestones.remove("stage_3"); }
+                    if level < 7 { completed_milestones.remove("stage_2"); }
+                }
 
                 let current_stage = max_stage;
 
                 // 阶段等级门禁：当前轮次已完成且尚未到达下一轮等级阈值时，低频待命
                 if !showing_cards && completed_milestones.contains(&format!("stage_{}", current_stage)) {
-                    if (current_stage == 1 && level < 7)
+                    if level > 0 && (
+                        (current_stage == 1 && level < 7)
                         || (current_stage == 2 && level < 11)
                         || (current_stage == 3 && level < 15)
-                    {
+                    ) {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         continue;
                     }
