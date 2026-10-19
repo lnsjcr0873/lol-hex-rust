@@ -279,10 +279,53 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     }
 }
 
+pub fn resolve_config_path(path: &str) -> std::path::PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+
+    #[cfg(windows)]
+    {
+        let in_program_files = std::env::current_exe()
+            .map(|exe| {
+                let s = exe.to_string_lossy().to_lowercase();
+                s.contains("program files") || s.contains("programfiles")
+            })
+            .unwrap_or(false);
+
+        let cwd_writable = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(".write_test.tmp")
+            .map(|f| {
+                drop(f);
+                let _ = std::fs::remove_file(".write_test.tmp");
+                true
+            })
+            .unwrap_or(false);
+
+        if in_program_files || !cwd_writable {
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                let dir = std::path::PathBuf::from(appdata).join("HexBrain");
+                let _ = std::fs::create_dir_all(&dir);
+                let target = dir.join(path);
+                if !target.exists() && p.exists() {
+                    let _ = std::fs::copy(p, &target);
+                }
+                return target;
+            }
+        }
+    }
+
+    p.to_path_buf()
+}
+
 impl ConfigManager {
     pub fn new(path: &str) -> Self {
+        let resolved = resolve_config_path(path);
         let mut initial = RecommendationConfig::default();
-        let p = Path::new(path);
+        let p = resolved.as_path();
         let bak = p.with_extension("bak");
         let mut loaded = false;
 
@@ -313,7 +356,7 @@ impl ConfigManager {
 
         Self {
             config: Arc::new(RwLock::new(initial)),
-            config_file_path: path.to_string(),
+            config_file_path: resolved.to_string_lossy().to_string(),
         }
     }
 
@@ -325,7 +368,22 @@ impl ConfigManager {
         let cfg = self.config.read().await;
         if let Ok(json_str) = serde_json::to_string_pretty(&*cfg) {
             let path = Path::new(&self.config_file_path);
-            return save_atomic(path, &json_str).is_ok();
+            if save_atomic(path, &json_str).is_ok() {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                if let Ok(appdata) = std::env::var("APPDATA") {
+                    let dir = std::path::PathBuf::from(appdata).join("HexBrain");
+                    let _ = std::fs::create_dir_all(&dir);
+                    if let Some(fname) = path.file_name() {
+                        let fallback = dir.join(fname);
+                        if save_atomic(&fallback, &json_str).is_ok() {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
         false
     }
