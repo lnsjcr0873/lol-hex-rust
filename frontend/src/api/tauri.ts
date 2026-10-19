@@ -164,12 +164,31 @@ export async function getMatchHistory(
   );
 }
 
+export function getEmptyRawMatchHistory(begIndex = 0, endIndex = 0): MatchHistory {
+  return {
+    accountId: 0,
+    platformId: '',
+    games: {
+      gameBeginDate: '',
+      gameCount: 0,
+      gameEndDate: '',
+      gameIndexBegin: begIndex,
+      gameIndexEnd: endIndex,
+      games: []
+    }
+  };
+}
+
 export async function getRawMatchHistory(
   puuid?: string,
   queueId?: number,
   begIndex?: number,
   endIndex?: number
 ): Promise<MatchHistory> {
+  const isMockPuuid = typeof puuid === 'string' && (puuid.startsWith('mock_') || puuid === 'mock');
+  const webMockFallback = getMockRawMatchHistory(queueId, begIndex, endIndex);
+  const tauriFailureFallback = isMockPuuid ? webMockFallback : getEmptyRawMatchHistory(begIndex, endIndex);
+
   return safeInvoke<MatchHistory>(
     'get_raw_match_history',
     {
@@ -181,18 +200,22 @@ export async function getRawMatchHistory(
       endIndex,
       end_index: endIndex
     },
-    getMockRawMatchHistory(queueId, begIndex, endIndex)
+    isTauri() ? tauriFailureFallback : webMockFallback
   );
 }
 
 export async function getRawMatchTimeline(gameId: number): Promise<GameTimeline> {
+  const isMockGame = (gameId >= 7000000000 && gameId < 8000000000) || gameId >= 99990000;
+  const webMockFallback = getMockRawMatchTimeline(gameId);
+  const tauriFailureFallback = isMockGame ? webMockFallback : ({ frames: [] } as any);
+
   return safeInvoke<GameTimeline>(
     'get_raw_match_timeline',
     {
       gameId,
       game_id: gameId
     },
-    getMockRawMatchTimeline(gameId)
+    isTauri() ? tauriFailureFallback : webMockFallback
   );
 }
 
