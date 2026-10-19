@@ -505,29 +505,32 @@ impl LcuClient {
                 return Some(res);
             }
             return None;
-        } else if scheme == "https" {
-            let alt_url = format!("http://127.0.0.1:{}{}", port, path_and_query);
-            let mut alt_builder = self.client.request(method, &alt_url).headers(headers.clone());
-            if let Some(b) = body {
-                alt_builder = alt_builder.json(b);
-            }
-            let alt_req_res = alt_builder.send().await;
-            if let Ok(alt_res) = alt_req_res {
-                let status = alt_res.status();
-                if status == reqwest::StatusCode::UNAUTHORIZED {
-                    self.invalidate_credentials().await;
-                    return None;
-                }
-                if status.is_success() {
-                    self.set_protocol("http").await;
-                    self.record_success();
-                    return Some(alt_res);
-                }
+        }
+
+        // Primary protocol request failed (network error / connection refusal).
+        // Try the alternative protocol ("http" <-> "https") for bidirectional self-healing.
+        let alt_scheme = if scheme == "https" { "http" } else { "https" };
+        let alt_url = format!("{}://127.0.0.1:{}{}", alt_scheme, port, path_and_query);
+        let mut alt_builder = self.client.request(method, &alt_url).headers(headers.clone());
+        if let Some(b) = body {
+            alt_builder = alt_builder.json(b);
+        }
+        let alt_req_res = alt_builder.send().await;
+        if let Ok(alt_res) = alt_req_res {
+            let status = alt_res.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.invalidate_credentials().await;
                 return None;
-            } else if let Err(ref e) = alt_req_res {
-                if e.is_connect() {
-                    self.record_failure().await;
-                }
+            }
+            if status.is_success() {
+                self.set_protocol(alt_scheme).await;
+                self.record_success();
+                return Some(alt_res);
+            }
+            return None;
+        } else if let Err(ref e) = alt_req_res {
+            if e.is_connect() {
+                self.record_failure().await;
             }
         } else if let Err(ref e) = req_res {
             if e.is_connect() {
