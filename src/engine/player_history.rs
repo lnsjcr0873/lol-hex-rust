@@ -624,9 +624,12 @@ pub fn detect_premade_teams_with_queue(players: &mut [OngoingPlayerCard], queue_
             };
 
             // Fallback for synthetic/canned test fixtures where game_id is 0 or synthetic
+            // Scope synthetic IDs by pair indices (i, j) so two distinct pairs never share
+            // synthetic negative IDs, preventing spurious 3-player or 4-player clique false positives!
             if shared_game_ids.len() < total_shared {
+                let pair_seed = (((i as i64) + 1) * 1000 + ((j as i64) + 1)) * 10000;
                 for idx in 0..total_shared {
-                    shared_game_ids.insert(-((idx + 1) as i64));
+                    shared_game_ids.insert(-(pair_seed + (idx as i64) + 1));
                 }
             }
 
@@ -3024,6 +3027,7 @@ impl PlayerHistoryManager {
             })
             .collect();
 
+        let mut priority_d_slots: std::collections::HashSet<usize> = std::collections::HashSet::new();
         if !unassigned_teammates.is_empty() {
             let unused_chat_cands: Vec<(usize, String, String)> = candidate_teammates
                 .iter()
@@ -3034,7 +3038,13 @@ impl PlayerHistoryManager {
 
             for (slot_idx, (c_i, cid, cname)) in unassigned_teammates.into_iter().zip(unused_chat_cands.into_iter()) {
                 used_candidates.insert(c_i);
-                assigned_puuids[slot_idx] = Some((cid, cname));
+                priority_d_slots.insert(slot_idx);
+                let candidate_name = if cname.starts_with("[候选]") {
+                    cname
+                } else {
+                    format!("[候选] {}", cname)
+                };
+                assigned_puuids[slot_idx] = Some((cid, candidate_name));
             }
         }
 
@@ -3064,7 +3074,13 @@ impl PlayerHistoryManager {
         // 4. Concurrently fetch or compute tactical profiles
         let mut player_inputs = Vec::with_capacity(slot_count);
         for (idx, slot) in assigned_puuids.into_iter().enumerate() {
-            let cur_cid = my_team_cids.get(idx).copied().unwrap_or(0);
+            // For slots mapped via Priority D anonymity fallback, pass cur_cid = 0
+            // so we don't falsely evaluate an unconfirmed candidate against this slot's picked champion!
+            let cur_cid = if priority_d_slots.contains(&idx) {
+                0
+            } else {
+                my_team_cids.get(idx).copied().unwrap_or(0)
+            };
             if let Some((p, n)) = slot {
                 player_inputs.push((Some(p), Some(n), cur_cid));
             } else {
@@ -3698,15 +3714,20 @@ mod tests {
 
             for (slot_idx, (c_i, cid, cname)) in unassigned_teammates.into_iter().zip(unused_chat_cands.into_iter()) {
                 used_candidates.insert(c_i);
-                assigned_puuids[slot_idx] = Some((cid, cname));
+                let candidate_name = if cname.starts_with("[候选]") {
+                    cname
+                } else {
+                    format!("[候选] {}", cname)
+                };
+                assigned_puuids[slot_idx] = Some((cid, candidate_name));
             }
         }
 
         // All 4 teammate slots must now be mapped to the chat candidates!
         assert!(assigned_puuids.iter().all(|s| s.is_some()), "All anonymous teammate slots must be mapped from chat candidates");
-        assert_eq!(assigned_puuids[1], Some(("puuid-cand-1".to_string(), "PlayerA".to_string())));
-        assert_eq!(assigned_puuids[2], Some(("puuid-cand-2".to_string(), "PlayerB".to_string())));
-        assert_eq!(assigned_puuids[3], Some(("puuid-cand-3".to_string(), "PlayerC".to_string())));
-        assert_eq!(assigned_puuids[4], Some(("puuid-cand-4".to_string(), "PlayerD".to_string())));
+        assert_eq!(assigned_puuids[1], Some(("puuid-cand-1".to_string(), "[候选] PlayerA".to_string())));
+        assert_eq!(assigned_puuids[2], Some(("puuid-cand-2".to_string(), "[候选] PlayerB".to_string())));
+        assert_eq!(assigned_puuids[3], Some(("puuid-cand-3".to_string(), "[候选] PlayerC".to_string())));
+        assert_eq!(assigned_puuids[4], Some(("puuid-cand-4".to_string(), "[候选] PlayerD".to_string())));
     }
 }

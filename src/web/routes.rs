@@ -931,6 +931,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
 
     let mut raw_players = Vec::new();
     let mut blue_participant_win = false;
+    let mut red_participant_win = false;
 
     for p in participants {
         let team_id = p.get("teamId").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -976,6 +977,8 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
 
         if team_id == 100 && win {
             blue_participant_win = true;
+        } else if team_id == 200 && win {
+            red_participant_win = true;
         }
 
         let k = stats.and_then(|s| s.get("kills")).and_then(|v| v.as_i64()).unwrap_or(0).max(0) as i32;
@@ -1045,7 +1048,7 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     }
 
     let final_blue_win = blue_win_flag.unwrap_or(blue_participant_win);
-    let final_red_win = red_win_flag.unwrap_or(!final_blue_win);
+    let final_red_win = red_win_flag.unwrap_or(red_participant_win);
 
     // In ARAM, Arena or special modes where dragons/barons don't exist, ensure 0
     if queue_id == 450 || queue_id == 860 || queue_id == 1700 || queue_id == 1710 {

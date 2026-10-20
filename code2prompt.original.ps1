@@ -1,0 +1,22 @@
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    code2prompt `
+      -i "Cargo.toml" `
+      -i "PROJECT.md" `
+      -i "README.md" `
+      -i "src/**/*.rs" `
+      -i "src-tauri/build.rs" `
+      -i "src-tauri/Cargo.toml" `
+      -i "src-tauri/tauri.conf.json" `
+      -i "src-tauri/capabilities/default.json" `
+      -i "src-tauri/src/**/*.rs" `
+      -i "frontend/index.html" `
+      -i "frontend/package.json" `
+      -i "frontend/vite.config.ts" `
+      -i "frontend/tsconfig.json" `
+      -i "frontend/tailwind.config.js" `
+      -i "frontend/postcss.config.js" `
+      -i "frontend/src/**/*.{vue,ts,js,css}" `
+      -i "static/app.js" `
+      -i "static/style.css" `
+      --encoding cl100k `
+      -O "prompt_$ts.md"

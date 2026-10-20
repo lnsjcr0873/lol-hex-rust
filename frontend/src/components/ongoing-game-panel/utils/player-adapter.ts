@@ -4,6 +4,12 @@ import type {
   AggregatedJungleAnalysis,
   AkariScore
 } from '../../../shared/data-adapter/analysis/player'
+import {
+  AGGREGATE_AKARI_OUTSTANDING_THRESHOLD,
+  AGGREGATE_AKARI_OUTSTANDING_MIN_COUNT,
+  AGGREGATE_AKARI_EXTRAORDINARY_THRESHOLD,
+  AGGREGATE_AKARI_EXTRAORDINARY_MIN_COUNT
+} from '../../../shared/data-adapter/analysis/player/constants'
 import type { EnhancedPlayerCard } from '../types'
 
 function normalizeRate(val: number | undefined | null): number {
@@ -228,8 +234,8 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       ? Math.max(0, Math.min(2.0, avgVision / 35.0))
       : Math.max(0, Math.min(2.0, safeNum(player.radar?.vision) / 45))
     const akariTotal = Math.max(0, Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore))
-    const isExtraordinary = akariTotal >= 13.5 && count >= 5
-    const isOutstanding = akariTotal >= 11.5 && count >= 5
+    const isExtraordinary = akariTotal >= AGGREGATE_AKARI_EXTRAORDINARY_THRESHOLD && count >= AGGREGATE_AKARI_EXTRAORDINARY_MIN_COUNT
+    const isOutstanding = akariTotal >= AGGREGATE_AKARI_OUTSTANDING_THRESHOLD && count >= AGGREGATE_AKARI_OUTSTANDING_MIN_COUNT
 
     const akariScore: AkariScore = {
       total: akariTotal,
@@ -473,8 +479,8 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
   const participationScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.join_rate) / 45))
   const visionScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.vision) / 45))
   const akariTotal = Math.max(0, Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore))
-  const isExtraordinary = akariTotal >= 13.5 && count >= 5
-  const isOutstanding = akariTotal >= 11.5 && count >= 5
+  const isExtraordinary = akariTotal >= AGGREGATE_AKARI_EXTRAORDINARY_THRESHOLD && count >= AGGREGATE_AKARI_EXTRAORDINARY_MIN_COUNT
+  const isOutstanding = akariTotal >= AGGREGATE_AKARI_OUTSTANDING_THRESHOLD && count >= AGGREGATE_AKARI_OUTSTANDING_MIN_COUNT
 
   const akariScore: AkariScore = {
     total: akariTotal,

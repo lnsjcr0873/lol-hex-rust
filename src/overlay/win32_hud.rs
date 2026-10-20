@@ -911,6 +911,9 @@ impl NativeHud {
         if let Ok(mut inter) = RANKED_INTERACTION.write() {
             inter.last_local_locked = false;
         }
+        if let Ok(mut hz) = GLOBAL_HOTZONES.write() {
+            *hz = HudHotzones::default();
+        }
         #[cfg(windows)]
         {
             if let Ok(guard) = self.hwnd.lock() {
@@ -2072,12 +2075,15 @@ unsafe fn render_item_hud(
         draw_text_custom(hdc, hint, box_x + box_w - 92, footer_y, (9.0 * min_s).max(8.0) as i32, 400, rgb(100, 116, 139), false);
     }
 
-    // Save hotzones
+    // Save hotzones (resetting other mode hotzones to prevent ghost clicks)
     if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
-        gz.item_close_btn = new_item_close;
-        gz.item_algo_btns = new_item_algo_btns;
-        gz.item_main_tabs = new_item_main_tabs;
-        gz.item_subtabs = new_item_subtabs;
+        *gz = HudHotzones {
+            item_close_btn: new_item_close,
+            item_algo_btns: new_item_algo_btns,
+            item_main_tabs: new_item_main_tabs,
+            item_subtabs: new_item_subtabs,
+            ..Default::default()
+        };
     }
 }
 
@@ -2090,7 +2096,7 @@ unsafe fn render_bench_hud(
 ) {
     if data.champions.is_empty() {
         if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
-            gz.bench_champs.clear();
+            *gz = HudHotzones::default();
         }
         return;
     }
@@ -2111,7 +2117,7 @@ unsafe fn render_bench_hud(
 
     if !enabled {
         if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
-            gz.bench_champs.clear();
+            *gz = HudHotzones::default();
         }
         return;
     }
@@ -2186,7 +2192,10 @@ unsafe fn render_bench_hud(
     }
 
     if let Ok(mut gz) = GLOBAL_HOTZONES.write() {
-        gz.bench_champs = new_bench_champs;
+        *gz = HudHotzones {
+            bench_champs: new_bench_champs,
+            ..Default::default()
+        };
     }
 }
 
