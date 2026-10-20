@@ -438,7 +438,7 @@ export const TACTICAL_TAG_DEFINITIONS: TacticalTagDefinition[] = [
       if (!isHigh) {
         const pos = (ctx.assignedPosition || '').toUpperCase()
         const isUtility = pos === 'UTILITY' || pos === 'SUPPORT'
-        const dmgShare = ctx.analysis.damage?.damageDealtShare
+        const dmgShare = ctx.analysis.summary?.avgChampionDamagePercentageOfTeam ?? (ctx.analysis as any).damage?.damageDealtShare
         const hasLowDmgShare = dmgShare !== undefined && dmgShare < 0.18
         if (isUtility || hasLowDmgShare) {
           return null
