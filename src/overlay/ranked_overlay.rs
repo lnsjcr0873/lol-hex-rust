@@ -271,10 +271,13 @@ pub async fn update_ranked_draft_overlay(
     let sample_limit = history.sample_count.load(std::sync::atomic::Ordering::Relaxed);
     let mut current_sig = format!("S:{};", sample_limit);
     for s in &d.state.my_team {
-        current_sig.push_str(&format!("M:{}:{}:{};", s.cell_id, s.champion_id, s.position));
+        current_sig.push_str(&format!("M:{}:{}:{}:{};", s.cell_id, s.champion_id, s.position, s.is_locked));
     }
     for s in &d.state.their_team {
-        current_sig.push_str(&format!("T:{}:{}:{};", s.cell_id, s.champion_id, s.position));
+        current_sig.push_str(&format!("T:{}:{}:{}:{};", s.cell_id, s.champion_id, s.position, s.is_locked));
+    }
+    for (k, v) in &d.manual_positions {
+        current_sig.push_str(&format!("P:{}:{};", k, v));
     }
 
     let my_cids: Vec<i32> = d.state.my_team.iter().map(|s| s.champion_id.parse::<i32>().unwrap_or(0)).collect();
@@ -449,7 +452,8 @@ pub async fn update_ranked_draft_overlay(
         let enemy_counterpart = d.state.their_team.iter().find(|s| s.position == local_pos && !s.champion_id.is_empty())
             .or_else(|| d.state.their_team.iter().find(|s| !s.champion_id.is_empty()));
         if let Some(enemy) = enemy_counterpart {
-            let c_data = opgg.get_counter_picks_against(&enemy.champion_id, &local_pos, Some(8)).await;
+            let enemy_pos = if !enemy.position.is_empty() { &enemy.position } else { &local_pos };
+            let c_data = opgg.get_counter_picks_against(&enemy.champion_id, enemy_pos, Some(8)).await;
             if let Some(c_arr) = c_data.get("counters").and_then(|v| v.as_array()) {
                 for c in c_arr {
                     let opp_cid = c.get("championId").and_then(|v| v.as_str()).unwrap_or("");
@@ -507,11 +511,35 @@ pub async fn update_ranked_draft_overlay(
         "排位选人辅助已激活 · 实时分析对位胜率".to_string()
     };
 
+    let can_play_pos = |cid: i32| -> bool {
+        if local_pos.is_empty() { return true; }
+        let pos_norm = match local_pos.to_uppercase().as_str() {
+            "TOP" => "TOP",
+            "JUG" | "JUNGLE" => "JUNGLE",
+            "MID" | "MIDDLE" => "MID",
+            "ADC" | "BOT" | "BOTTOM" => "ADC",
+            "SUP" | "SUPPORT" | "UTILITY" => "SUPPORT",
+            _ => return true,
+        };
+        let cid_str = cid.to_string();
+        if let Some(h) = db.heroes_summary.iter().find(|h| h.id == cid_str) {
+            h.roles.iter().any(|r| {
+                let ru = r.to_uppercase();
+                ru == pos_norm || (pos_norm == "ADC" && (ru == "BOT" || ru == "BOTTOM")) || (pos_norm == "SUPPORT" && ru == "UTILITY")
+            })
+        } else {
+            true
+        }
+    };
+
     let mut counter_map: std::collections::HashMap<i32, super::win32_hud::CounterHeroItem> = std::collections::HashMap::new();
+    let has_any_locked_enemy = their_slots.iter().any(|s| s.is_locked && !s.counter_heroes.is_empty());
     for s in &their_slots {
-        if s.is_locked && !s.counter_heroes.is_empty() {
+        let consider_slot = (has_any_locked_enemy && s.is_locked) || (!has_any_locked_enemy && s.champion_id > 0);
+        if consider_slot && !s.counter_heroes.is_empty() {
             for c in &s.counter_heroes {
                 if c.champion_id <= 0 { continue; }
+                if !can_play_pos(c.champion_id) { continue; }
                 counter_map.entry(c.champion_id)
                     .and_modify(|existing| {
                         if c.counter_win_rate > existing.counter_win_rate {
@@ -530,6 +558,10 @@ pub async fn update_ranked_draft_overlay(
             .then_with(|| a.champion_id.cmp(&b.champion_id))
     });
     multi_counters.truncate(15);
+    if multi_counters.is_empty() {
+        let pos_fallback = if !local_pos.is_empty() { &local_pos } else { "MID" };
+        multi_counters = get_position_meta_picks(opgg, db, pos_fallback).await;
+    }
 
     let local_synergies = my_slots.iter().find(|s| s.is_local_player).map(|s| s.synergy_heroes.clone()).unwrap_or_default();
     let synergy_picks = if !local_synergies.is_empty() {
@@ -552,6 +584,7 @@ pub async fn update_ranked_draft_overlay(
             if !s.is_local_player && s.is_locked && !s.synergy_heroes.is_empty() {
                 for syn in &s.synergy_heroes {
                     if syn.champion_id <= 0 { continue; }
+                    if !can_play_pos(syn.champion_id) { continue; }
                     syn_map.entry(syn.champion_id)
                         .and_modify(|existing| {
                             if syn.counter_win_rate > existing.counter_win_rate {
@@ -570,6 +603,10 @@ pub async fn update_ranked_draft_overlay(
                 .then_with(|| a.champion_id.cmp(&b.champion_id))
         });
         syn_from_team.truncate(15);
+        if syn_from_team.is_empty() {
+            let pos_fallback = if !local_pos.is_empty() { &local_pos } else { "MID" };
+            syn_from_team = get_position_meta_picks(opgg, db, pos_fallback).await;
+        }
         syn_from_team
     };
 

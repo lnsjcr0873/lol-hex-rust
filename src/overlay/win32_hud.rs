@@ -166,6 +166,7 @@ pub struct RankedInteractionState {
     pub sort_ascending: bool,
     pub inspect_scroll_offset: usize,
     pub inspect_closed: bool,
+    pub overlay_minimized: bool,
 }
 
 impl Default for RankedInteractionState {
@@ -184,6 +185,7 @@ impl Default for RankedInteractionState {
             sort_ascending: false,
             inspect_scroll_offset: 0,
             inspect_closed: false,
+            overlay_minimized: false,
         }
     }
 }
@@ -198,6 +200,7 @@ pub struct HudHotzones {
     pub right_wing_toggle: Option<(i32, i32, i32, i32)>,
     pub pos_btns: Vec<((i32, i32, i32, i32), bool, usize)>,
     pub inspect_slot_btns: Vec<((i32, i32, i32, i32), bool, usize)>,
+    pub inspect_card_rect: Option<(i32, i32, i32, i32)>,
     pub inspect_tab_btns: Vec<((i32, i32, i32, i32), String)>,
     pub inspect_sort_btn: Option<(i32, i32, i32, i32)>,
     pub inspect_close_btn: Option<(i32, i32, i32, i32)>,
@@ -233,6 +236,9 @@ impl HudHotzones {
             if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
         }
         if let Some((x1, y1, x2, y2)) = self.rune_btn {
+            if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
+        }
+        if let Some((x1, y1, x2, y2)) = self.inspect_card_rect {
             if px >= x1 && px <= x2 && py >= y1 && py <= y2 { return true; }
         }
         if let Some((x1, y1, x2, y2)) = self.inspect_sort_btn {
@@ -576,6 +582,93 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         }
     }
 
+    // 0.4 Inspector Drawer Handling (Click inside takes absolute priority; click outside dismisses)
+    let is_inspecting = if let Ok(inter) = RANKED_INTERACTION.read() {
+        inter.inspect_slot.is_some()
+    } else {
+        false
+    };
+
+    if is_inspecting {
+        if let Some((fx1, fy1, fx2, fy2)) = hotzones.inspect_card_rect {
+            if px >= fx1 && px <= fx2 && py >= fy1 && py <= fy2 {
+                // Click is INSIDE inspector drawer
+                // Close button
+                if let Some((x1, y1, x2, y2)) = hotzones.inspect_close_btn {
+                    if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
+                        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                            inter.inspect_closed = true;
+                            inter.inspect_slot = None;
+                        }
+                        unsafe {
+                            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, windows::Win32::Foundation::BOOL(0));
+                        }
+                        return;
+                    }
+                }
+
+                // Sort button (toggle asc/desc)
+                if let Some((x1, y1, x2, y2)) = hotzones.inspect_sort_btn {
+                    if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
+                        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                            inter.sort_ascending = !inter.sort_ascending;
+                        }
+                        unsafe {
+                            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, windows::Win32::Foundation::BOOL(0));
+                        }
+                        return;
+                    }
+                }
+
+                // Tab buttons (counter vs synergy)
+                for ((x1, y1, x2, y2), tab_key) in &hotzones.inspect_tab_btns {
+                    if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+                        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                            if inter.inspect_tab != *tab_key {
+                                inter.inspect_tab = tab_key.clone();
+                                inter.inspect_scroll_offset = 0;
+                            }
+                        }
+                        unsafe {
+                            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, windows::Win32::Foundation::BOOL(0));
+                        }
+                        return;
+                    }
+                }
+
+                // Nav buttons
+                for ((x1, y1, x2, y2), delta) in &hotzones.inspect_nav_btns {
+                    if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+                        if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                            let curr = inter.inspect_scroll_offset as i32;
+                            let next = (curr + delta).max(0) as usize;
+                            inter.inspect_scroll_offset = next;
+                        }
+                        unsafe {
+                            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, windows::Win32::Foundation::BOOL(0));
+                        }
+                        return;
+                    }
+                }
+
+                // Consumed inside inspector card so background elements underneath are never hit
+                return;
+            } else {
+                // Click is OUTSIDE inspector drawer:
+                // If user did not click another slot card to switch inspect target, dismiss drawer immediately
+                let clicked_another_slot = hotzones.inspect_slot_btns.iter().any(|((x1, y1, x2, y2), _, _)| {
+                    px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2
+                });
+                if !clicked_another_slot {
+                    if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                        inter.inspect_slot = None;
+                        repaint_needed = true;
+                    }
+                }
+            }
+        }
+    }
+
     // 1. Left wing toggle
     if let Some((x1, y1, x2, y2)) = hotzones.left_wing_toggle {
         if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
@@ -599,6 +692,13 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
     // 3. Tab buttons
     for ((x1, y1, x2, y2), tab_key) in &hotzones.tab_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
+            if tab_key == "toggle_minimize" {
+                if let Ok(mut inter) = RANKED_INTERACTION.write() {
+                    inter.overlay_minimized = !inter.overlay_minimized;
+                    repaint_needed = true;
+                }
+                break;
+            }
             if let Ok(mut inter) = RANKED_INTERACTION.write() {
                 if inter.active_tab != *tab_key {
                     inter.active_tab = tab_key.clone();
@@ -674,42 +774,7 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         }
     }
 
-    // 7. Hero Inspection close button
-    if let Some((x1, y1, x2, y2)) = hotzones.inspect_close_btn {
-        if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
-            if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                inter.inspect_closed = true;
-                inter.inspect_slot = None;
-                repaint_needed = true;
-            }
-        }
-    }
-
-    // 8. Hero Inspection sort button (toggle asc/desc)
-    if let Some((x1, y1, x2, y2)) = hotzones.inspect_sort_btn {
-        if px >= x1 && px <= x2 && py >= y1 && py <= y2 {
-            if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                inter.sort_ascending = !inter.sort_ascending;
-                repaint_needed = true;
-            }
-        }
-    }
-
-    // 9. Hero Inspection tab buttons (counter vs synergy)
-    for ((x1, y1, x2, y2), tab_key) in &hotzones.inspect_tab_btns {
-        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
-            if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                if inter.inspect_tab != *tab_key {
-                    inter.inspect_tab = tab_key.clone();
-                    inter.inspect_scroll_offset = 0;
-                    repaint_needed = true;
-                }
-            }
-            break;
-        }
-    }
-
-    // 10. Pos buttons (left click cycles position pill - checked before slot card)
+    // 7. Pos buttons (left click cycles position pill - checked before slot card)
     let mut hit_pos_btn = false;
     for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.pos_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
@@ -720,7 +785,7 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         }
     }
 
-    // 11. Hero Inspection slot buttons (click slot card to inspect that hero)
+    // 8. Hero Inspection slot buttons (click slot card to inspect that hero)
     if !hit_pos_btn {
         for ((x1, y1, x2, y2), is_my_team, slot_index) in &hotzones.inspect_slot_btns {
             if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
@@ -736,19 +801,6 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
                 }
                 break;
             }
-        }
-    }
-
-    // 12. Hero Inspection nav buttons
-    for ((x1, y1, x2, y2), delta) in &hotzones.inspect_nav_btns {
-        if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
-            if let Ok(mut inter) = RANKED_INTERACTION.write() {
-                let curr = inter.inspect_scroll_offset as i32;
-                let next = (curr + delta).max(0) as usize;
-                inter.inspect_scroll_offset = next;
-                repaint_needed = true;
-            }
-            break;
         }
     }
 
@@ -993,8 +1045,13 @@ fn run_win32_hud_loop(
     extern "system" {
         fn GetModuleHandleW(lpmodulename: *const u16) -> *mut core::ffi::c_void;
     }
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetThreadDpiAwarenessContext(dpi_context: isize) -> isize;
+    }
 
     unsafe {
+        let _ = SetThreadDpiAwarenessContext(-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         attach_to_interactive_desktop();
 
         let hmod = GetModuleHandleW(std::ptr::null());
@@ -2302,8 +2359,22 @@ unsafe fn render_ranked_hud(
 
     let mut new_hotzones = HudHotzones::default();
 
+    if inter.overlay_minimized {
+        let pill_w = 140;
+        let pill_h = 24;
+        let pill_x = actual_left_margin + (cw - pill_w) / 2;
+        let pill_y = actual_offset_y + 4;
+        draw_card_rect(hdc, pill_x, pill_y, pill_w, pill_h, rgb(8, 14, 24), rgb(56, 189, 248));
+        draw_text_line(hdc, "⚡ HexBrain (展开)", pill_x + 12, pill_y + 4, rgb(56, 189, 248));
+        new_hotzones.tab_btns.push(((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), "toggle_minimize".to_string()));
+        if let Ok(mut hz) = GLOBAL_HOTZONES.write() {
+            *hz = new_hotzones;
+        }
+        return;
+    }
+
     // -------------------------------------------------------------
-    // 1. Top Decision Navigation Bar (Tabs, Pills/Runes, Samples)
+    // 1. Top Decision Navigation Bar (Tabs, Pills/Runes, Samples, Minimize)
     // -------------------------------------------------------------
     let card_w = (860.0 * sx).min(cw as f64 - 20.0) as i32;
     let is_safe_dock = actual_offset_y < 36;
@@ -2369,13 +2440,19 @@ unsafe fn render_ranked_hud(
 
     let tabs_end_x = tab_start_x + available_tabs.len() as i32 * (tab_btn_w + tab_gap) + 4;
 
-    // 1.2 Right Sample Switcher
+    // 1.2 Minimize Button & Right Sample Switcher
+    let min_btn_w = (22.0 * sx).max(20.0) as i32;
+    let min_btn_x = card_x + card_w - min_btn_w - (6.0 * sx) as i32;
+    draw_card_rect(hdc, min_btn_x, tab_y1, min_btn_w, tab_btn_h, rgb(17, 24, 39), rgb(55, 65, 81));
+    draw_text_line(hdc, "—", min_btn_x + 6, tab_y1 + 4, rgb(156, 163, 175));
+    new_hotzones.tab_btns.push(((min_btn_x, tab_y1, min_btn_x + min_btn_w, tab_y2), "toggle_minimize".to_string()));
+
     let sample_counts = [10, 20, 30, 50];
     let s_btn_w = (28.0 * sx) as i32;
     let s_btn_h = tab_btn_h;
     let s_gap = (3.0 * sx) as i32;
     let total_s_w = sample_counts.len() as i32 * s_btn_w + (sample_counts.len() as i32 - 1) * s_gap;
-    let s_group_right = card_x + card_w - (8.0 * sx) as i32;
+    let s_group_right = min_btn_x - (8.0 * sx) as i32;
     let s_group_left = s_group_right - total_s_w;
 
     let s_label_x = s_group_left - (45.0 * sx) as i32;
@@ -2505,7 +2582,7 @@ unsafe fn render_ranked_hud(
     let wing_w = (168.0 * sx) as i32;
 
     let has_left_margin = actual_left_margin >= (60.0 * sx) as i32;
-    if left_collapsed || !has_left_margin {
+    if left_collapsed {
         let tx1 = if has_left_margin { 2 } else { actual_left_margin + 2 };
         let tx2 = tx1 + mini_w;
         let ty1 = actual_offset_y + (210.0 * sy) as i32;
@@ -2518,8 +2595,11 @@ unsafe fn render_ranked_hud(
         draw_text_line(hdc, "绩", tx1 + 6, ty1 + 64, rgb(56, 189, 248));
         new_hotzones.left_wing_toggle = Some((tx1, ty1, tx2, ty2));
     } else {
-        let wx1 = 2;
-        let wx2 = (actual_left_margin - 4).max(wx1 + 40);
+        let (wx1, wx2) = if has_left_margin {
+            (2, (actual_left_margin - 4).max(42))
+        } else {
+            (actual_left_margin + 2, actual_left_margin + wing_w)
+        };
         let hy1 = actual_offset_y + (64.0 * sy) as i32;
         let hy2 = hy1 + (24.0 * sy) as i32;
 
@@ -2661,7 +2741,7 @@ unsafe fn render_ranked_hud(
         true
     };
 
-    if right_collapsed || !has_right_margin {
+    if right_collapsed {
         let tx1 = if has_right_margin {
             actual_left_margin + cw + 2
         } else {
@@ -2678,8 +2758,11 @@ unsafe fn render_ranked_hud(
         draw_text_line(hdc, "绩", tx1 + 6, ty1 + 64, rgb(244, 63, 94));
         new_hotzones.right_wing_toggle = Some((tx1, ty1, tx2, ty2));
     } else {
-        let wx1 = actual_left_margin + cw + 4;
-        let wx2 = actual_left_margin + cw + wing_w - 2;
+        let (wx1, wx2) = if has_right_margin {
+            (actual_left_margin + cw + 4, actual_left_margin + cw + wing_w - 2)
+        } else {
+            (actual_left_margin + cw - wing_w - 2, actual_left_margin + cw - 2)
+        };
         let hy1 = actual_offset_y + (64.0 * sy) as i32;
         let hy2 = hy1 + (24.0 * sy) as i32;
 
@@ -2807,17 +2890,17 @@ unsafe fn render_ranked_hud(
     }
 
     // -------------------------------------------------------------
-    // 4. 5v5 Slots (My Team Left X=260, Their Team Right X=1005)
-    // Non-obtrusive positioning: clear of summoner spells / rune popups (X=190..245)
-    // and champion pick grid rightmost column (X=340..945)
+    // 4. 5v5 Slots (My Team Left X=148, Their Team Right X=1038)
+    // Non-obtrusive positioning: clear of summoner spells / rune popups (X=0..145)
+    // and champion pick grid (X=248..1035) 100% unobstructed!
     // -------------------------------------------------------------
     let slot_pitch_y = (92.0 * sy) as i32;
-    let slot_card_w = ((122.0 * sx) as i32).max(114);
+    let slot_card_w = ((96.0 * sx) as i32).max(88);
     let slot_card_h = (44.0 * sy) as i32;
     let slot_start_y = actual_offset_y + (100.0 * sy) as i32;
 
     // 4.1 My Team Slots
-    let left_slot_x = actual_left_margin + (260.0 * sx) as i32;
+    let left_slot_x = actual_left_margin + (148.0 * sx) as i32;
     for (idx, slot) in data.my_team.iter().take(5).enumerate() {
         let sy1 = slot_start_y + idx as i32 * slot_pitch_y;
         let border_col = if slot.is_local_player { rgb(200, 170, 110) } else { rgb(42, 67, 101) };
@@ -2831,55 +2914,55 @@ unsafe fn render_ranked_hud(
             4 => (rgb(249, 115, 22), rgb(63, 27, 10)),
             _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
         };
-        draw_card_rect(hdc, left_slot_x + 4, sy1 + 4, 22, 14, t_bg, t_fg);
+        draw_card_rect(hdc, left_slot_x + 3, sy1 + 3, 20, 14, t_bg, t_fg);
         let t_str = format!("T{}", slot.tier);
-        draw_text_line(hdc, &t_str, left_slot_x + 6, sy1 + 5, t_fg);
+        draw_text_line(hdc, &t_str, left_slot_x + 4, sy1 + 4, t_fg);
 
-        let pos_bx1 = left_slot_x + 30;
-        let pos_bx2 = pos_bx1 + 42;
+        let pos_bx1 = left_slot_x + 25;
+        let pos_bx2 = pos_bx1 + 32;
         let (p_bg, p_border, p_fg) = if slot.is_manual_pos {
             (rgb(39, 23, 4), rgb(245, 158, 11), rgb(251, 191, 36))
         } else {
             (rgb(13, 27, 42), rgb(96, 165, 250), rgb(224, 242, 254))
         };
-        draw_card_rect(hdc, pos_bx1, sy1 + 4, 42, 14, p_bg, p_border);
+        draw_card_rect(hdc, pos_bx1, sy1 + 3, 32, 14, p_bg, p_border);
         let pos_label = format!("{}▾", slot.position_cn);
-        draw_text_line(hdc, &pos_label, pos_bx1 + 3, sy1 + 5, p_fg);
-        new_hotzones.pos_btns.push(((pos_bx1, sy1 + 4, pos_bx2, sy1 + 18), true, idx));
+        draw_text_line(hdc, &pos_label, pos_bx1 + 2, sy1 + 4, p_fg);
+        new_hotzones.pos_btns.push(((pos_bx1, sy1 + 3, pos_bx2, sy1 + 17), true, idx));
 
         let wr_str = if let Some(ref p) = slot.profile {
             if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
-                format!("实战: {}%", p.cur_champ_win_rate_pct)
+                format!("{}%", p.cur_champ_win_rate_pct)
             } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
-                "试英雄(0场)".to_string()
+                "0场".to_string()
             } else if p.sample_count > 0 {
-                format!("近期: {}%", p.win_rate_pct)
+                format!("{}%", p.win_rate_pct)
             } else {
-                format!("梯队: {:.1}%", slot.win_rate * 100.0)
+                format!("{:.0}%", slot.win_rate * 100.0)
             }
         } else {
-            format!("梯队: {:.1}%", slot.win_rate * 100.0)
+            format!("{:.0}%", slot.win_rate * 100.0)
         };
-        draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
+        draw_text_line(hdc, &wr_str, left_slot_x + slot_card_w - 30, sy1 + 4, rgb(203, 213, 225));
         new_hotzones.inspect_slot_btns.push(((left_slot_x, sy1, left_slot_x + slot_card_w, sy1 + slot_card_h), true, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let diff = m_wr - 0.5;
             let (m_col, m_text) = if diff >= 0.005 {
-                (rgb(0, 230, 150), format!("⚔️ 对位胜率: {:.1}% (+{:.1}%)", m_wr * 100.0, diff * 100.0))
+                (rgb(0, 230, 150), format!("对位{:.0}%", m_wr * 100.0))
             } else if diff <= -0.005 {
-                (rgb(239, 68, 68), format!("⚠️ 对位胜率: {:.1}% ({:.1}%)", m_wr * 100.0, diff * 100.0))
+                (rgb(239, 68, 68), format!("对位{:.0}%", m_wr * 100.0))
             } else {
-                (rgb(200, 170, 110), format!("⚖️ 对位胜率: {:.1}% (50-50)", m_wr * 100.0))
+                (rgb(200, 170, 110), format!("对位50%"))
             };
-            draw_text_line(hdc, &m_text, left_slot_x + 5, sy1 + 24, m_col);
+            draw_text_line(hdc, &m_text, left_slot_x + 4, sy1 + 22, m_col);
         } else {
-            draw_text_line(hdc, "⏳ 等待对位锁定...", left_slot_x + 5, sy1 + 24, rgb(100, 116, 139));
+            draw_text_line(hdc, "等待锁定", left_slot_x + 4, sy1 + 22, rgb(100, 116, 139));
         }
     }
 
     // 4.2 Their Team Slots
-    let right_slot_x = actual_left_margin + (1005.0 * sx) as i32;
+    let right_slot_x = actual_left_margin + (1038.0 * sx) as i32;
     for (idx, slot) in data.their_team.iter().take(5).enumerate() {
         let sy1 = slot_start_y + idx as i32 * slot_pitch_y;
         let border_col = rgb(99, 23, 27);
@@ -2893,51 +2976,51 @@ unsafe fn render_ranked_hud(
             4 => (rgb(249, 115, 22), rgb(63, 27, 10)),
             _ => (rgb(239, 68, 68), rgb(69, 10, 10)),
         };
-        draw_card_rect(hdc, right_slot_x + 4, sy1 + 4, 22, 14, t_bg, t_fg);
+        draw_card_rect(hdc, right_slot_x + 3, sy1 + 3, 20, 14, t_bg, t_fg);
         let t_str = format!("T{}", slot.tier);
-        draw_text_line(hdc, &t_str, right_slot_x + 6, sy1 + 5, t_fg);
+        draw_text_line(hdc, &t_str, right_slot_x + 4, sy1 + 4, t_fg);
 
-        let pos_bx1 = right_slot_x + 30;
-        let pos_bx2 = pos_bx1 + 42;
+        let pos_bx1 = right_slot_x + 25;
+        let pos_bx2 = pos_bx1 + 32;
         let (p_bg, p_border, p_fg) = if slot.is_manual_pos {
             (rgb(39, 23, 4), rgb(245, 158, 11), rgb(251, 191, 36))
         } else {
             (rgb(26, 15, 20), rgb(244, 63, 94), rgb(254, 226, 226))
         };
-        draw_card_rect(hdc, pos_bx1, sy1 + 4, 42, 14, p_bg, p_border);
+        draw_card_rect(hdc, pos_bx1, sy1 + 3, 32, 14, p_bg, p_border);
         let pos_label = format!("{}▾", slot.position_cn);
-        draw_text_line(hdc, &pos_label, pos_bx1 + 3, sy1 + 5, p_fg);
-        new_hotzones.pos_btns.push(((pos_bx1, sy1 + 4, pos_bx2, sy1 + 18), false, idx));
+        draw_text_line(hdc, &pos_label, pos_bx1 + 2, sy1 + 4, p_fg);
+        new_hotzones.pos_btns.push(((pos_bx1, sy1 + 3, pos_bx2, sy1 + 17), false, idx));
 
         let wr_str = if let Some(ref p) = slot.profile {
             if p.cur_champ_id > 0 && p.cur_champ_games > 0 {
-                format!("实战: {}%", p.cur_champ_win_rate_pct)
+                format!("{}%", p.cur_champ_win_rate_pct)
             } else if p.cur_champ_id > 0 && p.cur_champ_games == 0 {
-                "试英雄(0场)".to_string()
+                "0场".to_string()
             } else if p.sample_count > 0 {
-                format!("近期: {}%", p.win_rate_pct)
+                format!("{}%", p.win_rate_pct)
             } else {
-                format!("梯队: {:.1}%", slot.win_rate * 100.0)
+                format!("{:.0}%", slot.win_rate * 100.0)
             }
         } else {
-            format!("梯队: {:.1}%", slot.win_rate * 100.0)
+            format!("{:.0}%", slot.win_rate * 100.0)
         };
-        draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 56, sy1 + 5, rgb(203, 213, 225));
+        draw_text_line(hdc, &wr_str, right_slot_x + slot_card_w - 30, sy1 + 4, rgb(203, 213, 225));
         new_hotzones.inspect_slot_btns.push(((right_slot_x, sy1, right_slot_x + slot_card_w, sy1 + slot_card_h), false, idx));
 
         if let Some(m_wr) = slot.matchup_win_rate {
             let enemy_wr = 1.0 - m_wr;
             let diff = enemy_wr - 0.5;
             let (m_col, m_text) = if diff >= 0.005 {
-                (rgb(239, 68, 68), format!("⚠️ 敌方胜率: {:.1}% (+{:.1}%)", enemy_wr * 100.0, diff * 100.0))
+                (rgb(239, 68, 68), format!("敌方{:.0}%", enemy_wr * 100.0))
             } else if diff <= -0.005 {
-                (rgb(0, 230, 150), format!("⚔️ 敌方胜率: {:.1}% ({:.1}%)", enemy_wr * 100.0, diff * 100.0))
+                (rgb(0, 230, 150), format!("敌方{:.0}%", enemy_wr * 100.0))
             } else {
-                (rgb(200, 170, 110), format!("⚖️ 敌方胜率: {:.1}% (50-50)", enemy_wr * 100.0))
+                (rgb(200, 170, 110), format!("敌方50%"))
             };
-            draw_text_line(hdc, &m_text, right_slot_x + 5, sy1 + 24, m_col);
+            draw_text_line(hdc, &m_text, right_slot_x + 4, sy1 + 22, m_col);
         } else {
-            draw_text_line(hdc, "⏳ 等待对位锁定...", right_slot_x + 5, sy1 + 24, rgb(100, 116, 139));
+            draw_text_line(hdc, "等待锁定", right_slot_x + 4, sy1 + 22, rgb(100, 116, 139));
         }
     }
 
@@ -2967,6 +3050,8 @@ unsafe fn render_ranked_hud(
             let min_fy = actual_offset_y + (42.0 * sy) as i32;
             let max_fy = ((actual_offset_y + ch) - f_h - 10).max(min_fy);
             let f_y = base_y.clamp(min_fy, max_fy);
+
+            new_hotzones.inspect_card_rect = Some((f_x, f_y, f_x + f_w, f_y + f_h));
 
             // Card container
             let border_col = if is_my_team { rgb(14, 165, 233) } else { rgb(244, 63, 94) };

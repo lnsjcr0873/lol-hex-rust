@@ -519,14 +519,15 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                     }
                 }
             } else if phase == "InProgress" {
-                // In-Game Live 2999 Port Monitoring Workflow
+                // In-Game Live 2999 Port Monitoring Workflow: Always stop Ranked Draft HUD when entering match
+                if ranked_bg.is_showing.load(Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
+                    ranked_bg.stop();
+                }
+
                 let mut live_stats = live_bg.get_live_stats().await;
                 if !live_stats.is_in_game {
                     let is_aram = is_aram_bg.load(Ordering::SeqCst);
                     if is_aram {
-                        if ranked_bg.is_showing.load(Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
-                            ranked_bg.stop();
-                        }
                         win32_hud::GLOBAL_HUD.hide();
                     }
                 } else {
