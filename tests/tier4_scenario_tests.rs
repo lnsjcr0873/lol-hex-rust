@@ -200,6 +200,7 @@ async fn scenario_2_premade_trio_flex_queue_chat_broadcast() {
             puuid: puuid.clone(),
             summoner_name: name.clone(),
             tier: "PLATINUM".to_string(),
+            division: "".to_string(),
             tier_str: "铂金 I".to_string(),
             tier_color: "#2dd4bf".to_string(),
             lp: 75,

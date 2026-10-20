@@ -26,7 +26,7 @@
       <!-- Placeholder Skeleton when out of viewport -->
       <div
         v-else
-        class="box-border flex h-[96px] w-full items-center justify-between rounded-xl border border-slate-800/60 bg-slate-900/40 p-3.5 px-4 animate-pulse select-none"
+        class="box-border flex h-[116px] w-full items-center justify-between rounded-xl border border-slate-800/60 bg-slate-900/40 p-3.5 px-4 animate-pulse select-none"
       >
         <div class="flex items-center space-x-3.5">
           <div class="h-12 w-12 rounded-xl bg-slate-800/60 shrink-0"></div>

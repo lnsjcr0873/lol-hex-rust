@@ -196,10 +196,14 @@ pub async fn fetch_slot_counters_and_synergies(
             if opp_id_num <= 0 {
                 continue;
             }
+            let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+            if games < 30 {
+                continue;
+            }
             let opp_name = db.resolve_hero_name(opp_cid).unwrap_or_else(|| format!("Hero-{}", opp_cid));
             let c_wr = c.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
-            let tier = if c_wr >= 0.53 { 1 } else if c_wr >= 0.51 { 2 } else if c_wr > 0.0 { 3 } else { 0 };
+            let smoothed = crate::crawler::opgg::wilson_score_lower(c_wr, games, 1.44) * 0.7 + c_wr * 0.3;
+            let tier = if smoothed >= 0.53 { 1 } else if smoothed >= 0.51 { 2 } else if smoothed > 0.0 { 3 } else { 0 };
             counters.push(super::win32_hud::CounterHeroItem {
                 champion_id: opp_id_num,
                 name: opp_name,
@@ -255,7 +259,8 @@ pub async fn update_ranked_draft_overlay(
         return;
     }
 
-    if !d.state.my_locked {
+    let my_locked = d.state.my_team.iter().find(|s| s.is_local_player).map_or(false, |s| s.is_locked);
+    if !my_locked {
         if let Ok(mut inter) = super::win32_hud::RANKED_INTERACTION.write() {
             if inter.last_local_locked {
                 inter.last_local_locked = false;

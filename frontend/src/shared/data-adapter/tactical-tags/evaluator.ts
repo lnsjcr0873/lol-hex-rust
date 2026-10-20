@@ -435,6 +435,15 @@ export const TACTICAL_TAG_DEFINITIONS: TacticalTagDefinition[] = [
       const tag = getKillDamageEfficiencyStatus(ctx.analysis)
       if (tag.kind === 'normal') return null
       const isHigh = tag.kind === 'high'
+      if (!isHigh) {
+        const pos = (ctx.assignedPosition || '').toUpperCase()
+        const isUtility = pos === 'UTILITY' || pos === 'SUPPORT'
+        const dmgShare = ctx.analysis.damage?.damageDealtShare
+        const hasLowDmgShare = dmgShare !== undefined && dmgShare < 0.18
+        if (isUtility || hasLowDmgShare) {
+          return null
+        }
+      }
       return {
         id: 'average-kill-damage-efficiency',
         label: isHigh ? '人头收割' : '虚空伤害',

@@ -1,7 +1,7 @@
 use super::connector::{LcuConnector, LcuCredentials};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -108,14 +108,21 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> LruStore<K, V> {
 
         while self.map.len() >= self.capacity {
             if let Some(oldest_idx) = self.head {
-                let oldest_key = self.nodes[oldest_idx].as_ref().map(|n| n.key.clone());
                 self.detach(oldest_idx);
-                if let Some(k) = oldest_key {
-                    self.map.remove(&k);
+                if let Some(node) = self.nodes[oldest_idx].take() {
+                    self.map.remove(&node.key);
+                    self.free_indices.push(oldest_idx);
+                } else {
+                    self.free_indices.push(oldest_idx);
+                    if self.head.is_none() {
+                        self.map.clear();
+                        break;
+                    }
                 }
-                self.nodes[oldest_idx] = None;
-                self.free_indices.push(oldest_idx);
             } else {
+                self.map.clear();
+                self.head = None;
+                self.tail = None;
                 break;
             }
         }
@@ -178,26 +185,25 @@ pub struct LcuClient {
     pub match_detail_cache: Arc<std::sync::Mutex<LruStore<u64, Value>>>,
     pub match_timeline_cache: Arc<std::sync::Mutex<LruStore<u64, Value>>>,
     pub concurrency_limiter: Arc<tokio::sync::Semaphore>,
-    in_flight_details: Arc<std::sync::Mutex<HashSet<u64>>>,
-    in_flight_timelines: Arc<std::sync::Mutex<HashSet<u64>>>,
-    cache_notify: Arc<tokio::sync::Notify>,
-    negative_match_details: Arc<std::sync::Mutex<HashMap<u64, std::time::Instant>>>,
-    negative_match_timelines: Arc<std::sync::Mutex<HashMap<u64, std::time::Instant>>>,
+    in_flight_details: Arc<std::sync::Mutex<HashMap<u64, Arc<tokio::sync::Notify>>>>,
+    in_flight_timelines: Arc<std::sync::Mutex<HashMap<u64, Arc<tokio::sync::Notify>>>>,
+    negative_match_details: Arc<std::sync::Mutex<HashMap<u64, (std::time::Instant, std::time::Duration)>>>,
+    negative_match_timelines: Arc<std::sync::Mutex<HashMap<u64, (std::time::Instant, std::time::Duration)>>>,
     opgg: Arc<RwLock<Option<Arc<crate::crawler::OpggClient>>>>,
 }
 
 struct InFlightGuard {
-    set: Arc<std::sync::Mutex<HashSet<u64>>>,
+    map: Arc<std::sync::Mutex<HashMap<u64, Arc<tokio::sync::Notify>>>>,
     key: u64,
-    notify: Arc<tokio::sync::Notify>,
 }
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut set) = self.set.lock() {
-            set.remove(&self.key);
+        if let Ok(mut map) = self.map.lock() {
+            if let Some(notify) = map.remove(&self.key) {
+                notify.notify_waiters();
+            }
         }
-        self.notify.notify_waiters();
     }
 }
 
@@ -241,9 +247,8 @@ impl LcuClient {
             match_detail_cache: Arc::new(std::sync::Mutex::new(LruStore::new(256))),
             match_timeline_cache: Arc::new(std::sync::Mutex::new(LruStore::new(256))),
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(4)),
-            in_flight_details: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            in_flight_timelines: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            cache_notify: Arc::new(tokio::sync::Notify::new()),
+            in_flight_details: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            in_flight_timelines: Arc::new(std::sync::Mutex::new(HashMap::new())),
             negative_match_details: Arc::new(std::sync::Mutex::new(HashMap::new())),
             negative_match_timelines: Arc::new(std::sync::Mutex::new(HashMap::new())),
             opgg: Arc::new(RwLock::new(None)),
@@ -274,15 +279,20 @@ impl LcuClient {
         if let Ok(mut cache) = self.match_detail_cache.lock() {
             cache.insert(game_id, val);
         }
-        self.cache_notify.notify_waiters();
+        if let Ok(mut map) = self.in_flight_details.lock() {
+            if let Some(notify) = map.remove(&game_id) {
+                notify.notify_waiters();
+            }
+        }
     }
 
     pub const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(6);
+    pub const SHORT_NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
     pub fn is_negative_cached_detail(&self, game_id: u64) -> bool {
         if let Ok(mut map) = self.negative_match_details.lock() {
-            if let Some(timestamp) = map.get(&game_id) {
-                if timestamp.elapsed() < Self::NEGATIVE_CACHE_TTL {
+            if let Some((timestamp, ttl)) = map.get(&game_id) {
+                if timestamp.elapsed() < *ttl {
                     return true;
                 } else {
                     map.remove(&game_id);
@@ -293,10 +303,22 @@ impl LcuClient {
     }
 
     pub fn insert_negative_cached_detail(&self, game_id: u64) {
+        self.insert_negative_cached_detail_with_ttl(game_id, Self::NEGATIVE_CACHE_TTL);
+    }
+
+    pub fn insert_short_negative_cached_detail(&self, game_id: u64) {
+        self.insert_negative_cached_detail_with_ttl(game_id, Self::SHORT_NEGATIVE_CACHE_TTL);
+    }
+
+    pub fn insert_negative_cached_detail_with_ttl(&self, game_id: u64, ttl: std::time::Duration) {
         if let Ok(mut map) = self.negative_match_details.lock() {
-            map.insert(game_id, std::time::Instant::now());
+            map.insert(game_id, (std::time::Instant::now(), ttl));
         }
-        self.cache_notify.notify_waiters();
+        if let Ok(mut map) = self.in_flight_details.lock() {
+            if let Some(notify) = map.remove(&game_id) {
+                notify.notify_waiters();
+            }
+        }
     }
 
     pub fn get_cached_match_timeline(&self, game_id: u64) -> Option<Value> {
@@ -307,13 +329,17 @@ impl LcuClient {
         if let Ok(mut cache) = self.match_timeline_cache.lock() {
             cache.insert(game_id, val);
         }
-        self.cache_notify.notify_waiters();
+        if let Ok(mut map) = self.in_flight_timelines.lock() {
+            if let Some(notify) = map.remove(&game_id) {
+                notify.notify_waiters();
+            }
+        }
     }
 
     pub fn is_negative_cached_timeline(&self, game_id: u64) -> bool {
         if let Ok(mut map) = self.negative_match_timelines.lock() {
-            if let Some(timestamp) = map.get(&game_id) {
-                if timestamp.elapsed() < Self::NEGATIVE_CACHE_TTL {
+            if let Some((timestamp, ttl)) = map.get(&game_id) {
+                if timestamp.elapsed() < *ttl {
                     return true;
                 } else {
                     map.remove(&game_id);
@@ -324,10 +350,22 @@ impl LcuClient {
     }
 
     pub fn insert_negative_cached_timeline(&self, game_id: u64) {
+        self.insert_negative_cached_timeline_with_ttl(game_id, Self::NEGATIVE_CACHE_TTL);
+    }
+
+    pub fn insert_short_negative_cached_timeline(&self, game_id: u64) {
+        self.insert_negative_cached_timeline_with_ttl(game_id, Self::SHORT_NEGATIVE_CACHE_TTL);
+    }
+
+    pub fn insert_negative_cached_timeline_with_ttl(&self, game_id: u64, ttl: std::time::Duration) {
         if let Ok(mut map) = self.negative_match_timelines.lock() {
-            map.insert(game_id, std::time::Instant::now());
+            map.insert(game_id, (std::time::Instant::now(), ttl));
         }
-        self.cache_notify.notify_waiters();
+        if let Ok(mut map) = self.in_flight_timelines.lock() {
+            if let Some(notify) = map.remove(&game_id) {
+                notify.notify_waiters();
+            }
+        }
     }
 
     pub fn clear_lru_caches(&self) {
@@ -375,6 +413,7 @@ impl LcuClient {
         let mut s_guard = self.current_session.write().await;
         *s_guard = Value::Null;
         self.consecutive_failures.store(0, Ordering::Relaxed);
+        crate::lcu::connector::LcuConnector::reset_cooldown();
     }
 
     pub async fn record_failure(&self) -> u32 {
@@ -924,8 +963,26 @@ impl LcuClient {
             }
         }
 
-        // 2. Otherwise create a dedicated HexBrain page via POST (never overwrite user's custom pages)
-        self.send_post_with_protocol_fallback(port, &headers, "/lol-perks/v1/pages", Some(&page_payload)).await.is_some()
+        // 2. Otherwise try to create a dedicated HexBrain page via POST
+        if self.send_post_with_protocol_fallback(port, &headers, "/lol-perks/v1/pages", Some(&page_payload)).await.is_some() {
+            return true;
+        }
+
+        // 3. Fallback: If POST failed (e.g. perk page inventory full), overwrite the current editable page or first editable page
+        if let Some(current_editable_page) = pages.iter().find(|p| {
+            p.get("isEditable").and_then(|v| v.as_bool()).unwrap_or(false)
+                && (p.get("current").and_then(|v| v.as_bool()).unwrap_or(false)
+                    || p.get("isCurrent").and_then(|v| v.as_bool()).unwrap_or(false))
+        }).or_else(|| {
+            pages.iter().find(|p| p.get("isEditable").and_then(|v| v.as_bool()).unwrap_or(false))
+        }) {
+            if let Some(pid) = current_editable_page.get("id").and_then(|v| v.as_i64()) {
+                let path = format!("/lol-perks/v1/pages/{}", pid);
+                return self.send_put_with_protocol_fallback(port, &headers, &path, Some(&page_payload)).await.is_some();
+            }
+        }
+
+        false
     }
 
     pub async fn do_apply_runes_and_spells(
@@ -1277,6 +1334,58 @@ impl LcuClient {
         self.get_chat_conversations().await
     }
 
+    async fn send_request_allow_404(
+        &self,
+        method: reqwest::Method,
+        port: u16,
+        headers: &reqwest::header::HeaderMap,
+        path_and_query: &str,
+    ) -> Option<reqwest::Response> {
+        let scheme = self.get_protocol().await;
+        let url = format!("{}://127.0.0.1:{}{}", scheme, port, path_and_query);
+        let builder = self.client.request(method.clone(), &url).headers(headers.clone());
+        let req_res = builder.send().await;
+        if let Ok(res) = req_res {
+            let status = res.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.invalidate_credentials().await;
+                return None;
+            }
+            if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+                if status.is_success() {
+                    self.record_success();
+                }
+                return Some(res);
+            }
+            return None;
+        }
+
+        let is_conn_err = req_res.as_ref().err().map_or(false, |e| e.is_connect());
+        if !is_conn_err {
+            return None;
+        }
+
+        let alt_scheme = if scheme == "https" { "http" } else { "https" };
+        let alt_url = format!("{}://127.0.0.1:{}{}", alt_scheme, port, path_and_query);
+        let alt_builder = self.client.request(method, &alt_url).headers(headers.clone());
+        if let Ok(alt_res) = alt_builder.send().await {
+            let status = alt_res.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                self.invalidate_credentials().await;
+                return None;
+            }
+            if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+                if status.is_success() {
+                    self.set_protocol(alt_scheme).await;
+                    self.record_success();
+                }
+                return Some(alt_res);
+            }
+            return None;
+        }
+        None
+    }
+
     pub async fn get_match_detail(&self, game_id: &str) -> Option<Value> {
         if !self.ensure_credentials().await || game_id.is_empty() {
             return None;
@@ -1301,28 +1410,29 @@ impl LcuClient {
                 if let Some(cached) = self.get_cached_match_detail(gid) {
                     return Some(cached);
                 }
-                let is_in_flight = {
-                    let mut set = self.in_flight_details.lock().ok()?;
-                    if set.contains(&gid) {
-                        true
+                let notify_arc;
+                let maybe_notified = {
+                    let mut map = self.in_flight_details.lock().ok()?;
+                    if let Some(notify) = map.get(&gid) {
+                        notify_arc = notify.clone();
+                        Some(notify_arc.notified())
                     } else {
-                        set.insert(gid);
-                        false
+                        map.insert(gid, Arc::new(tokio::sync::Notify::new()));
+                        None
                     }
                 };
-                if is_in_flight {
+                if let Some(notified) = maybe_notified {
                     retries += 1;
-                    if retries > 2 {
+                    if retries > 10 {
                         return None;
                     }
-                    let notified = self.cache_notify.notified();
                     if self.is_negative_cached_detail(gid) {
                         return None;
                     }
                     if let Some(cached) = self.get_cached_match_detail(gid) {
                         return Some(cached);
                     }
-                    let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
+                    let _ = tokio::time::timeout(std::time::Duration::from_millis(4000), notified).await;
                     if self.is_negative_cached_detail(gid) {
                         return None;
                     }
@@ -1331,9 +1441,8 @@ impl LcuClient {
                     }
                 } else {
                     break Some(InFlightGuard {
-                        set: self.in_flight_details.clone(),
+                        map: self.in_flight_details.clone(),
                         key: gid,
-                        notify: self.cache_notify.clone(),
                     });
                 }
             }
@@ -1343,31 +1452,16 @@ impl LcuClient {
 
         let port = match self.get_port().await {
             Some(p) => p,
-            None => {
-                if let Some(gid) = parsed_id {
-                    self.insert_negative_cached_detail(gid);
-                }
-                return None;
-            }
+            None => return None,
         };
         let headers = match self.get_auth_header().await {
             Some(h) => h,
-            None => {
-                if let Some(gid) = parsed_id {
-                    self.insert_negative_cached_detail(gid);
-                }
-                return None;
-            }
+            None => return None,
         };
 
         let _permit = match self.concurrency_limiter.acquire().await {
             Ok(p) => p,
-            Err(_) => {
-                if let Some(gid) = parsed_id {
-                    self.insert_negative_cached_detail(gid);
-                }
-                return None;
-            }
+            Err(_) => return None,
         };
 
         if let Some(gid) = parsed_id {
@@ -1380,22 +1474,30 @@ impl LcuClient {
         }
 
         let path = format!("/lol-match-history/v1/games/{}", game_id);
-        let res_opt = self.send_get_with_protocol_fallback(port, &headers, &path).await;
+        let res_opt = self.send_request_allow_404(reqwest::Method::GET, port, &headers, &path).await;
 
         let res = match res_opt {
             Some(r) => r,
             None => {
                 if let Some(gid) = parsed_id {
-                    self.insert_negative_cached_detail(gid);
+                    self.insert_short_negative_cached_detail(gid);
                 }
                 return None;
             }
         };
+
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            if let Some(gid) = parsed_id {
+                self.insert_negative_cached_detail(gid);
+            }
+            return None;
+        }
+
         let val = match res.json::<Value>().await {
             Ok(v) => v,
             Err(_) => {
                 if let Some(gid) = parsed_id {
-                    self.insert_negative_cached_detail(gid);
+                    self.insert_short_negative_cached_detail(gid);
                 }
                 return None;
             }
@@ -1432,64 +1534,56 @@ impl LcuClient {
                 if let Some(cached) = self.get_cached_match_timeline(game_id) {
                     return Some(cached);
                 }
-                let is_in_flight = {
-                    let mut set = self.in_flight_timelines.lock().ok()?;
-                    if set.contains(&game_id) {
-                        true
+                let notify_arc;
+                let maybe_notified = {
+                    let mut map = self.in_flight_timelines.lock().ok()?;
+                    if let Some(notify) = map.get(&game_id) {
+                        notify_arc = notify.clone();
+                        Some(notify_arc.notified())
                     } else {
-                        set.insert(game_id);
-                        false
+                        map.insert(game_id, Arc::new(tokio::sync::Notify::new()));
+                        None
                     }
                 };
-                if is_in_flight {
+                if let Some(notified) = maybe_notified {
                     retries += 1;
-                    if retries > 2 {
+                    if retries > 10 {
                         return None;
                     }
-                    let notified = self.cache_notify.notified();
-                if self.is_negative_cached_timeline(game_id) {
-                    return None;
+                    if self.is_negative_cached_timeline(game_id) {
+                        return None;
+                    }
+                    if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                        return Some(cached);
+                    }
+                    let _ = tokio::time::timeout(std::time::Duration::from_millis(4000), notified).await;
+                    if self.is_negative_cached_timeline(game_id) {
+                        return None;
+                    }
+                    if let Some(cached) = self.get_cached_match_timeline(game_id) {
+                        return Some(cached);
+                    }
+                } else {
+                    break InFlightGuard {
+                        map: self.in_flight_timelines.clone(),
+                        key: game_id,
+                    };
                 }
-                if let Some(cached) = self.get_cached_match_timeline(game_id) {
-                    return Some(cached);
-                }
-                let _ = tokio::time::timeout(std::time::Duration::from_millis(3500), notified).await;
-                if self.is_negative_cached_timeline(game_id) {
-                    return None;
-                }
-                if let Some(cached) = self.get_cached_match_timeline(game_id) {
-                    return Some(cached);
-                }
-            } else {
-                break InFlightGuard {
-                    set: self.in_flight_timelines.clone(),
-                    key: game_id,
-                    notify: self.cache_notify.clone(),
-                };
             }
         };
 
         let port = match self.get_port().await {
             Some(p) => p,
-            None => {
-                self.insert_negative_cached_timeline(game_id);
-                return None;
-            }
+            None => return None,
         };
         let headers = match self.get_auth_header().await {
             Some(h) => h,
-            None => {
-                self.insert_negative_cached_timeline(game_id);
-                return None;
-            }
+            None => return None,
         };
 
         let _permit = match self.concurrency_limiter.acquire().await {
             Ok(p) => p,
-            Err(_) => {
-                self.insert_negative_cached_timeline(game_id);
-                return None;
-            }
+            Err(_) => return None,
         };
 
         if self.is_negative_cached_timeline(game_id) {
@@ -1500,18 +1594,25 @@ impl LcuClient {
         }
 
         let path = format!("/lol-match-history/v1/game-timelines/{}", game_id);
-        let res_opt = self.send_get_with_protocol_fallback(port, &headers, &path).await;
+        let res_opt = self.send_request_allow_404(reqwest::Method::GET, port, &headers, &path).await;
+
         let res = match res_opt {
             Some(r) => r,
             None => {
-                self.insert_negative_cached_timeline(game_id);
+                self.insert_short_negative_cached_timeline(game_id);
                 return None;
             }
         };
+
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            self.insert_negative_cached_timeline(game_id);
+            return None;
+        }
+
         let val = match res.json::<Value>().await {
             Ok(v) => v,
             Err(_) => {
-                self.insert_negative_cached_timeline(game_id);
+                self.insert_short_negative_cached_timeline(game_id);
                 return None;
             }
         };

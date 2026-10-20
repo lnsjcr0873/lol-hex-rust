@@ -4,7 +4,7 @@ import { MATCH_CARD_COLLAPSED_HEIGHT_PX, MATCH_HISTORY_CARD_OVERSCAN_PX } from '
 
 describe('Phase 2: Virtual Viewport & Match Previewer Tests', () => {
   it('correctly exports viewport constants', () => {
-    expect(MATCH_CARD_COLLAPSED_HEIGHT_PX).toBe(96)
+    expect(MATCH_CARD_COLLAPSED_HEIGHT_PX).toBe(116)
     expect(MATCH_HISTORY_CARD_OVERSCAN_PX).toBe(640)
   })
 

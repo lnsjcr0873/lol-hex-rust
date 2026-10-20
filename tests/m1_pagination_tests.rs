@@ -90,6 +90,7 @@ async fn test_raw_cache_match_merging_across_pages() {
                 tier_str: "王者".to_string(),
                 tier_color: "#f59e0b".to_string(),
                 tier: "CHALLENGER".to_string(),
+            division: "".to_string(),
                 lp: 888,
                 ranked_wins: 50,
                 ranked_losses: 20,

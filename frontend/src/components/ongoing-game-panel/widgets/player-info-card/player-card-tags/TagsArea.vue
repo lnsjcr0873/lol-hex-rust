@@ -170,6 +170,8 @@ const tags = computed<EvaluatedTag[]>(() => {
   }
 
   // Mutual exclusion filtering
+  const winStreakVal = analysis.winLoss?.all?.winningStreak ?? 0
+  const lossStreakVal = analysis.winLoss?.all?.losingStreak ?? 0
   const hasWinStreak = result.some((t) => t.id === 'winning-streak' || t.label.includes('连胜'))
   const hasLossStreak = result.some((t) => t.id === 'losing-streak' || t.label.includes('连败'))
   const hasSmurf = result.some((t) => t.id === 'great-performance' || t.label.includes('通天代'))
@@ -177,10 +179,16 @@ const tags = computed<EvaluatedTag[]>(() => {
   const winRate = props.player.recent_win_rate ?? 50
 
   let filtered = result.filter((t) => {
-    // If both streak tags exist, keep the one matching recent winrate or streak type
+    // If both streak tags exist, strictly compare winningStreak vs losingStreak counts
     if (hasWinStreak && hasLossStreak) {
-      if (winRate < 50 && (t.id === 'winning-streak' || t.label.includes('连胜'))) return false
-      if (winRate >= 50 && (t.id === 'losing-streak' || t.label.includes('连败'))) return false
+      if (winStreakVal > lossStreakVal) {
+        if (t.id === 'losing-streak' || t.label.includes('连败')) return false
+      } else if (lossStreakVal > winStreakVal) {
+        if (t.id === 'winning-streak' || t.label.includes('连胜')) return false
+      } else {
+        if (winRate < 50 && (t.id === 'winning-streak' || t.label.includes('连胜'))) return false
+        if (winRate >= 50 && (t.id === 'losing-streak' || t.label.includes('连败'))) return false
+      }
     }
     // If smurf and testing-champ collide, testing-champ invalidates smurf
     if (hasSmurf && hasTestingChamp) {

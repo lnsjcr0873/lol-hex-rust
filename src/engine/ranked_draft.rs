@@ -68,6 +68,88 @@ fn resolve_position(
         .unwrap_or_else(|| ORDERED_POSITIONS[fallback_idx % 5].to_string())
 }
 
+fn enforce_unique_team_positions(
+    slots: &mut [DraftSlot],
+    manual_positions: &HashMap<String, String>,
+    team_prefix: &str,
+    db: Option<&Database>,
+) {
+    if slots.is_empty() {
+        return;
+    }
+
+    let all_positions = ["TOP", "JUNGLE", "MID", "ADC", "SUPPORT"];
+    let mut claimed_positions: HashMap<String, usize> = HashMap::new();
+    let mut unassigned_slot_indices: Vec<usize> = Vec::new();
+
+    // Pass 1: Prioritize explicit manual overrides
+    for (idx, slot) in slots.iter().enumerate() {
+        let key = format!("{}_{}", team_prefix, idx);
+        if manual_positions.contains_key(&key) {
+            if !claimed_positions.contains_key(&slot.position) {
+                claimed_positions.insert(slot.position.clone(), idx);
+            } else {
+                unassigned_slot_indices.push(idx);
+            }
+        }
+    }
+
+    // Pass 2: Keep non-colliding positions
+    for (idx, slot) in slots.iter().enumerate() {
+        let key = format!("{}_{}", team_prefix, idx);
+        if manual_positions.contains_key(&key) {
+            continue;
+        }
+        if !claimed_positions.contains_key(&slot.position) {
+            claimed_positions.insert(slot.position.clone(), idx);
+        } else {
+            unassigned_slot_indices.push(idx);
+        }
+    }
+
+    // Pass 3: Reassign colliding slots to remaining available positions
+    let mut available_positions: Vec<&str> = all_positions
+        .iter()
+        .copied()
+        .filter(|&p| !claimed_positions.contains_key(p))
+        .collect();
+
+    for slot_idx in unassigned_slot_indices {
+        if available_positions.is_empty() {
+            break;
+        }
+
+        let cid = &slots[slot_idx].champion_id;
+        let mut best_pos_idx = 0;
+        if !cid.is_empty() {
+            if let Some(database) = db {
+                let resolved_id = database.resolve_hero_id(cid).unwrap_or_else(|| cid.clone());
+                if let Some(summary) = database.heroes_map.get(&resolved_id) {
+                    for (p_i, &pos_cand) in available_positions.iter().enumerate() {
+                        let matches_role = summary.roles.iter().any(|r| match r.to_lowercase().as_str() {
+                            "top" => pos_cand == "TOP",
+                            "jungle" | "jg" => pos_cand == "JUNGLE",
+                            "mid" | "middle" => pos_cand == "MID",
+                            "bot" | "bottom" | "adc" => pos_cand == "ADC",
+                            "support" | "sup" | "utility" => pos_cand == "SUPPORT",
+                            _ => false,
+                        });
+                        if matches_role {
+                            best_pos_idx = p_i;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let assigned_pos = available_positions.remove(best_pos_idx);
+        let pos_idx = ORDERED_POSITIONS.iter().position(|&p| p == assigned_pos).unwrap_or(slot_idx % 5);
+        slots[slot_idx].position = assigned_pos.to_string();
+        slots[slot_idx].position_cn = SHORT_POS_NAMES_CN[pos_idx].to_string();
+    }
+}
+
 pub struct RankedDraftManager {
     pub state: RankedDraftState,
     pub manual_positions: HashMap<String, String>,
@@ -199,7 +281,17 @@ impl RankedDraftManager {
                 }
             }
 
-            let is_locked = if !cid.is_empty() {
+            let has_completed_trade = session.get("trades")
+                .and_then(|t| t.as_array())
+                .map(|trades| {
+                    trades.iter().any(|tr| {
+                        tr.get("cellId").and_then(|c| c.as_i64()) == Some(cell_id)
+                            && tr.get("state").and_then(|s| s.as_str()) == Some("COMPLETED")
+                    })
+                })
+                .unwrap_or(false);
+
+            let is_pick_locked = if !cid.is_empty() {
                 session.get("actions")
                     .and_then(|a| a.as_array())
                     .map(|rounds| {
@@ -217,6 +309,7 @@ impl RankedDraftManager {
             } else {
                 false
             };
+            let is_locked = (is_pick_locked || has_completed_trade) && !cid.is_empty();
 
             self.state.my_team.push(DraftSlot {
                 cell_id,
@@ -231,6 +324,7 @@ impl RankedDraftManager {
                 avatar_url: cavatar,
             });
         }
+        enforce_unique_team_positions(&mut self.state.my_team, &self.manual_positions, "my", db);
 
         if let Some(arr) = their_team_arr {
             for (idx, m) in arr.iter().enumerate() {
@@ -304,7 +398,24 @@ impl RankedDraftManager {
                     }
                 }
 
-                let is_their_locked = !cid.is_empty();
+                let is_their_locked = if !cid.is_empty() {
+                    session.get("actions")
+                        .and_then(|a| a.as_array())
+                        .map(|rounds| {
+                            rounds.iter().any(|round| {
+                                round.as_array().map(|actions| {
+                                    actions.iter().any(|act| {
+                                        act.get("actorCellId").and_then(|c| c.as_i64()) == Some(cell_id)
+                                            && act.get("type").and_then(|t| t.as_str()) == Some("pick")
+                                            && act.get("completed").and_then(|c| c.as_bool()) == Some(true)
+                                    })
+                                }).unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
 
                 self.state.their_team.push(DraftSlot {
                     cell_id,
@@ -319,6 +430,7 @@ impl RankedDraftManager {
                     avatar_url: cavatar,
                 });
             }
+            enforce_unique_team_positions(&mut self.state.their_team, &self.manual_positions, "their", db);
         }
 
         let local_slot = self.state.my_team.iter().find(|s| s.is_local_player);
@@ -478,5 +590,100 @@ mod tests {
         assert_eq!(dc["status"], "ready");
         assert!(dc["recommendedRunes"].is_object());
         assert_eq!(dc["recommendedSpells"]["spell1Id"], 4);
+    }
+
+    #[test]
+    fn test_enemy_lock_state_vs_hovering() {
+        let mut mgr = RankedDraftManager::new();
+
+        // Enemy hovering champion 157 (Yasuo) without completed pick action
+        let hovering_session = json!({
+            "myTeam": [
+                { "cellId": 0, "championId": 1, "assignedPosition": "top" }
+            ],
+            "theirTeam": [
+                { "cellId": 5, "championId": 0, "championPickIntent": 157, "assignedPosition": "mid" }
+            ],
+            "actions": [
+                [
+                    { "actorCellId": 5, "type": "pick", "completed": false }
+                ]
+            ],
+            "localPlayerCellId": 0
+        });
+
+        mgr.parse_session(&hovering_session);
+        assert_eq!(mgr.state.their_team.len(), 1);
+        assert!(!mgr.state.their_team[0].is_locked, "Hovering intent must NOT be marked as locked");
+
+        // Enemy locks in Yasuo
+        let locked_session = json!({
+            "myTeam": [
+                { "cellId": 0, "championId": 1, "assignedPosition": "top" }
+            ],
+            "theirTeam": [
+                { "cellId": 5, "championId": 157, "assignedPosition": "mid" }
+            ],
+            "actions": [
+                [
+                    { "actorCellId": 5, "type": "pick", "completed": true }
+                ]
+            ],
+            "localPlayerCellId": 0
+        });
+
+        mgr.parse_session(&locked_session);
+        assert!(mgr.state.their_team[0].is_locked, "Enemy must be marked as locked when pick action completed");
+    }
+
+    #[test]
+    fn test_unique_team_positions_collision_resolution() {
+        let mut mgr = RankedDraftManager::new();
+
+        // 5 teammates, with cell 0 and cell 1 both assigned/hovering MID
+        let session = json!({
+            "myTeam": [
+                { "cellId": 0, "championId": 103, "assignedPosition": "mid" },
+                { "cellId": 1, "championId": 157, "assignedPosition": "mid" },
+                { "cellId": 2, "championId": 64, "assignedPosition": "jungle" },
+                { "cellId": 3, "championId": 222, "assignedPosition": "bot" },
+                { "cellId": 4, "championId": 412, "assignedPosition": "support" }
+            ],
+            "theirTeam": [],
+            "localPlayerCellId": 0
+        });
+
+        mgr.parse_session(&session);
+        assert_eq!(mgr.state.my_team.len(), 5);
+
+        let positions: Vec<String> = mgr.state.my_team.iter().map(|s| s.position.clone()).collect();
+        let unique_positions: std::collections::HashSet<String> = positions.iter().cloned().collect();
+
+        // All 5 slots must have completely unique 1-to-1 positions!
+        assert_eq!(unique_positions.len(), 5, "There should be no duplicate lane positions among 5 slots");
+        assert!(unique_positions.contains("TOP"));
+        assert!(unique_positions.contains("JUNGLE"));
+        assert!(unique_positions.contains("MID"));
+        assert!(unique_positions.contains("ADC"));
+        assert!(unique_positions.contains("SUPPORT"));
+    }
+
+    #[test]
+    fn test_trades_sync_locked_status() {
+        let mut mgr = RankedDraftManager::new();
+
+        let session = json!({
+            "myTeam": [
+                { "cellId": 0, "championId": 222, "assignedPosition": "bot" }
+            ],
+            "theirTeam": [],
+            "trades": [
+                { "cellId": 0, "state": "COMPLETED" }
+            ],
+            "localPlayerCellId": 0
+        });
+
+        mgr.parse_session(&session);
+        assert!(mgr.state.my_team[0].is_locked, "Slot involved in completed trade must be locked");
     }
 }

@@ -89,8 +89,10 @@ export function findOutliersByIqr<T>(
     return { below: [], over: [] }
   }
 
-  const lowerBound = q1 - threshold * iqr
-  const upperBound = q3 + threshold * iqr
+  // Small-sample IQR stabilization: when sample size is small (< 8), apply an IQR floor to avoid false-positive outliers
+  const effectiveIqr = data.length < 8 ? Math.max(iqr, 1.0) : iqr
+  const lowerBound = q1 - threshold * effectiveIqr
+  const upperBound = q3 + threshold * effectiveIqr
 
   const below: T[] = []
   const over: T[] = []

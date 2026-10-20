@@ -298,17 +298,13 @@ async fn get_player_champion_mastery(
     Json(json!([]))
 }
 
-/// Helper to paginate matches safely without secondary truncation when the input slice is already paged.
+/// Helper to paginate matches safely. Returns empty slice if resolved_beg is beyond the length of matches.
 pub fn paginate_matches<T: Clone>(matches: &[T], resolved_beg: usize, resolved_end: usize) -> Vec<T> {
-    let count = (resolved_end + 1).saturating_sub(resolved_beg);
-    if matches.len() >= resolved_beg + count {
-        matches.iter().skip(resolved_beg).take(count).cloned().collect()
-    } else if matches.len() <= count {
-        matches.iter().take(count).cloned().collect()
-    } else {
-        let skip_count = resolved_beg.min(matches.len().saturating_sub(count));
-        matches.iter().skip(skip_count).take(count).cloned().collect()
+    if resolved_beg >= matches.len() {
+        return Vec::new();
     }
+    let count = (resolved_end + 1).saturating_sub(resolved_beg);
+    matches.iter().skip(resolved_beg).take(count).cloned().collect()
 }
 
 async fn get_match_history(
@@ -382,6 +378,7 @@ async fn get_match_history(
             puuid: resolved_puuid.clone(),
             summoner_name: if !query_name.is_empty() { query_name.clone() } else { "未连接客户端".to_string() },
             tier: "UNRANKED".to_string(),
+            division: "".to_string(),
             tier_str: "未定级".to_string(),
             tier_color: "#94a3b8".to_string(),
             lp: 0,
@@ -960,9 +957,22 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
         }
 
         let stats = p.get("stats");
-        let win = stats.and_then(|s| s.get("win")).map(|w| {
-            w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
-        }).unwrap_or(false);
+        let subteam_placement = stats.and_then(|s| s.get("subteamPlacement"))
+            .or_else(|| p.get("subteamPlacement"))
+            .and_then(|v| v.as_i64());
+        let win = if queue_id == 1700 || queue_id == 1710 {
+            if let Some(placement) = subteam_placement {
+                placement > 0 && placement <= 2
+            } else {
+                stats.and_then(|s| s.get("win")).map(|w| {
+                    w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
+                }).unwrap_or(false)
+            }
+        } else {
+            stats.and_then(|s| s.get("win")).map(|w| {
+                w.as_bool().unwrap_or_else(|| w.as_str() == Some("Win") || w.as_i64() == Some(1))
+            }).unwrap_or(false)
+        };
 
         if team_id == 100 && win {
             blue_participant_win = true;
@@ -1037,8 +1047,8 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
     let final_blue_win = blue_win_flag.unwrap_or(blue_participant_win);
     let final_red_win = red_win_flag.unwrap_or(!final_blue_win);
 
-    // In ARAM or special modes where dragons/barons don't exist, ensure 0
-    if queue_id == 450 || queue_id == 860 {
+    // In ARAM, Arena or special modes where dragons/barons don't exist, ensure 0
+    if queue_id == 450 || queue_id == 860 || queue_id == 1700 || queue_id == 1710 {
         blue_dragons = 0;
         red_dragons = 0;
         blue_barons = 0;
@@ -1157,12 +1167,18 @@ pub fn parse_riot_match_detail(raw: &Value, db: &Database) -> Option<Value> {
 
     Some(json!({
         "game_id": game_id,
+        "gameId": game_id,
         "game_creation": game_creation,
+        "gameCreation": game_creation,
         "game_duration": game_duration,
+        "gameDuration": game_duration,
+        "game_duration_seconds": game_duration,
         "game_duration_str": game_duration_str,
         "game_mode": game_mode,
+        "gameMode": game_mode,
         "game_mode_cn": game_mode_cn,
         "queue_id": queue_id,
+        "queueId": queue_id,
         "queue_name": mode_cn,
         "mode_cn": mode_cn,
         "blue_team_kills": blue_kills,
@@ -2282,31 +2298,24 @@ mod tests {
 
     #[test]
     fn test_paginate_matches_prevents_secondary_truncation() {
-        // Case 1: matches was already paged upstream by LCU [20..39] (20 items)
-        let paged_items: Vec<i32> = (20..40).collect();
-        let res = paginate_matches(&paged_items, 20, 39);
-        assert_eq!(res.len(), 20, "Should NOT skip 20 when already paged");
-        assert_eq!(res[0], 20);
-        assert_eq!(res[19], 39);
-
-        // Case 2: matches contains full history from index 0 [0..39] (40 items)
+        // Case 1: full history from index 0 [0..39] (40 items)
         let full_items: Vec<i32> = (0..40).collect();
         let res = paginate_matches(&full_items, 20, 39);
         assert_eq!(res.len(), 20);
         assert_eq!(res[0], 20);
         assert_eq!(res[19], 39);
 
-        // Case 3: first page [0..19]
+        // Case 2: first page [0..19]
         let res = paginate_matches(&full_items, 0, 19);
         assert_eq!(res.len(), 20);
         assert_eq!(res[0], 0);
         assert_eq!(res[19], 19);
 
-        // Case 4: filtered queue returns fewer items than page size
-        let small_items: Vec<i32> = (20..25).collect();
-        let res = paginate_matches(&small_items, 20, 39);
-        assert_eq!(res.len(), 5);
-        assert_eq!(res[0], 20);
-        assert_eq!(res[4], 24);
+        // Case 3: past end pagination must return empty slice rather than looping (Bug 6 fix)
+        let small_items: Vec<i32> = (0..12).collect();
+        let page1 = paginate_matches(&small_items, 0, 19);
+        assert_eq!(page1.len(), 12);
+        let page2 = paginate_matches(&small_items, 20, 39);
+        assert_eq!(page2.len(), 0, "Page 2 beyond 12 items must return empty vector");
     }
 }

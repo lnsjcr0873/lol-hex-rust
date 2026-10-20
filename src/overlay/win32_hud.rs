@@ -614,39 +614,41 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
     for ((x1, y1, x2, y2), count) in &hotzones.sample_btns {
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
             let new_sample = *count;
+            let history_opt = GLOBAL_HISTORY.try_read().ok().and_then(|g| g.clone());
+            if let Some(ref history_mgr) = history_opt {
+                history_mgr.sample_count.store(new_sample, Ordering::Relaxed);
+            }
+
+            // Update interaction state first and drop write lock immediately to prevent ABBA deadlock
             if let Ok(mut inter) = RANKED_INTERACTION.write() {
                 inter.sample_match_count = new_sample;
-                let history_opt = GLOBAL_HISTORY.try_read().ok().and_then(|g| g.clone());
-                if let Some(ref history_mgr) = history_opt {
-                    history_mgr.sample_count.store(new_sample, Ordering::Relaxed);
-                }
+            }
 
-                // Immediately recompute tactical profiles for all players in current HUD state
-                if let Ok(mut st) = GLOBAL_HUD.state.write() {
-                    if let HudContent::Ranked(ref mut data) = st.content {
-                        if let Some(ref history_mgr) = history_opt {
-                            for slot in &mut data.my_team {
-                                if let Some(ref p) = slot.profile {
-                                    let puuid = p.puuid.clone();
-                                    if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
-                                        slot.profile = Some(new_prof);
-                                    }
+            // Immediately recompute tactical profiles for all players in current HUD state in separate lock scope
+            if let Ok(mut st) = GLOBAL_HUD.state.write() {
+                if let HudContent::Ranked(ref mut data) = st.content {
+                    if let Some(ref history_mgr) = history_opt {
+                        for slot in &mut data.my_team {
+                            if let Some(ref p) = slot.profile {
+                                let puuid = p.puuid.clone();
+                                if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
+                                    slot.profile = Some(new_prof);
                                 }
                             }
-                            for slot in &mut data.their_team {
-                                if let Some(ref p) = slot.profile {
-                                    let puuid = p.puuid.clone();
-                                    if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
-                                        slot.profile = Some(new_prof);
-                                    }
+                        }
+                        for slot in &mut data.their_team {
+                            if let Some(ref p) = slot.profile {
+                                let puuid = p.puuid.clone();
+                                if let Some(new_prof) = history_mgr.recompute_profile_sync(&puuid, slot.champion_id, new_sample as usize) {
+                                    slot.profile = Some(new_prof);
                                 }
                             }
                         }
                     }
-                    st.dirty = true;
                 }
-                repaint_needed = true;
+                st.dirty = true;
             }
+            repaint_needed = true;
             break;
         }
     }
@@ -755,10 +757,9 @@ fn handle_lbutton_down(hwnd: windows::Win32::Foundation::HWND, px: i32, py: i32)
         if px >= *x1 && px <= *x2 && py >= *y1 && py <= *y2 {
             let cid = *champ_id;
             crate::spawn_task(async move {
-                if let Ok(guard) = GLOBAL_LCU.read() {
-                    if let Some(ref lcu) = *guard {
-                        let _ = lcu.swap_bench_champion(&cid.to_string()).await;
-                    }
+                let lcu_opt = GLOBAL_LCU.read().ok().and_then(|g| (*g).clone());
+                if let Some(lcu) = lcu_opt {
+                    let _ = lcu.swap_bench_champion(&cid.to_string()).await;
                 }
             });
             break;
@@ -1068,7 +1069,7 @@ unsafe extern "system" fn overlay_wndproc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::{COLORREF, LRESULT, RECT};
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush,
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
         DeleteDC, DeleteObject, EndPaint, FillRect, SelectObject, PAINTSTRUCT, SRCCOPY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -1103,8 +1104,43 @@ unsafe extern "system" fn overlay_wndproc(
             handle_lbutton_down(hwnd, px, py);
             LRESULT(0)
         }
-        WM_RBUTTONDOWN => {
-            // Right-clicks are never consumed by HUD: zero interference with character movement/spells
+        WM_RBUTTONDOWN | windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP => {
+            // Forward right-clicks to underlying LoL client / game window so right click is never swallowed
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::Graphics::Gdi::ScreenToClient;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                FindWindowW, GetCursorPos, PostMessageW,
+            };
+            use windows::core::w;
+
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+
+            let mut target = FindWindowW(w!("RCLIENT"), None).unwrap_or_default();
+            if target == windows::Win32::Foundation::HWND::default() {
+                target = FindWindowW(w!("League of Legends (TM) Client"), None).unwrap_or_default();
+            }
+
+            if target != windows::Win32::Foundation::HWND::default() {
+                let mut target_pt = pt;
+                let _ = ScreenToClient(target, &mut target_pt);
+                let target_lparam = windows::Win32::Foundation::LPARAM(
+                    ((target_pt.x as u16 as u32) | ((target_pt.y as u16 as u32) << 16)) as isize,
+                );
+                let _ = PostMessageW(target, msg, wparam, target_lparam);
+            }
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_CONTEXTMENU => {
+            use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
+            use windows::core::w;
+            let mut target = FindWindowW(w!("RCLIENT"), None).unwrap_or_default();
+            if target == windows::Win32::Foundation::HWND::default() {
+                target = FindWindowW(w!("League of Legends (TM) Client"), None).unwrap_or_default();
+            }
+            if target != windows::Win32::Foundation::HWND::default() {
+                let _ = PostMessageW(target, msg, wparam, lparam);
+            }
             LRESULT(0)
         }
         WM_TIMER => {
@@ -1176,6 +1212,9 @@ unsafe extern "system" fn overlay_wndproc(
     }
 }
 
+static LAST_WIN_GEOM: std::sync::Mutex<(i32, i32, i32, i32)> = std::sync::Mutex::new((-1, -1, -1, -1));
+static LAST_CLIENT_GEOM: std::sync::Mutex<(i32, i32, i32, i32)> = std::sync::Mutex::new((-1, -1, -1, -1));
+
 #[cfg(windows)]
 unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::Foundation::BOOL;
@@ -1184,9 +1223,6 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
         SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
         SW_SHOWNOACTIVATE,
     };
-    use std::sync::Mutex;
-    static LAST_WIN_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
-    static LAST_CLIENT_GEOM: Mutex<(i32, i32, i32, i32)> = Mutex::new((-1, -1, -1, -1));
 
     let reset_geom_caches = || {
         if let Ok(mut g) = LAST_WIN_GEOM.lock() {
@@ -1322,27 +1358,38 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
-            let (mon_left, mon_top, mon_right) = if GetMonitorInfoW(hmon, &mut mi).as_bool() {
-                (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right)
+            let (mon_left, mon_top, mon_right, mon_bottom) = if GetMonitorInfoW(hmon, &mut mi).as_bool() {
+                (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom)
             } else {
-                let sw = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
-                    windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
-                );
-                (0, 0, sw)
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetSystemMetrics, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+                    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+                };
+                let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                (vx, vy, vx + vw, vy + vh)
             };
 
-            let left_avail = rect.x - mon_left;
-            let top_avail = rect.y - mon_top;
-            let right_avail = mon_right - (rect.x + rect.width);
+            let left_avail = (rect.x - mon_left).max(0);
+            let top_avail = (rect.y - mon_top).max(0);
+            let right_avail = (mon_right - (rect.x + rect.width)).max(0);
 
-            let actual_offset_y = if top_avail >= top_dock_height { top_dock_height } else { top_avail.max(0) };
-            let actual_left_margin = if left_avail >= left_w { left_w } else { left_avail.max(0) };
-            let actual_right_margin = if right_avail >= right_w { right_w } else { right_avail.max(0) };
+            let actual_offset_y = if top_avail >= top_dock_height { top_dock_height } else { top_avail };
+            let actual_left_margin = if left_avail >= left_w { left_w } else { left_avail };
+            let actual_right_margin = if right_avail >= right_w { right_w } else { right_avail };
 
-            let win_x = rect.x - actual_left_margin;
-            let win_y = rect.y - actual_offset_y;
-            let win_w = rect.width + actual_left_margin + actual_right_margin;
-            let win_h = rect.height + actual_offset_y;
+            let raw_win_x = rect.x - actual_left_margin;
+            let raw_win_y = rect.y - actual_offset_y;
+            let raw_win_w = rect.width + actual_left_margin + actual_right_margin;
+            let raw_win_h = rect.height + actual_offset_y;
+
+            // Clamping window coordinates strictly within rcWork to prevent stretching/tearing across monitors
+            let win_x = raw_win_x.max(mon_left);
+            let win_y = raw_win_y.max(mon_top);
+            let win_w = raw_win_w.min(mon_right - win_x).max(100);
+            let win_h = raw_win_h.min(mon_bottom - win_y).max(100);
 
             let target_geom = (win_x, win_y, win_w, win_h);
             let mut geom_changed = false;
@@ -1445,6 +1492,9 @@ unsafe fn handle_timer_tick(hwnd: windows::Win32::Foundation::HWND) {
     if is_dirty || any_geom_changed {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         let _ = InvalidateRect(hwnd, None, BOOL(0));
+        if any_geom_changed {
+            let _ = windows::Win32::Graphics::Gdi::UpdateWindow(hwnd);
+        }
     }
 }
 
@@ -1462,7 +1512,7 @@ unsafe fn render_hud(
     use windows::Win32::Graphics::Gdi::{GetStockObject, SelectObject, SetBkMode, DEFAULT_GUI_FONT, TRANSPARENT};
     let _ = SetBkMode(hdc, TRANSPARENT);
     let stock_font = GetStockObject(DEFAULT_GUI_FONT);
-    SelectObject(hdc, stock_font);
+    let prev_font = SelectObject(hdc, stock_font);
 
     match content {
         HudContent::Augment(data) => render_augment_hud(hdc, width, height, data),
@@ -1471,6 +1521,8 @@ unsafe fn render_hud(
         HudContent::Ranked(data) => render_ranked_hud(hdc, width, height, data),
         HudContent::None => {}
     }
+
+    let _ = SelectObject(hdc, prev_font);
 }
 
 #[cfg(windows)]
@@ -2237,7 +2289,7 @@ unsafe fn render_ranked_hud(
     };
 
     let sx = cw as f64 / 1280.0;
-    let sy = sx; // Keep uniform aspect ratio
+    let sy = ch as f64 / 720.0; // Independent vertical aspect ratio scaling
 
     let mut new_hotzones = HudHotzones::default();
 
@@ -2245,12 +2297,18 @@ unsafe fn render_ranked_hud(
     // 1. Top Decision Navigation Bar (Tabs, Pills/Runes, Samples)
     // -------------------------------------------------------------
     let card_w = (860.0 * sx).min(cw as f64 - 20.0) as i32;
-    let card_h = (32.0 * sy).max(28.0) as i32;
+    let is_safe_dock = actual_offset_y < 36;
+    let card_h = if is_safe_dock {
+        (26.0 * sy).max(24.0) as i32
+    } else {
+        (32.0 * sy).max(28.0) as i32
+    };
     let card_x = actual_left_margin + (cw - card_w) / 2;
     let card_y = if actual_offset_y >= card_h + 4 {
         (actual_offset_y - card_h) / 2
     } else {
-        2
+        // Safe dock mode: avoid covering Riot's native 30s countdown and phase banner (Y=0..~40)
+        actual_offset_y + (42.0 * sy) as i32
     };
 
     let active_border_col = match active_tab.as_str() {
@@ -2437,8 +2495,9 @@ unsafe fn render_ranked_hud(
     let mini_w = (24.0 * sx) as i32;
     let wing_w = (168.0 * sx) as i32;
 
-    if left_collapsed {
-        let tx1 = 2;
+    let has_left_margin = actual_left_margin >= (60.0 * sx) as i32;
+    if left_collapsed || !has_left_margin {
+        let tx1 = if has_left_margin { 2 } else { actual_left_margin + 2 };
         let tx2 = tx1 + mini_w;
         let ty1 = actual_offset_y + (210.0 * sy) as i32;
         let ty2 = ty1 + (80.0 * sy) as i32;
@@ -2451,7 +2510,7 @@ unsafe fn render_ranked_hud(
         new_hotzones.left_wing_toggle = Some((tx1, ty1, tx2, ty2));
     } else {
         let wx1 = 2;
-        let wx2 = actual_left_margin - 4;
+        let wx2 = (actual_left_margin - 4).max(wx1 + 40);
         let hy1 = actual_offset_y + (64.0 * sy) as i32;
         let hy2 = hy1 + (24.0 * sy) as i32;
 
@@ -2583,8 +2642,22 @@ unsafe fn render_ranked_hud(
     // -------------------------------------------------------------
     // 3. Right Wing (敌方战绩情报)
     // -------------------------------------------------------------
-    if right_collapsed {
-        let tx1 = actual_left_margin + cw + 2;
+    let has_right_margin = if let Ok(g) = LAST_WIN_GEOM.lock() {
+        if g.2 > 0 {
+            (g.2 - (actual_left_margin + cw)) >= (60.0 * sx) as i32
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    if right_collapsed || !has_right_margin {
+        let tx1 = if has_right_margin {
+            actual_left_margin + cw + 2
+        } else {
+            (actual_left_margin + cw - mini_w - 2).max(actual_left_margin)
+        };
         let tx2 = tx1 + mini_w;
         let ty1 = actual_offset_y + (210.0 * sy) as i32;
         let ty2 = ty1 + (80.0 * sy) as i32;
@@ -2725,15 +2798,17 @@ unsafe fn render_ranked_hud(
     }
 
     // -------------------------------------------------------------
-    // 4. 5v5 Slots (My Team Left X=205, Their Team Right X=950)
+    // 4. 5v5 Slots (My Team Left X=260, Their Team Right X=1005)
+    // Non-obtrusive positioning: clear of summoner spells / rune popups (X=190..245)
+    // and champion pick grid rightmost column (X=340..945)
     // -------------------------------------------------------------
     let slot_pitch_y = (92.0 * sy) as i32;
-    let slot_card_w = ((130.0 * sx) as i32).max(124);
+    let slot_card_w = ((122.0 * sx) as i32).max(114);
     let slot_card_h = (44.0 * sy) as i32;
     let slot_start_y = actual_offset_y + (100.0 * sy) as i32;
 
     // 4.1 My Team Slots
-    let left_slot_x = actual_left_margin + (205.0 * sx) as i32;
+    let left_slot_x = actual_left_margin + (260.0 * sx) as i32;
     for (idx, slot) in data.my_team.iter().take(5).enumerate() {
         let sy1 = slot_start_y + idx as i32 * slot_pitch_y;
         let border_col = if slot.is_local_player { rgb(200, 170, 110) } else { rgb(42, 67, 101) };
@@ -2795,7 +2870,7 @@ unsafe fn render_ranked_hud(
     }
 
     // 4.2 Their Team Slots
-    let right_slot_x = actual_left_margin + (950.0 * sx) as i32;
+    let right_slot_x = actual_left_margin + (1005.0 * sx) as i32;
     for (idx, slot) in data.their_team.iter().take(5).enumerate() {
         let sy1 = slot_start_y + idx as i32 * slot_pitch_y;
         let border_col = rgb(99, 23, 27);
@@ -3382,6 +3457,105 @@ mod tests {
         assert_eq!(sanitized, "👑 绝活 / 🚗 双排车队");
         let runs = split_text_runs(raw);
         assert!(!runs.iter().any(|r| r.text.contains('\u{FE0F}') || r.text.contains('\u{200D}')));
+    }
+
+    #[test]
+    fn test_ranked_decision_card_safe_dock_calculation() {
+        let cw = 1280;
+        let ch = 720;
+        let _sx = cw as f64 / 1280.0;
+        let sy = ch as f64 / 720.0;
+
+        // Case A: Client at screen top (actual_offset_y == 0, standard 1080P/2K top docked)
+        let actual_offset_y_top = 0;
+        let is_safe_dock = actual_offset_y_top < 36;
+        let card_h = if is_safe_dock {
+            (26.0 * sy).max(24.0) as i32
+        } else {
+            (32.0 * sy).max(28.0) as i32
+        };
+        let card_y = if actual_offset_y_top >= card_h + 4 {
+            (actual_offset_y_top - card_h) / 2
+        } else {
+            actual_offset_y_top + (42.0 * sy) as i32
+        };
+
+        // Must be pushed down to Y=42 to completely avoid covering Riot's 30s countdown (Y=0..~40)
+        assert_eq!(card_y, 42, "When offset_y is 0, decision card must safe-dock at Y=42");
+        assert_eq!(card_h, 26, "Card height should compress to 26 in safe-dock mode");
+
+        // Case B: Client with title margin (actual_offset_y == 44)
+        let actual_offset_y_margin = 44;
+        let is_safe_dock_b = actual_offset_y_margin < 36;
+        let card_h_b = if is_safe_dock_b {
+            (26.0 * sy).max(24.0) as i32
+        } else {
+            (32.0 * sy).max(28.0) as i32
+        };
+        let card_y_b = if actual_offset_y_margin >= card_h_b + 4 {
+            (actual_offset_y_margin - card_h_b) / 2
+        } else {
+            actual_offset_y_margin + (42.0 * sy) as i32
+        };
+
+        // Margin space exists: placed above client in the margin!
+        assert_eq!(card_y_b, 6);
+        assert_eq!(card_h_b, 32);
+    }
+
+    #[test]
+    fn test_independent_aspect_ratio_scaling() {
+        // 4:3 Aspect ratio screen (1024x768)
+        let cw = 1024;
+        let ch = 768;
+        let sx = cw as f64 / 1280.0; // 0.8
+        let sy = ch as f64 / 720.0;  // 1.0667
+
+        assert!((sx - 0.8).abs() < 1e-6);
+        assert!((sy - 1.066667).abs() < 1e-4);
+        assert_ne!(sx, sy, "Horizontal and vertical scaling must be independent");
+
+        let slot_pitch_y = (92.0 * sy) as i32;
+        assert_eq!(slot_pitch_y, 98, "Vertical pitch must scale with true sy");
+    }
+
+    #[test]
+    fn test_multi_monitor_clamping_negative_coordinates() {
+        let mon_left = 0;
+        let mon_top = 0;
+        let mon_right = 1920;
+        let mon_bottom = 1080;
+
+        let rect_x = 10;
+        let rect_y = 10;
+        let rect_width = 1280;
+        let rect_height = 720;
+        let left_w = 168;
+        let top_dock_height = 44;
+        let right_w = 168;
+
+        let left_avail = (rect_x - mon_left).max(0);
+        let top_avail = (rect_y - mon_top).max(0);
+        let right_avail = (mon_right - (rect_x + rect_width)).max(0);
+
+        let actual_offset_y = if top_avail >= top_dock_height { top_dock_height } else { top_avail };
+        let actual_left_margin = if left_avail >= left_w { left_w } else { left_avail };
+        let actual_right_margin = if right_avail >= right_w { right_w } else { right_avail };
+
+        let raw_win_x = rect_x - actual_left_margin;
+        let raw_win_y = rect_y - actual_offset_y;
+        let raw_win_w = rect_width + actual_left_margin + actual_right_margin;
+        let raw_win_h = rect_height + actual_offset_y;
+
+        let win_x = raw_win_x.max(mon_left);
+        let win_y = raw_win_y.max(mon_top);
+        let win_w = raw_win_w.min(mon_right - win_x).max(100);
+        let win_h = raw_win_h.min(mon_bottom - win_y).max(100);
+
+        assert!(win_x >= mon_left, "Window left must not cross below monitor left");
+        assert!(win_y >= mon_top, "Window top must not cross below monitor top");
+        assert!(win_x + win_w <= mon_right, "Window right must stay inside monitor");
+        assert!(win_y + win_h <= mon_bottom, "Window bottom must stay inside monitor");
     }
 }
 

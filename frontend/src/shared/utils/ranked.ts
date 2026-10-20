@@ -64,23 +64,45 @@ export function isUnrankedTier(tier?: string | null): boolean {
 export function formatTierName(tier?: string | null): string {
   if (!tier || isUnrankedTier(tier)) return '未定级'
   const trimmed = tier.trim().toUpperCase()
-  return TIER_NAMES[trimmed] || tier.trim()
+  const parts = trimmed.split(/\s+/)
+  const main = parts[0]
+  return TIER_NAMES[main] || TIER_NAMES[trimmed] || tier.trim()
 }
 
 export function isMasterPlus(tier?: string | null): boolean {
   if (!tier) return false
   const upper = tier.trim().toUpperCase()
-  return upper === 'MASTER' || upper === 'GRANDMASTER' || upper === 'CHALLENGER'
+  const main = upper.split(/\s+/)[0]
+  return main === 'MASTER' || main === 'GRANDMASTER' || main === 'CHALLENGER'
 }
 
 export function formatTier(tier?: string | null, div?: string | null): string {
   if (!tier || isUnrankedTier(tier)) return '未定级'
-  const translated = formatTierName(tier)
-  if (!div || div === 'NA' || div === 'NONE' || div.trim() === '' || isMasterPlus(tier)) {
+  const trimmed = tier.trim().toUpperCase()
+  const parts = trimmed.split(/\s+/)
+  const mainTier = parts[0]
+  const embeddedDiv = parts.slice(1).join(' ').trim()
+
+  const translated = TIER_NAMES[mainTier] || TIER_NAMES[trimmed] || mainTier
+  if (isMasterPlus(mainTier)) {
     return translated
   }
+
+  const effectiveDiv = div && div !== 'NA' && div !== 'NONE' && div.trim() !== ''
+    ? div.trim()
+    : embeddedDiv
+
+  if (!effectiveDiv) {
+    return translated
+  }
+
   // Sanitize div: if div already contains tier name (e.g. "白银 I" or "SILVER I"), remove the tier prefix
-  const cleanDiv = div.replace(translated, '').replace(new RegExp(`^${tier}\\s*`, 'i'), '').trim()
+  const cleanDiv = effectiveDiv
+    .replace(translated, '')
+    .replace(new RegExp(`^${mainTier}\\s*`, 'i'), '')
+    .replace(new RegExp(`^${tier.trim()}\\s*`, 'i'), '')
+    .trim()
+
   return cleanDiv ? `${translated} ${cleanDiv}` : translated
 }
 

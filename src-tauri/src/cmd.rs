@@ -653,16 +653,16 @@ pub async fn get_match_detail(
 #[tauri::command]
 pub async fn get_match_timeline(
     state: State<'_, TauriAppState>,
-    game_id: u64,
+    game_id: i64,
 ) -> Result<Value, String> {
-    // 1. Try real LCU endpoint
-    if let Some(timeline) = state.lcu.get_game_timeline(game_id).await {
-        return Ok(timeline);
+    // 1. Demo / mock fallback for mock IDs or negative/zero IDs
+    if game_id <= 0 || game_id == 99991234 || game_id == 100200300 {
+        return Ok(build_mock_match_timeline(game_id.unsigned_abs()));
     }
 
-    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0 or 99991234)
-    if game_id == 0 || game_id == 99991234 || game_id == 100200300 {
-        return Ok(build_mock_match_timeline(game_id));
+    // 2. Try real LCU endpoint
+    if let Some(timeline) = state.lcu.get_game_timeline(game_id as u64).await {
+        return Ok(timeline);
     }
 
     Err(format!("无法获取对局 {} 的时间线数据", game_id))
@@ -812,16 +812,16 @@ pub async fn get_raw_match_history(
 #[tauri::command]
 pub async fn get_raw_match_timeline(
     state: State<'_, TauriAppState>,
-    game_id: u64,
+    game_id: i64,
 ) -> Result<Value, String> {
-    // 1. Try real LCU endpoint (with LRU cache and concurrency protection)
-    if let Some(timeline) = state.lcu.get_raw_match_timeline(game_id).await {
-        return Ok(timeline);
+    // 1. Demo / mock fallback for mock IDs or negative/zero IDs
+    if game_id <= 0 || game_id == 99991234 || game_id == 100200300 {
+        return Ok(build_mock_match_timeline(game_id.unsigned_abs()));
     }
 
-    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0, 99991234, 100200300)
-    if game_id == 0 || game_id == 99991234 || game_id == 100200300 {
-        return Ok(build_mock_match_timeline(game_id));
+    // 2. Try real LCU endpoint (with LRU cache and concurrency protection)
+    if let Some(timeline) = state.lcu.get_raw_match_timeline(game_id as u64).await {
+        return Ok(timeline);
     }
 
     Err(format!("无法获取对局 {} 的原始时间线数据", game_id))
@@ -830,21 +830,17 @@ pub async fn get_raw_match_timeline(
 #[tauri::command]
 pub async fn get_raw_match_detail(
     state: State<'_, TauriAppState>,
-    game_id: u64,
+    game_id: i64,
 ) -> Result<Value, String> {
-    if game_id == 0 {
-        return Err("Invalid game_id: 0".to_string());
-    }
-
-    // 1. Try real LCU endpoint (with LRU cache in LCU client)
-    if let Some(detail) = state.lcu.get_raw_match_detail(game_id).await {
-        return Ok(detail);
-    }
-
-    // 2. Demo / mock fallback only for explicit mock IDs (e.g. 0, 99991234, 100200300)
-    if game_id == 99991234 || game_id == 100200300 {
-        let mock = build_mock_match_detail(game_id as i64, &state.db);
+    // 1. Demo / mock fallback for mock IDs or negative/zero IDs
+    if game_id <= 0 || game_id == 99991234 || game_id == 100200300 {
+        let mock = build_mock_match_detail(game_id, &state.db);
         return Ok(mock.get("raw_game").cloned().unwrap_or(mock));
+    }
+
+    // 2. Try real LCU endpoint (with LRU cache in LCU client)
+    if let Some(detail) = state.lcu.get_raw_match_detail(game_id as u64).await {
+        return Ok(detail);
     }
 
     Err(format!("无法获取对局 {} 的原始详情数据", game_id))

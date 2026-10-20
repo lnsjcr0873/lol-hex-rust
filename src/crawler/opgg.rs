@@ -873,6 +873,10 @@ impl OpggClient {
         None
     }
 
+    pub fn wilson_score_lower(p: f64, n: i64, z: f64) -> f64 {
+        wilson_score_lower(p, n, z)
+    }
+
     pub async fn get_counter_picks_against(&self, enemy_cid: &str, position: &str, top_n: Option<usize>) -> Value {
         let enemy_c = enemy_cid.trim();
         if enemy_c.is_empty() || enemy_c == "0" {
@@ -889,23 +893,33 @@ impl OpggClient {
         if let Some(ref d) = enemy_detail {
             if let Some(counters) = d.get("counters").and_then(|v| v.as_array()) {
                 for c in counters {
+                    let games = c.get("games").and_then(|v| v.as_i64()).unwrap_or(0);
+                    // Discard small-sample anomalies (games < 30)
+                    if games < 30 {
+                        continue;
+                    }
                     let enemy_wr = c.get("winRate").and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(0.5);
                     let counter_wr = 1.0 - enemy_wr;
+                    let score = wilson_score_lower(counter_wr, games, 1.44) * 0.7 + counter_wr * 0.3;
                     candidates.push(json!({
                         "championId": c.get("opponentIdStr"),
                         "counterWinRate": counter_wr,
-                        "games": c.get("games"),
+                        "games": games,
+                        "score": score,
                     }));
                 }
             }
         }
 
         candidates.sort_by(|a, b| {
-            let wr_a = a.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let wr_b = b.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let wr_a = if wr_a.is_nan() || wr_a.is_infinite() { 0.0 } else { wr_a };
-            let wr_b = if wr_b.is_nan() || wr_b.is_infinite() { 0.0 } else { wr_b };
-            wr_b.partial_cmp(&wr_a).unwrap_or(std::cmp::Ordering::Equal)
+            let score_a = a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let score_b = b.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let wr_a = a.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let wr_b = b.get("counterWinRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    wr_b.partial_cmp(&wr_a).unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| {
                     let ida = a.get("championId").and_then(|v| v.as_str()).unwrap_or("");
                     let idb = b.get("championId").and_then(|v| v.as_str()).unwrap_or("");
@@ -1124,6 +1138,22 @@ impl OpggClient {
     }
 }
 
+/// Calculates the Wilson score interval lower bound for win rate smoothing.
+/// p: observed win rate (0.0 .. 1.0)
+/// n: total games played
+/// z: standard normal deviate (e.g. 1.44 for ~85% confidence)
+pub fn wilson_score_lower(p: f64, n: i64, z: f64) -> f64 {
+    if n <= 0 {
+        return 0.0;
+    }
+    let p = p.clamp(0.0, 1.0);
+    let n_f = n as f64;
+    let z2 = z * z;
+    let numerator = p + (z2 / (2.0 * n_f)) - z * ((p * (1.0 - p) / n_f + z2 / (4.0 * n_f * n_f)).max(0.0)).sqrt();
+    let denominator = 1.0 + (z2 / n_f);
+    (numerator / denominator).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1208,5 +1238,24 @@ mod tests {
             },
         };
         assert_eq!(target_pos, "jungle");
+    }
+
+    #[test]
+    fn test_wilson_score_lower_and_smoothing() {
+        // Rule 1: games < 30 is discarded (filtered out)
+        let small_sample_games = 2;
+        assert!(small_sample_games < 30, "Picks with games < 30 must be filtered out");
+
+        // Rule 2: Among valid samples (games >= 30), Wilson smoothing penalizes low sample variance
+        // 30 games with 60% win rate
+        let lower_30 = wilson_score_lower(0.60, 30, 1.44);
+        let score_30 = lower_30 * 0.7 + 0.60 * 0.3;
+
+        // 20,000 games with 55% win rate
+        let lower_20k = wilson_score_lower(0.55, 20000, 1.44);
+        let score_20k = lower_20k * 0.7 + 0.55 * 0.3;
+
+        // High-confidence 20,000 games pick should outrank the volatile 30-game pick
+        assert!(score_20k > score_30, "High confidence large sample ({score_20k}) should outrank volatile 30-game sample ({score_30})");
     }
 }

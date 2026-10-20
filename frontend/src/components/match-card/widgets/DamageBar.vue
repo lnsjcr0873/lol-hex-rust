@@ -43,32 +43,38 @@ const props = withDefaults(
 )
 
 const ordered = computed(() => {
-  const base = Math.max(props.baselineDamage || 1, 1)
-  const list = [
+  const pDmg = Math.max(0, props.physicalDamage || 0)
+  const mDmg = Math.max(0, props.magicDamage || 0)
+  const tDmg = Math.max(0, props.trueDamage || 0)
+  const total = pDmg + mDmg + tDmg
+  const base = Math.max(props.baselineDamage || 1, total, 1)
+
+  const totalBarWidth = (Math.min(total, base) / base) * props.width
+  const factor = total > 0 ? totalBarWidth / total : 0
+
+  const pWidth = pDmg * factor
+  const mWidth = mDmg * factor
+  const tWidth = tDmg * factor
+
+  return [
     {
       type: 'physical',
       color: '#f97316', // 橙红
       x: 0,
-      width: Math.min((props.physicalDamage / base) * props.width, props.width)
+      width: pWidth
     },
     {
       type: 'magic',
       color: '#38bdf8', // 亮蓝
-      x: 0,
-      width: Math.min((props.magicDamage / base) * props.width, props.width)
+      x: pWidth,
+      width: mWidth
     },
     {
       type: 'true',
       color: '#f8fafc', // 纯白/银白
-      x: 0,
-      width: Math.min((props.trueDamage / base) * props.width, props.width)
+      x: pWidth + mWidth,
+      width: tWidth
     }
-  ].sort((a, b) => b.width - a.width)
-
-  for (let i = 1; i < list.length; i++) {
-    list[i].x = list[i - 1].x + list[i - 1].width
-  }
-
-  return list
+  ]
 })
 </script>

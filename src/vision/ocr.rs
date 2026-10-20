@@ -147,105 +147,111 @@ impl OcrScanner {
             return Vec::new();
         }
 
-        #[derive(Clone)]
-        struct SafeOcrEngine(windows::Media::Ocr::OcrEngine);
-        unsafe impl Send for SafeOcrEngine {}
-        unsafe impl Sync for SafeOcrEngine {}
-
-        static GLOBAL_OCR_ENGINE: std::sync::Mutex<Option<SafeOcrEngine>> = std::sync::Mutex::new(None);
-
-        let res = std::panic::catch_unwind(|| -> windows::core::Result<Vec<String>> {
-            #[link(name = "ole32")]
-            extern "system" {
-                fn CoInitializeEx(pvreserved: *mut core::ffi::c_void, dwcoinit: u32) -> i32;
-                fn CoUninitialize();
-            }
-
-            struct ComGuard {
-                initialized: bool,
-            }
-            impl Drop for ComGuard {
-                fn drop(&mut self) {
-                    if self.initialized {
-                        unsafe {
-                            CoUninitialize();
-                        }
-                    }
-                }
-            }
-
-            // COINIT_MULTITHREADED = 0x0
-            let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), 0) };
-            let _com_guard = ComGuard { initialized: hr >= 0 };
-
+        let bytes = bmp_bytes.to_vec();
+        // Run OCR in a blocking task on a dedicated worker to avoid blocking Tokio async runtime
+        // and strictly isolate COM apartment lifecycle from Tokio worker threads
+        tokio::task::spawn_blocking(move || {
+            use windows::core::AgileReference;
             use windows::Graphics::Imaging::BitmapDecoder;
             use windows::Media::Ocr::OcrEngine;
             use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
 
-            let stream = InMemoryRandomAccessStream::new()?;
-            let writer = DataWriter::CreateDataWriter(&stream)?;
-            writer.WriteBytes(bmp_bytes)?;
-            writer.StoreAsync()?.get()?;
-            writer.FlushAsync()?.get()?;
-            let _ = writer.DetachStream();
-            stream.Seek(0)?;
+            static GLOBAL_OCR_ENGINE: std::sync::Mutex<Option<AgileReference<OcrEngine>>> =
+                std::sync::Mutex::new(None);
 
-            let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
-            let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;
+            let res = std::panic::catch_unwind(|| -> windows::core::Result<Vec<String>> {
+                #[link(name = "ole32")]
+                extern "system" {
+                    fn CoInitializeEx(pvreserved: *mut core::ffi::c_void, dwcoinit: u32) -> i32;
+                    fn CoUninitialize();
+                }
 
-            let engine = {
-                let mut guard = GLOBAL_OCR_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-                if guard.is_none() {
-                    let created = OcrEngine::TryCreateFromUserProfileLanguages().or_else(|e1| {
-                        tracing::warn!("OcrEngine TryCreateFromUserProfileLanguages failed: {:?}, falling back to zh-Hans-CN...", e1);
-                        use windows::Globalization::Language;
-                        let lang = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN"))?;
-                        OcrEngine::TryCreateFromLanguage(&lang)
-                    });
-                    match created {
-                        Ok(eng) => {
-                            tracing::info!("WinRT OcrEngine successfully initialized and cached.");
-                            *guard = Some(SafeOcrEngine(eng));
-                        }
-                        Err(err) => {
-                            tracing::error!("Failed to create WinRT OcrEngine: {:?}. Please ensure Chinese (zh-Hans-CN) OCR package is installed in Windows.", err);
-                            return Err(err);
+                struct ComGuard {
+                    initialized: bool,
+                }
+                impl Drop for ComGuard {
+                    fn drop(&mut self) {
+                        if self.initialized {
+                            unsafe {
+                                CoUninitialize();
+                            }
                         }
                     }
                 }
-                match guard.as_ref() {
-                    Some(eng) => eng.0.clone(),
-                    None => {
-                        return Err(windows::core::Error::new(
-                            windows::core::HRESULT(0x80004005_u32 as i32),
-                            "WinRT OcrEngine initialization returned empty guard",
-                        ));
+
+                // COINIT_MULTITHREADED = 0x0
+                // Crucial fix: ONLY uninitialize if this call actually initialized COM (S_OK = 0).
+                // If hr == 1 (S_FALSE, already initialized on this thread) or hr < 0 (failed),
+                // calling CoUninitialize would corrupt the thread's COM context!
+                let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), 0) };
+                let _com_guard = ComGuard { initialized: hr == 0 };
+
+                let stream = InMemoryRandomAccessStream::new()?;
+                let writer = DataWriter::CreateDataWriter(&stream)?;
+                writer.WriteBytes(&bytes)?;
+                writer.StoreAsync()?.get()?;
+                writer.FlushAsync()?.get()?;
+                let _ = writer.DetachStream();
+                stream.Seek(0)?;
+
+                let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
+                let software_bitmap = decoder.GetSoftwareBitmapAsync()?.get()?;
+
+                let engine = {
+                    let mut guard = GLOBAL_OCR_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+                    if guard.is_none() {
+                        let created = OcrEngine::TryCreateFromUserProfileLanguages().or_else(|e1| {
+                            tracing::warn!("OcrEngine TryCreateFromUserProfileLanguages failed: {:?}, falling back to zh-Hans-CN...", e1);
+                            use windows::Globalization::Language;
+                            let lang = Language::CreateLanguage(&windows::core::HSTRING::from("zh-Hans-CN"))?;
+                            OcrEngine::TryCreateFromLanguage(&lang)
+                        });
+                        match created {
+                            Ok(eng) => {
+                                tracing::info!("WinRT OcrEngine successfully initialized and cached as AgileReference.");
+                                let agile = AgileReference::new(&eng)?;
+                                *guard = Some(agile);
+                            }
+                            Err(err) => {
+                                tracing::error!("Failed to create WinRT OcrEngine: {:?}. Please ensure Chinese (zh-Hans-CN) OCR package is installed in Windows.", err);
+                                return Err(err);
+                            }
+                        }
+                    }
+                    match guard.as_ref() {
+                        Some(agile) => agile.resolve()?,
+                        None => {
+                            return Err(windows::core::Error::new(
+                                windows::core::HRESULT(0x80004005_u32 as i32),
+                                "WinRT OcrEngine initialization returned empty guard",
+                            ));
+                        }
+                    }
+                };
+
+                let ocr_result = engine.RecognizeAsync(&software_bitmap)?.get()?;
+                let mut lines = Vec::new();
+                for line in ocr_result.Lines()? {
+                    let text = line.Text()?.to_string();
+                    if !text.trim().is_empty() {
+                        lines.push(text);
                     }
                 }
-            };
+                Ok(lines)
+            });
 
-            let ocr_result = engine.RecognizeAsync(&software_bitmap)?.get()?;
-            let mut lines = Vec::new();
-            for line in ocr_result.Lines()? {
-                let text = line.Text()?.to_string();
-                if !text.trim().is_empty() {
-                    lines.push(text);
+            match res {
+                Ok(Ok(lines)) => lines,
+                Ok(Err(e)) => {
+                    tracing::warn!("Windows OCR recognition error: {:?}", e);
+                    Vec::new()
+                }
+                Err(_) => {
+                    tracing::error!("Windows OCR panic caught");
+                    Vec::new()
                 }
             }
-            Ok(lines)
-        });
-
-        match res {
-            Ok(Ok(lines)) => lines,
-            Ok(Err(e)) => {
-                tracing::warn!("Windows OCR recognition error: {:?}", e);
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::error!("Windows OCR panic caught");
-                Vec::new()
-            }
-        }
+        }).await.unwrap_or_default()
     }
 
     #[cfg(not(windows))]

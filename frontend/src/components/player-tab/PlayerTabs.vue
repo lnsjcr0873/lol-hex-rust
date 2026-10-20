@@ -203,9 +203,24 @@ function startPolling() {
   if (pollTimer) return
   pollTimer = setInterval(() => {
     if (!props.isActive) return
-    initSelfProfile()
-  }, 2500)
+    // Avoid hammering LCU IPC if profile is already connected and synchronized
+    if (!selfProfile.value?.is_connected || !lcuStore.isConnected) {
+      initSelfProfile()
+    }
+  }, 5000)
 }
+
+// Reactively synchronize profile whenever LCU store updates state
+watch(
+  [() => lcuStore.isConnected, () => lcuStore.puuid],
+  ([connected, puuid]) => {
+    if (connected && puuid) {
+      initSelfProfile(false)
+    } else if (!connected) {
+      selfProfile.value = null
+    }
+  }
+)
 
 function stopPolling() {
   if (pollTimer) {

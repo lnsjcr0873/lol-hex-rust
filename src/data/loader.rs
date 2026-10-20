@@ -303,10 +303,47 @@ impl Database {
             return Some(id.clone());
         }
         // Substring / alias search (e.g. "剑魔" -> "暗裔剑魔", "卡莎" -> "虚空之女")
+        // Enforce:
+        // 1. Minimum 2 characters for candidate/query in substring matching to prevent single-character collision (e.g. "蔚", "易", "慎", "劫")
+        // 2. Longest Match First + deterministic tie-breaking to prevent random HashMap iteration order
+        let mut best_match: Option<(String, usize, usize)> = None; // (id, score, match_len)
+        let lower_char_count = lower.chars().count();
+
         for (name, id) in &self.name_to_hero_id {
-            if name.contains(&lower) || (!lower.is_empty() && lower.contains(name)) {
-                return Some(id.clone());
+            let name_char_count = name.chars().count();
+            if lower_char_count >= 2 && name.contains(&lower) {
+                // Query is a substring of the champion name (e.g. "剑魔" in "暗裔剑魔")
+                let score = (lower_char_count * 100) / name_char_count.max(1);
+                let is_better = match &best_match {
+                    None => true,
+                    Some((best_id, best_score, best_len)) => {
+                        score > *best_score
+                            || (score == *best_score && lower_char_count > *best_len)
+                            || (score == *best_score && lower_char_count == *best_len && id < best_id)
+                    }
+                };
+                if is_better {
+                    best_match = Some((id.clone(), score, lower_char_count));
+                }
+            } else if name_char_count >= 2 && lower.contains(name) {
+                // Champion name is a substring of the query (e.g. "暗裔剑魔" in "暗裔剑魔出装")
+                let score = (name_char_count * 100) / lower_char_count.max(1);
+                let is_better = match &best_match {
+                    None => true,
+                    Some((best_id, best_score, best_len)) => {
+                        score > *best_score
+                            || (score == *best_score && name_char_count > *best_len)
+                            || (score == *best_score && name_char_count == *best_len && id < best_id)
+                    }
+                };
+                if is_better {
+                    best_match = Some((id.clone(), score, name_char_count));
+                }
             }
+        }
+
+        if let Some((id, _, _)) = best_match {
+            return Some(id);
         }
         None
     }

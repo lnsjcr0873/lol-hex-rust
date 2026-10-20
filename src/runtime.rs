@@ -205,7 +205,7 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
         let mut last_draft_sig = String::new();
         let mut cached_ranked_data: Option<crate::overlay::RankedOverlayData> = None;
         let mut last_applied_runes_cid = 0i64;
-        let mut last_swapped_champion_id = 0i64;
+        let mut _last_swapped_champion_id = 0i64;
         let mut last_swap_instant = Instant::now() - Duration::from_secs(10);
         let ready_check_accepting = Arc::new(AtomicBool::new(false));
 
@@ -337,7 +337,7 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                                                 if swapped {
                                                     let pref_name = db_bg.resolve_hero_name(&pref_id.to_string()).unwrap_or_else(|| format!("英雄{}", pref_id));
                                                     info!("⚡ [HexBrain ARAM] 自动秒抢备战席心愿英雄: {} ({})", pref_name, pref_id);
-                                                    last_swapped_champion_id = pref_id;
+                                                    _last_swapped_champion_id = pref_id;
                                                     last_swap_instant = Instant::now();
                                                     if let Some(ws) = &ws_bg {
                                                         ws.send_event("auto_swap_bench", serde_json::json!({
@@ -374,7 +374,17 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                     // Auto apply runes & summoner spells for locked champion
                     let cfg = config_bg.get().await;
                     if cfg.auto_apply_runes && my_champion_id > 0 && my_champion_id != last_applied_runes_cid {
-                        let is_locked = if is_aram {
+                        let has_completed_trade = session.get("trades")
+                            .and_then(|v| v.as_array())
+                            .map(|trades| {
+                                trades.iter().any(|t| {
+                                    t.get("cellId").and_then(|c| c.as_i64()) == Some(local_cell_id)
+                                        && t.get("state").and_then(|s| s.as_str()) == Some("COMPLETED")
+                                })
+                            })
+                            .unwrap_or(false);
+
+                        let is_locked = if is_aram || has_completed_trade {
                             true
                         } else {
                             session.get("actions").and_then(|v| v.as_array()).map(|action_rounds| {
@@ -392,7 +402,14 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                         };
 
                         if is_locked {
-                            let (success, msg) = lcu_bg.do_apply_runes_and_spells(&db_bg, my_champion_id, &my_assigned_pos).await;
+                            let effective_pos = {
+                                let d = draft_bg.read().await;
+                                d.state.my_team.iter()
+                                    .find(|s| s.is_local_player)
+                                    .map(|s| s.position.clone())
+                                    .unwrap_or_else(|| my_assigned_pos.clone())
+                            };
+                            let (success, msg) = lcu_bg.do_apply_runes_and_spells(&db_bg, my_champion_id, &effective_pos).await;
                             if success {
                                 last_applied_runes_cid = my_champion_id;
                                 let champ_name = db_bg.resolve_hero_name(&my_champion_id.to_string()).unwrap_or_else(|| format!("英雄{}", my_champion_id));
@@ -586,7 +603,7 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
             } else {
                 // Out of match: Lobby, Matchmaking, EndOfGame, etc. -> Clean up!
                 last_applied_runes_cid = 0;
-                last_swapped_champion_id = 0;
+                _last_swapped_champion_id = 0;
                 last_draft_sig.clear();
                 cached_ranked_data = None;
                 {

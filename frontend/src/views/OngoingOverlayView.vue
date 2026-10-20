@@ -115,7 +115,8 @@ import {
   getOngoingMatch,
   setOngoingOverlayVisible,
   setOngoingOverlayAlwaysOnTop,
-  isOngoingOverlayVisible
+  isOngoingOverlayVisible,
+  isTauri
 } from '../api/tauri'
 import { mockOngoingMatch } from '../api/mockData'
 import type { OngoingMatchData, PlayerCard } from '../api/types'
@@ -157,7 +158,7 @@ async function loadMatchData(force = false) {
   if (isDemoMode.value && !force) return
 
   // Do not poll when overlay window is hidden unless forced by user click
-  if (!force) {
+  if (!force && isTauri()) {
     const isVisible = await isOngoingOverlayVisible()
     if (!isVisible) return
   }

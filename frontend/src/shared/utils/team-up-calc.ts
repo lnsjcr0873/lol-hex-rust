@@ -49,33 +49,35 @@ export class TeamUpGraph {
   getTogetherTimes(playersGroups: string[][]): ResultType[] {
     const results: ResultType[] = []
 
-    for (let players of playersGroups) {
-      let count = Infinity
-      let ids: Set<string>
+    for (const players of playersGroups) {
+      if (players.length < 2) continue
+      let intersectionIds: Set<string> | null = null
 
       for (let i = 0; i < players.length; i++) {
         for (let j = i + 1; j < players.length; j++) {
           const adjacencyMap = this._adjacencyList.get(players[i])
           if (!adjacencyMap) {
-            count = 0
+            intersectionIds = new Set()
             break
           }
 
           const edge = adjacencyMap.get(players[j])
           if (!edge) {
-            count = 0
+            intersectionIds = new Set()
             break
           }
 
-          if (edge.weight < count) {
-            ids = edge.ids
-            count = edge.weight
+          if (intersectionIds === null) {
+            intersectionIds = new Set(edge.ids)
+          } else {
+            intersectionIds = new Set([...intersectionIds].filter((id) => edge.ids.has(id)))
           }
         }
-        if (count === 0) break
+        if (intersectionIds && intersectionIds.size === 0) break
       }
 
-      results.push({ players, times: count, ids: ids! })
+      const count = intersectionIds ? intersectionIds.size : 0
+      results.push({ players, times: count, ids: intersectionIds || new Set() })
     }
 
     return results
@@ -101,6 +103,9 @@ export class UnionFind {
   }
 
   find(element: ElementKey): ElementKey {
+    if (element === undefined || element === null || !this.parent.has(element)) {
+      return element
+    }
     if (this.parent.get(element) !== element) {
       this.parent.set(element, this.find(this.parent.get(element)!))
     }
@@ -127,20 +132,23 @@ export class UnionFind {
   }
 }
 
-export function combinations(nums: string[]): string[][] {
+export function combinations(nums: string[], maxK = 5): string[][] {
+  const safeNums = nums.length > 8 ? nums.slice(0, 8) : nums
   const res: string[][] = []
-  _backtrack(nums, [], 0, res)
-  return res
-}
 
-function _backtrack(nums: string[], current: string[], start: number, res: string[][]): void {
-  res.push([...current])
+  function backtrack(start: number, current: string[]) {
+    if (current.length > maxK) return
+    res.push([...current])
 
-  for (let i = start; i < nums.length; i++) {
-    current.push(nums[i])
-    _backtrack(nums, current, i + 1, res)
-    current.pop()
+    for (let i = start; i < safeNums.length; i++) {
+      current.push(safeNums[i])
+      backtrack(i + 1, current)
+      current.pop()
+    }
   }
+
+  backtrack(0, [])
+  return res
 }
 
 /**
@@ -174,25 +182,26 @@ export function calculateTogetherTimes(
     .getTogetherTimes(combinations(players).filter((a) => a.length > 1))
     .filter((t) => t.times >= threshold)
 
-  const map = new Map<string, ResultType>()
+  // Sort candidate cliques descending by team size then by times
+  const sorted = result.slice().sort((a, b) => b.players.length - a.players.length || b.times - a.times)
+  const finalResults: ResultType[] = []
 
-  for (const r of result) {
-    const key = toSetKey(r.ids)
-
-    if (map.has(key)) {
-      const item = map.get(key)!
-      if (
-        r.players.length > item.players.length &&
-        isSuperset(new Set(r.players), new Set(item.players))
-      ) {
-        item.players = r.players
+  for (const r of sorted) {
+    const rPlayerSet = new Set(r.players)
+    // Check if this group is already subsumed by an existing larger group that played the same or superset of matches
+    const isSubsumed = finalResults.some((existing) => {
+      if (isSuperset(new Set(existing.players), rPlayerSet)) {
+        return isSuperset(existing.ids, r.ids)
       }
-    } else {
-      map.set(key, r)
+      return false
+    })
+
+    if (!isSubsumed) {
+      finalResults.push(r)
     }
   }
 
-  return Array.from(map.values()).map((v) => ({
+  return finalResults.map((v) => ({
     ids: Array.from(v.ids),
     players: v.players,
     times: v.times
@@ -241,11 +250,14 @@ export function removeSubsets<T>(objects: T[], getter: (element: T) => ElementKe
 }
 
 export function mergeOverlappingSets(keys: ElementKey[][]): ElementKey[][] {
+  const validKeys = (keys || []).filter((k) => k && k.length > 0)
+  if (validKeys.length === 0) return []
+
   const elements = new Set<ElementKey>()
-  keys.forEach((k) => k.forEach((el) => elements.add(el)))
+  validKeys.forEach((k) => k.forEach((el) => elements.add(el)))
   const uf = new UnionFind(Array.from(elements))
 
-  keys.forEach((k) => {
+  validKeys.forEach((k) => {
     for (let i = 0; i < k.length; i++) {
       for (let j = i + 1; j < k.length; j++) {
         uf.union(k[i], k[j])
@@ -254,7 +266,7 @@ export function mergeOverlappingSets(keys: ElementKey[][]): ElementKey[][] {
   })
 
   const unionMap = new Map<ElementKey, Set<ElementKey>>()
-  keys.forEach((k) => {
+  validKeys.forEach((k) => {
     const root = uf.find(k[0])
     if (!unionMap.has(root)) {
       unionMap.set(root, new Set<ElementKey>())

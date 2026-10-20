@@ -156,10 +156,7 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         None => path.with_extension(format!("tmp_{}_{}", pid, cnt)),
     };
 
-    let bak_path = match path.file_name() {
-        Some(fname) => path.with_file_name(format!("{}.bak", fname.to_string_lossy())),
-        None => path.with_extension("bak"),
-    };
+    let bak_path = path.with_extension("bak");
 
     // 1. Write content to temporary file on the same volume and sync buffers
     {
@@ -201,9 +198,11 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
         let mut success = false;
         let mut last_error = std::io::Error::last_os_error();
 
-        for attempt in 0..5 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(15 * attempt));
+        let backoff_delays_ms = [0, 30, 60, 120, 250, 500];
+
+        for &delay_ms in &backoff_delays_ms {
+            if delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
             }
 
             if path.exists() {
@@ -263,9 +262,11 @@ pub fn save_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     #[cfg(not(windows))]
     {
         let mut last_err = None;
-        for attempt in 0..5 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(15 * attempt));
+        let backoff_delays_ms = [0, 30, 60, 120, 250, 500];
+
+        for &delay_ms in &backoff_delays_ms {
+            if delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
             }
             if path.exists() {
                 let _ = fs::copy(path, &bak_path);
@@ -349,6 +350,10 @@ impl ConfigManager {
         let mut initial = RecommendationConfig::default();
         let p = resolved.as_path();
         let bak = p.with_extension("bak");
+        let legacy_bak = match p.file_name() {
+            Some(fname) => p.with_file_name(format!("{}.bak", fname.to_string_lossy())),
+            None => bak.clone(),
+        };
         let mut loaded = false;
 
         if p.exists() {
@@ -363,14 +368,24 @@ impl ConfigManager {
             }
         }
 
-        // Fallback to backup file if primary file was corrupted or missing
-        if !loaded && bak.exists() {
-            if let Ok(content) = fs::read_to_string(&bak) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() {
-                    if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(trimmed) {
-                        initial = cfg;
-                        let _ = fs::copy(&bak, p);
+        // Fallback to backup file if primary file was corrupted or missing (checking both unified .bak and legacy .json.bak)
+        let bak_candidate = if bak.exists() {
+            Some(bak)
+        } else if legacy_bak.exists() {
+            Some(legacy_bak)
+        } else {
+            None
+        };
+
+        if !loaded {
+            if let Some(ref candidate) = bak_candidate {
+                if let Ok(content) = fs::read_to_string(candidate) {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        if let Ok(cfg) = serde_json::from_str::<RecommendationConfig>(trimmed) {
+                            initial = cfg;
+                            let _ = fs::copy(candidate, p);
+                        }
                     }
                 }
             }

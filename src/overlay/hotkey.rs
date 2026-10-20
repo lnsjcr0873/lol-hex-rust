@@ -10,8 +10,69 @@ static SHARED_LAST_TRIGGER_RIGHT: std::sync::atomic::AtomicU64 = std::sync::atom
 static IS_KEY_DOWN_LEFT: AtomicBool = AtomicBool::new(false);
 static IS_KEY_DOWN_RIGHT: AtomicBool = AtomicBool::new(false);
 
+fn check_and_mark_trigger(target: &std::sync::atomic::AtomicU64, now: u64, debounce_ms: u64) -> bool {
+    let mut current = target.load(Ordering::Acquire);
+    loop {
+        if now.saturating_sub(current) <= debounce_ms {
+            return false;
+        }
+        match target.compare_exchange_weak(current, now, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+
+#[cfg(windows)]
+fn is_text_input_active() -> bool {
+    #[repr(C)]
+    struct GUITHREADINFO {
+        cb_size: u32,
+        flags: u32,
+        hwnd_active: *mut core::ffi::c_void,
+        hwnd_focus: *mut core::ffi::c_void,
+        hwnd_capture: *mut core::ffi::c_void,
+        hwnd_menu_owner: *mut core::ffi::c_void,
+        hwnd_move_size: *mut core::ffi::c_void,
+        hwnd_caret: *mut core::ffi::c_void,
+        rc_caret: [i32; 4],
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetForegroundWindow() -> *mut core::ffi::c_void;
+        fn GetWindowThreadProcessId(hwnd: *mut core::ffi::c_void, lpprocessid: *mut u32) -> u32;
+        fn GetGUIThreadInfo(idthread: u32, pgui: *mut GUITHREADINFO) -> i32;
+    }
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return false;
+        }
+        let tid = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+        if tid == 0 {
+            return false;
+        }
+        let mut info: GUITHREADINFO = std::mem::zeroed();
+        info.cb_size = std::mem::size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(tid, &mut info) != 0 {
+            // GUI_CARETBLINKING = 0x00000001: The caret's blink state is visible (active typing)
+            let caret_blinking = (info.flags & 1) != 0;
+            let has_caret = !info.hwnd_caret.is_null();
+            return caret_blinking || has_caret;
+        }
+        false
+    }
+}
+
 #[cfg(windows)]
 fn is_allowed_foreground_for_hotkey() -> bool {
+    // If the user is currently typing in an in-game chatbox or text field (active caret), bypass hotkey overlay
+    if is_text_input_active() {
+        return false;
+    }
     super::window_tracker::WindowTracker::is_game_active()
         || super::window_tracker::WindowTracker::is_league_active()
 }
@@ -120,6 +181,16 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
 
 
         if !is_allowed_foreground_for_hotkey() {
+            unsafe {
+                if (GetAsyncKeyState(0xDB) as u16 & 0x8000) == 0 {
+                    was_down_left = false;
+                    IS_KEY_DOWN_LEFT.store(false, Ordering::SeqCst);
+                }
+                if (GetAsyncKeyState(0xDD) as u16 & 0x8000) == 0 {
+                    was_down_right = false;
+                    IS_KEY_DOWN_RIGHT.store(false, Ordering::SeqCst);
+                }
+            }
             std::thread::sleep(std::time::Duration::from_millis(150));
             continue;
         }
@@ -130,9 +201,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
             if is_down_left && !was_down_left {
                 was_down_left = true;
                 let now = GetTickCount64();
-                let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 300 {
-                    SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+                if check_and_mark_trigger(&SHARED_LAST_TRIGGER_LEFT, now, 300) {
                     tracing::info!("GetAsyncKeyState fallback detected '[' / '【' pressed");
                     crate::spawn_task(async move {
                         if let Ok(guard) = CALLBACK_LEFT.lock() {
@@ -144,6 +213,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                 }
             } else if !is_down_left {
                 was_down_left = false;
+                IS_KEY_DOWN_LEFT.store(false, Ordering::SeqCst);
             }
 
             let right_state = GetAsyncKeyState(0xDD);
@@ -151,9 +221,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
             if is_down_right && !was_down_right {
                 was_down_right = true;
                 let now = GetTickCount64();
-                let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-                if now.saturating_sub(last) > 300 {
-                    SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+                if check_and_mark_trigger(&SHARED_LAST_TRIGGER_RIGHT, now, 300) {
                     tracing::info!("GetAsyncKeyState fallback detected ']' / '】' pressed");
                     crate::spawn_task(async move {
                         if let Ok(guard) = CALLBACK_RIGHT.lock() {
@@ -165,6 +233,7 @@ fn run_async_keystate_polling_loop(running: Arc<AtomicBool>) {
                 }
             } else if !is_down_right {
                 was_down_right = false;
+                IS_KEY_DOWN_RIGHT.store(false, Ordering::SeqCst);
             }
         }
     }
@@ -313,9 +382,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
             if is_left_bracket {
                 if !IS_KEY_DOWN_LEFT.swap(true, Ordering::SeqCst) {
                     let now = GetTickCount64();
-                    let last = SHARED_LAST_TRIGGER_LEFT.load(Ordering::Relaxed);
-                    if now.saturating_sub(last) > 300 {
-                        SHARED_LAST_TRIGGER_LEFT.store(now, Ordering::Relaxed);
+                    if check_and_mark_trigger(&SHARED_LAST_TRIGGER_LEFT, now, 300) {
                         crate::spawn_task(async move {
                             if !is_allowed_foreground_for_hotkey() {
                                 return;
@@ -331,9 +398,7 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
             } else if is_right_bracket {
                 if !IS_KEY_DOWN_RIGHT.swap(true, Ordering::SeqCst) {
                     let now = GetTickCount64();
-                    let last = SHARED_LAST_TRIGGER_RIGHT.load(Ordering::Relaxed);
-                    if now.saturating_sub(last) > 300 {
-                        SHARED_LAST_TRIGGER_RIGHT.store(now, Ordering::Relaxed);
+                    if check_and_mark_trigger(&SHARED_LAST_TRIGGER_RIGHT, now, 300) {
                         crate::spawn_task(async move {
                             if !is_allowed_foreground_for_hotkey() {
                                 return;

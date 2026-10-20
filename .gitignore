@@ -22,3 +22,5 @@ dist-new/
 scratch/
 *.dll
 downloaded_latest/
+code2prompt.ps1
+debug*.md

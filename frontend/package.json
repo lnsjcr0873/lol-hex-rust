@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
     "@types/lodash-es": "^4.17.12",
     "@vitejs/plugin-vue": "^6.0.10",
     "autoprefixer": "^10.6.1",

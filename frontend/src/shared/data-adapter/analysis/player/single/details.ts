@@ -23,7 +23,7 @@ export function computeSingleDetails(
 ): SingleDetailsAnalysis {
   const frames = toFrames(details)
 
-  const objectives = computeSingleObjectives(frames, participant)
+  const objectives = computeSingleObjectives(frames, participant, allParticipants)
   const earlyDeathsWithEnemyJunglerInvolved = computeSingleEarlyDeathsWithEnemyJungler(
     frames,
     basic,

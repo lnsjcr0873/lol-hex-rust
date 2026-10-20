@@ -4,7 +4,8 @@ import type { SingleObjectivesAnalysis } from '../types/single'
 
 export function computeSingleObjectives(
   frames: AnyTimelineFrame[],
-  participant: MatchParticipant
+  participant: MatchParticipant,
+  allParticipants: MatchParticipant[] = []
 ): SingleObjectivesAnalysis {
   let firstDragonTeam: number | null = null
   let dragons = 0
@@ -22,8 +23,11 @@ export function computeSingleObjectives(
     for (const event of frame.events) {
       if (event.type !== 'ELITE_MONSTER_KILL') continue
 
+      const killerPart = allParticipants.find((p) => p.participantId === event.killerId)
       const killerTeam =
-        event.killerTeamId ?? (event.killerId >= 1 && event.killerId <= 5 ? 100 : 200)
+        event.killerTeamId ??
+        killerPart?.teamId ??
+        (event.killerId >= 1 && event.killerId <= 5 ? 100 : 200)
       const isOurTeam = killerTeam === participant.teamId
       const timeSec = event.timestamp / 1000
 

@@ -22,8 +22,22 @@
               <NRadio value="gold">经济曲线 (Gold)</NRadio>
               <NRadio value="cs">补刀走势 (CS)</NRadio>
               <NRadio value="exp">经验增长 (EXP)</NRadio>
-              <NRadio value="damageDealt">输出走势 (DMG)</NRadio>
-              <NRadio value="damageTaken">承伤走势 (TANK)</NRadio>
+              <NTooltip trigger="hover" :disabled="hasDamageStats">
+                <template #trigger>
+                  <div>
+                    <NRadio value="damageDealt" :disabled="!hasDamageStats">输出走势 (DMG)</NRadio>
+                  </div>
+                </template>
+                LCU 原生时间线缺少分均伤害统计，需启用 SGP 网关
+              </NTooltip>
+              <NTooltip trigger="hover" :disabled="hasDamageStats">
+                <template #trigger>
+                  <div>
+                    <NRadio value="damageTaken" :disabled="!hasDamageStats">承伤走势 (TANK)</NRadio>
+                  </div>
+                </template>
+                LCU 原生时间线缺少分均伤害统计，需启用 SGP 网关
+              </NTooltip>
             </div>
           </NRadioGroup>
         </div>
@@ -90,13 +104,27 @@ import {
   Legend
 } from 'chart.js'
 import { Line } from 'vue-chartjs'
-import { NRadioGroup, NRadio, NScrollbar } from 'naive-ui'
+import { NRadioGroup, NRadio, NScrollbar, NTooltip } from 'naive-ui'
 import { useMatchCard } from '../../context'
 import { playerColors } from '../../utils/theme'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
 
 const { participants, frames, basicInfo } = useMatchCard()
+
+const hasDamageStats = computed(() => {
+  const f = frames.value || []
+  if (f.length < 2) return false
+  const pframes = f[1]?.participantFrames || {}
+  const firstPf: any = Object.values(pframes)[0]
+  return firstPf?.damageStats !== undefined
+})
+
+watch(hasDamageStats, (hasDmg) => {
+  if (!hasDmg && (selectedMetric.value === 'damageDealt' || selectedMetric.value === 'damageTaken')) {
+    selectedMetric.value = 'gold'
+  }
+})
 
 type MetricType = 'gold' | 'cs' | 'exp' | 'damageDealt' | 'damageTaken'
 const selectedMetric = ref<MetricType>('gold')

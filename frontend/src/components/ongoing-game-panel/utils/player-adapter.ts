@@ -11,6 +11,14 @@ function normalizeRate(val: number | undefined | null): number {
   return val > 1.0 ? val / 100.0 : Math.max(0, val)
 }
 
+function safeNum(val: unknown, fallback = 0): number {
+  return typeof val === 'number' && Number.isFinite(val) ? val : fallback
+}
+
+function safeScore(val: unknown, max: number): number {
+  return typeof val === 'number' && Number.isFinite(val) ? Math.min(max, Math.max(0, val)) : 0
+}
+
 export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard): AggregatedAnalysis {
   if (player.analysis) {
     return player.analysis
@@ -95,6 +103,15 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
         return acc + (dur > 0 ? dmg / dur : 0)
       }, 0) / cCount : 0
 
+      const cKdaScore = safeScore(cAvgKda / 5.0, 1.0)
+      const cWinRateScore = safeScore(cWinRate, 1.0)
+      const cDmgScore = cDamageShare > 0 ? safeScore((cDamageShare / 0.30) * 3.0, 3.0) : 0
+      const cCsScore = cCsPerMin > 0 ? safeScore((cCsPerMin / 10.0) * 2.0, 2.0) : 0
+      const cGoldScore = cGold > 0 ? safeScore((cGold / 16000) * 2.0, 2.0) : 0
+      const cParticipationScore = cKp > 0 ? safeScore(cKp * 2.5, 2.0) : 0
+      const cVisionScore = cVision > 0 ? safeScore(cVision / 35.0, 2.0) : 0
+      const cAkariTotal = safeScore(cKdaScore + cWinRateScore + cDmgScore + cCsScore + cGoldScore + cParticipationScore + cVisionScore, 17.0)
+
       champions[String(cid)] = {
         championId: cid,
         summary: {
@@ -161,17 +178,17 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
           TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0
         },
         akariScore: {
-          total: Math.min(17.0, Math.min(1.0, cAvgKda / 5.0) + Math.min(1.0, cWinRate) + (cDamageShare > 0 ? Math.min(3.0, (cDamageShare / 0.30) * 3.0) : 0) + (cCsPerMin > 0 ? Math.min(2.0, (cCsPerMin / 10.0) * 2.0) : 0) + (cGold > 0 ? Math.min(2.0, (cGold / 16000) * 2.0) : 0) + (cKp > 0 ? Math.min(2.0, cKp * 2.5) : 0) + (cVision > 0 ? Math.min(2.0, cVision / 35.0) : 0)),
+          total: cAkariTotal,
           maxScore: 17.0,
-          kdaScore: Math.min(1.0, cAvgKda / 5.0),
-          winRateScore: Math.min(1.0, cWinRate),
-          dmgScore: cDamageShare > 0 ? Math.min(3.0, (cDamageShare / 0.30) * 3.0) : 0,
+          kdaScore: cKdaScore,
+          winRateScore: cWinRateScore,
+          dmgScore: cDmgScore,
           dmgTakenScore: 0,
           healingScore: 0,
-          csScore: cCsPerMin > 0 ? Math.min(2.0, (cCsPerMin / 10.0) * 2.0) : 0,
-          goldScore: cGold > 0 ? Math.min(2.0, (cGold / 16000) * 2.0) : 0,
-          participationScore: cKp > 0 ? Math.min(2.0, cKp * 2.5) : 0,
-          visionScore: cVision > 0 ? Math.min(2.0, cVision / 35.0) : 0,
+          csScore: cCsScore,
+          goldScore: cGoldScore,
+          participationScore: cParticipationScore,
+          visionScore: cVisionScore,
           outstanding: null,
           extraordinary: null
         },
@@ -192,15 +209,25 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       return acc + (dur > 0 ? dmg / dur : 0)
     }, 0) / count : 0
 
-    const kdaScore = Math.min(1.0, avgKda / 5.0)
-    const winRateScore = Math.min(1.0, winRate)
-    const dmgScore = avgDamageShare > 0 ? Math.min(3.0, (avgDamageShare / 0.30) * 3.0) : Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
-    const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
-    const csScore = avgCsPerMinute > 0 ? Math.min(2.0, (avgCsPerMinute / 10.0) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-    const goldScore = avgGold > 0 ? Math.min(2.0, (avgGold / 16000) * 2.0) : Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-    const participationScore = avgKp > 0 ? Math.min(2.0, avgKp * 2.5) : Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
-    const visionScore = avgVision > 0 ? Math.min(2.0, avgVision / 35.0) : Math.min(2.0, (player.radar?.vision ?? 0) / 45)
-    const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
+    const kdaScore = Math.max(0, Math.min(1.0, safeNum(avgKda) / 5.0))
+    const winRateScore = Math.max(0, Math.min(1.0, safeNum(winRate)))
+    const dmgScore = avgDamageShare > 0
+      ? Math.max(0, Math.min(3.0, (avgDamageShare / 0.30) * 3.0))
+      : Math.max(0, Math.min(3.0, safeNum(player.radar?.output ?? player.radar?.damage) / 33))
+    const dmgTakenScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.survival) / 45))
+    const csScore = avgCsPerMinute > 0
+      ? Math.max(0, Math.min(2.0, (avgCsPerMinute / 10.0) * 2.0))
+      : Math.max(0, Math.min(2.0, safeNum(player.radar?.gold) / 45))
+    const goldScore = avgGold > 0
+      ? Math.max(0, Math.min(2.0, (avgGold / 16000) * 2.0))
+      : Math.max(0, Math.min(2.0, safeNum(player.radar?.gold) / 45))
+    const participationScore = avgKp > 0
+      ? Math.max(0, Math.min(2.0, avgKp * 2.5))
+      : Math.max(0, Math.min(2.0, safeNum(player.radar?.join_rate) / 45))
+    const visionScore = avgVision > 0
+      ? Math.max(0, Math.min(2.0, avgVision / 35.0))
+      : Math.max(0, Math.min(2.0, safeNum(player.radar?.vision) / 45))
+    const akariTotal = Math.max(0, Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore))
     const isExtraordinary = akariTotal >= 13.5 && count >= 5
     const isOutstanding = akariTotal >= 11.5 && count >= 5
 
@@ -401,10 +428,10 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
 
   // 3. Fallback when recent_games_count > 0 but matches array is missing:
   // Derive faithfully from scalar fields without inventing fake game metrics
-  const winRate = (player.recent_win_rate ?? 0) / 100
+  const winRate = safeNum(player.recent_win_rate) / 100
   const wins = Math.round(count * winRate)
-  const losses = count - wins
-  const kdaRatio = player.recent_kda_ratio ?? 0
+  const losses = Math.max(0, count - wins)
+  const kdaRatio = safeNum(player.recent_kda_ratio)
 
   let winningStreak = 0
   let losingStreak = 0
@@ -425,10 +452,10 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
   let assists = 0
   if (player.recent_kda && typeof player.recent_kda === 'string') {
     const parts = player.recent_kda.split('/').map((s) => parseFloat(s.trim()))
-    if (parts.length === 3 && !parts.some(isNaN)) {
-      kills = parts[0]
-      deaths = parts[1]
-      assists = parts[2]
+    if (parts.length === 3 && parts.every((p) => Number.isFinite(p) && !isNaN(p))) {
+      kills = Math.max(0, parts[0])
+      deaths = Math.max(0, parts[1])
+      assists = Math.max(0, parts[2])
     }
   }
 
@@ -437,15 +464,15 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
   const flashOnD = isFlashD ? count : 0
   const flashOnF = isFlashF ? count : 0
 
-  const kdaScore = Math.min(1.0, kdaRatio / 5.0)
-  const winRateScore = Math.min(1.0, winRate)
-  const dmgScore = Math.min(3.0, (player.radar?.output ?? player.radar?.damage ?? 0) / 33)
-  const dmgTakenScore = Math.min(2.0, (player.radar?.survival ?? 0) / 45)
-  const csScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-  const goldScore = Math.min(2.0, (player.radar?.gold ?? 0) / 45)
-  const participationScore = Math.min(2.0, (player.radar?.join_rate ?? 0) / 45)
-  const visionScore = Math.min(2.0, (player.radar?.vision ?? 0) / 45)
-  const akariTotal = Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore)
+  const kdaScore = Math.max(0, Math.min(1.0, kdaRatio / 5.0))
+  const winRateScore = Math.max(0, Math.min(1.0, winRate))
+  const dmgScore = Math.max(0, Math.min(3.0, safeNum(player.radar?.output ?? player.radar?.damage) / 33))
+  const dmgTakenScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.survival) / 45))
+  const csScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.gold) / 45))
+  const goldScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.gold) / 45))
+  const participationScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.join_rate) / 45))
+  const visionScore = Math.max(0, Math.min(2.0, safeNum(player.radar?.vision) / 45))
+  const akariTotal = Math.max(0, Math.min(17.0, kdaScore + winRateScore + dmgScore + dmgTakenScore + csScore + goldScore + participationScore + visionScore))
   const isExtraordinary = akariTotal >= 13.5 && count >= 5
   const isOutstanding = akariTotal >= 11.5 && count >= 5
 
@@ -617,7 +644,7 @@ export function adaptPlayerCardToAggregatedAnalysis(player: EnhancedPlayerCard):
       },
       positions: { TOP: 0, JUNGLE: 0, MIDDLE: 0, BOTTOM: 0, UTILITY: 0 },
       akariScore: {
-        total: 0, maxScore: 17.0, kdaScore: Math.min(1.0, kdaRatio / 5.0), winRateScore: Math.min(1.0, cWinRate),
+        total: 0, maxScore: 17.0, kdaScore: safeScore(kdaRatio / 5.0, 1.0), winRateScore: safeScore(cWinRate, 1.0),
         dmgScore: 0, dmgTakenScore: 0, healingScore: 0, csScore: 0, goldScore: 0, participationScore: 0, visionScore: 0,
         outstanding: null, extraordinary: null
       },

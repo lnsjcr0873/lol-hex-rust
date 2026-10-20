@@ -86,54 +86,68 @@ impl SgpClient {
         *cfg_guard = Some(config);
     }
 
-    /// Ensures SGP server configuration is populated, auto-discovering from LCU if unconfigured.
+    /// Ensures SGP server configuration is populated, auto-discovering from LCU if unconfigured
+    /// or dynamically updating when live region/platform changes (e.g. from early startup HN1 fallback to actual account login like HN10 or WT1).
     pub async fn ensure_server_configured(&self) -> Result<(), String> {
-        {
-            let cfg_guard = self.server_config.read().await;
-            if cfg_guard.is_some() {
-                return Ok(());
-            }
-        }
-
         if let Some(ref lcu) = self.lcu {
             let (region, platform_id) = lcu.get_region_and_platform().await;
-            let (eff_region, eff_platform) = match (region.trim(), platform_id.as_deref().map(|s| s.trim())) {
-                ("", None) | ("", Some("")) => ("TENCENT", Some("HN1")),
-                ("", Some(p)) => {
-                    let p_upper = p.to_uppercase();
-                    if p_upper.starts_with("HN")
-                        || p_upper.starts_with("WT")
-                        || p_upper.starts_with("BGP")
-                        || p_upper.starts_with("EDU")
-                        || p_upper.starts_with("TJ")
-                        || p_upper.starts_with("NJ")
-                        || p_upper.starts_with("GZ")
-                        || p_upper.starts_with("CQ")
-                    {
-                        ("TENCENT", Some(p))
-                    } else {
-                        ("", Some(p))
+            let has_live_info = !region.trim().is_empty() || platform_id.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+            if has_live_info {
+                let (eff_region, eff_platform) = match (region.trim(), platform_id.as_deref().map(|s| s.trim())) {
+                    ("", None) | ("", Some("")) => ("TENCENT", Some("HN1")),
+                    ("", Some(p)) => {
+                        let p_upper = p.to_uppercase();
+                        if p_upper.starts_with("HN")
+                            || p_upper.starts_with("WT")
+                            || p_upper.starts_with("BGP")
+                            || p_upper.starts_with("EDU")
+                            || p_upper.starts_with("TJ")
+                            || p_upper.starts_with("NJ")
+                            || p_upper.starts_with("GZ")
+                            || p_upper.starts_with("CQ")
+                        {
+                            ("TENCENT", Some(p))
+                        } else {
+                            ("", Some(p))
+                        }
                     }
-                }
-                (r, None) | (r, Some("")) => {
-                    let r_upper = r.to_uppercase();
-                    if r_upper == "TENCENT" {
-                        ("TENCENT", Some("HN1"))
-                    } else {
-                        (r, None)
+                    (r, None) | (r, Some("")) => {
+                        let r_upper = r.to_uppercase();
+                        if r_upper == "TENCENT" {
+                            ("TENCENT", Some("HN1"))
+                        } else {
+                            (r, None)
+                        }
                     }
-                }
-                (r, Some(p)) => {
-                    let r_upper = r.to_uppercase();
-                    let p_upper = p.to_uppercase();
-                    if r_upper == "TENCENT" && p_upper.is_empty() {
-                        ("TENCENT", Some("HN1"))
-                    } else {
-                        (r, Some(p))
+                    (r, Some(p)) => {
+                        let r_upper = r.to_uppercase();
+                        let p_upper = p.to_uppercase();
+                        if r_upper == "TENCENT" && p_upper.is_empty() {
+                            ("TENCENT", Some("HN1"))
+                        } else {
+                            (r, Some(p))
+                        }
                     }
+                };
+
+                let new_id = get_sgp_server_id(eff_region, eff_platform);
+                let current_id = self.server_id.read().await.clone();
+                let is_unconfigured = self.server_config.read().await.is_none();
+
+                if is_unconfigured || (current_id != new_id && !new_id.is_empty()) {
+                    self.set_server(eff_region, eff_platform).await;
                 }
-            };
-            self.set_server(eff_region, eff_platform).await;
+                return Ok(());
+            }
+
+            // If we don't have live info from LCU yet, but already have a configured server, keep it
+            if self.server_config.read().await.is_some() {
+                return Ok(());
+            }
+
+            // Fallback for initial startup when LCU platform packet hasn't returned yet
+            self.set_server("TENCENT", Some("HN1")).await;
             return Ok(());
         }
 
@@ -238,14 +252,15 @@ impl SgpClient {
             .text()
             .await
             .map_err(|e| format!("Failed to read SGP {} response text: {}", endpoint_name, e))?;
-        let trimmed = body.trim();
+        let trimmed = body.trim().trim_start_matches('\u{FEFF}').trim();
         if trimmed.is_empty() || trimmed == "null" {
             return Ok(Value::Null);
         }
-        if trimmed.starts_with('<') {
+        let lower = trimmed.to_ascii_lowercase();
+        if trimmed.starts_with('<') || lower.starts_with("<!doctype") || lower.starts_with("<html") || lower.contains("<head>") || (!trimmed.starts_with('{') && !trimmed.starts_with('[')) {
             let snippet: String = trimmed.chars().take(120).collect();
             return Err(format!(
-                "SGP {} returned HTML error page instead of JSON: {}",
+                "SGP {} returned HTML error page or non-JSON instead of JSON: {}",
                 endpoint_name, snippet
             ));
         }

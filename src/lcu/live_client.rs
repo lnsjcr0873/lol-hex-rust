@@ -40,9 +40,24 @@ impl LiveClientDataReader {
         Self { client }
     }
 
+    pub async fn is_port_open() -> bool {
+        tokio::time::timeout(
+            Duration::from_millis(25),
+            tokio::net::TcpStream::connect("127.0.0.1:2999"),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
+    }
+
     pub async fn get_all_game_data(&self) -> Option<Value> {
+        // Fast TCP probe: if 2999 is closed or not responding within 25ms, fail fast without cascade blocking!
+        if !Self::is_port_open().await {
+            return None;
+        }
+
         let url = "https://127.0.0.1:2999/liveclientdata/allgamedata";
-        for _ in 0..4 {
+        for _ in 0..2 {
             if let Ok(res) = self.client.get(url).send().await {
                 if res.status().is_success() {
                     if let Ok(data) = res.json::<Value>().await {
@@ -56,7 +71,7 @@ impl LiveClientDataReader {
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
         None
     }

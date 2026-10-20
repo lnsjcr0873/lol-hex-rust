@@ -116,11 +116,12 @@ pub async fn query_gsm_by_puuid(
         .text()
         .await
         .map_err(|e| format!("Failed to read GSM response: {}", e))?;
-    let trimmed = text.trim();
+    let trimmed = text.trim().trim_start_matches('\u{FEFF}').trim();
     if trimmed.is_empty() || trimmed == "null" || trimmed == "{}" {
         return Ok(GsmLedgeRegionResponse::default());
     }
-    if trimmed.starts_with('<') {
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.starts_with('<') || lower.starts_with("<!doctype") || lower.starts_with("<html") || lower.contains("<head>") || (!trimmed.starts_with('{') && !trimmed.starts_with('[')) {
         let snippet: String = trimmed.chars().take(120).collect();
         return Err(format!(
             "GSM query returned HTML error page instead of JSON: {}",
@@ -185,11 +186,12 @@ pub async fn query_gsm_by_game_id(
         .text()
         .await
         .map_err(|e| format!("Failed to read GSM JSON: {}", e))?;
-    let trimmed = text.trim();
+    let trimmed = text.trim().trim_start_matches('\u{FEFF}').trim();
     if trimmed.is_empty() || trimmed == "null" {
         return Ok(Value::Null);
     }
-    if trimmed.starts_with('<') {
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.starts_with('<') || lower.starts_with("<!doctype") || lower.starts_with("<html") || lower.contains("<head>") || (!trimmed.starts_with('{') && !trimmed.starts_with('[')) {
         let snippet: String = trimmed.chars().take(120).collect();
         return Err(format!(
             "GSM query returned HTML error page instead of JSON: {}",
