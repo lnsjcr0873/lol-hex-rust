@@ -1199,14 +1199,8 @@ impl LcuClient {
         let total_requested = end_index.saturating_add(1).saturating_sub(beg_index).clamp(1, 200);
         let effective_end = beg_index.saturating_add(total_requested).saturating_sub(1).min(end_index);
 
-        // Pre-compute is_current once to prevent redundant /current-summoner network requests inside pagination loop
-        let is_current = if puuid == "current" || puuid == "me" || puuid.is_empty() {
-            true
-        } else if let Some(cur) = self.get_current_summoner().await {
-            cur.get("puuid").and_then(|v| v.as_str()).map(|p| p.eq_ignore_ascii_case(puuid)).unwrap_or(false)
-        } else {
-            false
-        };
+        // Determine if puuid targets current summoner directly
+        let is_current = puuid == "current" || puuid == "me" || puuid.is_empty();
 
         // If requested 20 or fewer matches, single request is sufficient
         if total_requested <= 20 {
