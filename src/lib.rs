@@ -1,5 +1,7 @@
 #![recursion_limit = "512"]
 
+extern crate self as lol_hex_rust;
+
 use std::sync::OnceLock;
 
 pub mod config;
@@ -12,6 +14,7 @@ pub mod sgp;
 pub mod vision;
 pub mod web;
 pub mod runtime;
+pub mod storage;
 
 pub static GLOBAL_TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 

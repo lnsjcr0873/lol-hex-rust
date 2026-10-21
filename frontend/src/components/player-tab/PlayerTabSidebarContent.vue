@@ -1,7 +1,12 @@
 <template>
   <div class="flex flex-col gap-3 w-full">
     <!-- Player Custom Tags & Privacy Warnings -->
-    <NormalTagBlock :privacy="profile?.privacy" :tags="tags" />
+    <NormalTagBlock
+      :privacy="profile?.privacy"
+      :tags="tags"
+      :self-puuid="selfPuuid"
+      @tag-deleted="$emit('tagDeleted')"
+    />
 
     <!-- 20-Game Summary & Akari Score Pane -->
     <SummaryPane :analysis="analysis" :profile-summary="profile?.recent_summary" />
@@ -10,7 +15,10 @@
     <PlayerChallenges :challenges-data="challengesData" />
 
     <!-- Champion Masteries Pane -->
-    <ChampionMasteryPane :masteries-list="masteriesList" />
+    <ChampionMasteryPane
+      :masteries-list="masteriesList"
+      @view-all="$emit('reloadMasteries')"
+    />
 
     <!-- Teammates Encountered -->
     <RecentlyPlayers
@@ -28,8 +36,11 @@
       @select-summoner="$emit('selectSummoner', $event)"
     />
 
-    <!-- Past Encountered Games -->
+    <!-- Past Encountered Games (SQLite Connected) -->
     <EncounteredGames
+      :puuid="profile?.puuid"
+      :self-puuid="selfPuuid"
+      :is-self-tab="isSelfTab"
       :encountered-list="encounteredGames"
       @select-game="$emit('selectGame', $event)"
     />
@@ -53,10 +64,13 @@ defineProps<{
   encounteredGames?: any[]
   tags?: any[]
   selfPuuid?: string
+  isSelfTab?: boolean
 }>()
 
 defineEmits<{
   selectSummoner: [puuid: string]
   selectGame: [gameId: number]
+  tagDeleted: []
+  reloadMasteries: []
 }>()
 </script>

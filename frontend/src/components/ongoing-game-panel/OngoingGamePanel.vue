@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col overflow-hidden relative select-none">
+  <div ref="containerRef" class="ongoing-game-panel h-full flex flex-col overflow-hidden relative select-none" :class="{ 'ongoing-game-panel--draft': isDraft }">
     <!-- View Switcher & Panel Bar -->
     <div class="h-10 px-4 bg-[#070b14]/90 border-b border-slate-800/80 flex items-center justify-between shrink-0">
       <div class="flex items-center space-x-3 text-xs">
@@ -31,6 +31,18 @@
             <option value="kda">近期 KDA</option>
             <option value="winrate">综合胜率</option>
           </select>
+        </div>
+
+        <div v-if="isDraft" class="flex items-center space-x-2 ml-2">
+          <span class="px-2 py-0.5 rounded text-[10px] bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-bold">
+            草稿演练模式
+          </span>
+          <button
+            @click="emits('exitDraft')"
+            class="px-2 py-0.5 rounded text-[10px] bg-amber-950/80 hover:bg-amber-900 border border-amber-600/50 text-amber-200 transition"
+          >
+            退出草稿
+          </button>
         </div>
       </div>
 
@@ -135,11 +147,35 @@
   </div>
 </template>
 
+<script lang="ts">
+export {
+  calculateColumnsNeed,
+  calculateLinesPerTeam
+} from './utils/layout'
+export {
+  getPlayerWinningStreak,
+  getPlayerLosingStreak,
+  detectWinRateTeamBadge,
+  normalizeWinRatePercent,
+  normalizeWinRateRatio
+} from './utils/team-tags'
+</script>
+
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue'
+import { useElementSize } from '@vueuse/core'
 import type { PlayerCard } from '../../api/types'
 import type { EnhancedPlayerCard, PremadeGroup } from './types'
-import { POSITION_ORDER, PREMADE_TEAMS } from './constants'
+import {
+  POSITION_ORDER,
+  PREMADE_TEAMS
+} from './constants'
+import { calculateColumnsNeed, calculateLinesPerTeam } from './utils/layout'
+import {
+  getPlayerWinningStreak,
+  getPlayerLosingStreak,
+  detectWinRateTeamBadge
+} from './utils/team-tags'
 import { provideOngoingGamePanel } from './context'
 import { findOutliersByIqr } from '../../shared/data-adapter/utils'
 import PlayerInfoCard from './widgets/player-info-card/PlayerInfoCard.vue'
@@ -152,10 +188,14 @@ const props = withDefaults(
     redTeam: PlayerCard[]
     selfPuuid?: string
     selectedPuuid?: string
+    isDraft?: boolean
+    contentWidth?: number
+    contentHeight?: number
   }>(),
   {
     selfPuuid: '',
-    selectedPuuid: ''
+    selectedPuuid: '',
+    isDraft: false
   }
 )
 
@@ -163,7 +203,24 @@ const emits = defineEmits<{
   selectPlayer: [player: EnhancedPlayerCard]
   inspectPlayer: [puuid: string]
   'preview-game': [payload: { gameId: number; puuid?: string }]
+  exitDraft: []
 }>()
+
+const containerRef = ref<HTMLElement | null>(null)
+const { width: measuredWidth, height: measuredHeight } = useElementSize(containerRef)
+
+const contentWidth = computed(() => props.contentWidth || measuredWidth.value || 1200)
+const contentHeight = computed(() => props.contentHeight || measuredHeight.value || 800)
+
+const columnsNeed = computed(() => {
+  const maxTeamMembers = Math.max(props.blueTeam.length, props.redTeam.length, 5)
+  return calculateColumnsNeed(contentWidth.value, maxTeamMembers)
+})
+
+const linesPerTeam = computed(() => {
+  const maxMembers = Math.max(props.blueTeam.length, props.redTeam.length, 5)
+  return calculateLinesPerTeam(columnsNeed.value, maxMembers)
+})
 
 const layoutMode = ref<'lane-aligned' | 'team-split'>('lane-aligned')
 const sortBy = ref<'position' | 'premade' | 'kda' | 'winrate'>('position')
@@ -221,15 +278,7 @@ const getPremadeGroupsForTeam = (team: PlayerCard[], prefix = ''): PremadeGroup[
     const partyIdx = (partyId - 1) % PREMADE_TEAMS.length
     const letter = PREMADE_TEAMS[partyIdx] || 'A'
     const members = team.filter((p) => puuids.includes(p.puuid))
-    const avgWinRate = members.length > 0 ? members.reduce((sum, p) => sum + (p.recent_win_rate ?? 0), 0) / members.length : 0
-
-    let winRateTeamInfo: { type: 'win-rate-team' | 'loss-rate-team' } | undefined = undefined
-    if (avgWinRate >= 85 && members.length >= 2) {
-      winRateTeamInfo = { type: 'win-rate-team' }
-    } else if (avgWinRate <= 25) {
-      winRateTeamInfo = { type: 'loss-rate-team' }
-    }
-
+    const winRateTeamInfo = detectWinRateTeamBadge(members)
     const teamLabel = prefix ? `${prefix}-车队 ${letter}` : `车队 ${letter}`
 
     return {
@@ -400,8 +449,41 @@ provideOngoingGamePanel({
   selfPuuid: toRef(props, 'selfPuuid'),
   streamerMode,
   premadeTeamIdMap,
+  columnsNeed,
+  linesPerTeam,
+  contentWidth,
+  contentHeight,
   selectPlayer: (player) => emits('selectPlayer', player),
   inspectPlayer: (puuid) => emits('inspectPlayer', puuid),
   previewGame: (gameId, puuid) => emits('preview-game', { gameId, puuid })
 })
 </script>
+
+<style scoped>
+.ongoing-game-panel {
+  position: relative;
+  isolation: isolate;
+  --draft-grid-bg-color: rgba(6, 182, 212, 0.04);
+  --draft-grid-line-color: rgba(6, 182, 212, 0.15);
+}
+
+.ongoing-game-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  background-color: var(--draft-grid-bg-color);
+  background-image:
+    linear-gradient(var(--draft-grid-line-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--draft-grid-line-color) 1px, transparent 1px);
+  background-position: center top;
+  background-size: 28px 28px;
+  transition: opacity 0.2s ease;
+}
+
+.ongoing-game-panel--draft::before {
+  opacity: 1;
+}
+</style>

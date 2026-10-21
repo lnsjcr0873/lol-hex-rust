@@ -13,6 +13,8 @@ import { toParticipants, type MatchParticipant } from '@shared/data-adapter/matc
 import { toTeams, type TeamsAdapterResult } from '@shared/data-adapter/match-history/teams'
 import { toFrames } from '@shared/data-adapter/match-history/frames'
 import type { LcuOrSgpGameDetails, LcuOrSgpGameSummary } from '@shared/data-adapter/wrapper'
+import type { DraftOptions } from '../../api/types'
+
 
 export type MatchCardContext = {
   isExpanded: Ref<boolean>
@@ -84,6 +86,49 @@ export function provideMatchCard(props: {
     return teams.value.teamStatMap[participant.value.teamIdentifier] ?? null
   })
 
+  const draftOptions = computed<DraftOptions>(() => {
+    const focusedPuuid = toValue(props.puuid)
+    const ownerPuuid =
+      focusedPuuid && participants.value.some((p) => p.puuid === focusedPuuid)
+        ? focusedPuuid
+        : (participants.value[0]?.puuid || null)
+
+    const draftTeams: Record<string, string[]> = {}
+    const championSelections: Record<string, number> = {}
+    const positionAssignments: Record<string, { selected: string; primary: string; secondary: string }> = {}
+    let hasPositions = false
+
+    for (const p of participants.value) {
+      const isCherry = basicInfo.value.gameMode === 'CHERRY' || (basicInfo.value as any).isCherrySubteam
+      const teamIdentifier = isCherry
+        ? 'TEAM-ALL'
+        : (p.teamIdentifier || (p.teamId === 100 ? '100' : '200'))
+
+      draftTeams[teamIdentifier] ??= []
+      draftTeams[teamIdentifier].push(p.puuid)
+      championSelections[p.puuid] = p.championId
+
+      if (p.position) {
+        positionAssignments[p.puuid] = {
+          selected: p.position,
+          primary: p.position,
+          secondary: ''
+        }
+        hasPositions = true
+      }
+    }
+
+    const isCherry = basicInfo.value.gameMode === 'CHERRY' || (basicInfo.value as any).isCherrySubteam
+    return {
+      gameModeKind: isCherry ? 'cherry' : 'normal',
+      queueId: basicInfo.value.queueId,
+      puuid: ownerPuuid,
+      teams: draftTeams,
+      championSelections,
+      positions: hasPositions ? positionAssignments : null
+    }
+  })
+
   provide(MatchCardContextKey, {
     isExpanded: toRef(props.isExpanded),
     summary: toRef(props.summary),
@@ -107,7 +152,9 @@ export function provideMatchCard(props: {
     watchReplay: props.watchReplay,
     loadDetails: props.loadDetails,
     dryRunOngoingGame: () => {
-      props.dryRunOngoingGame({})
+      if (props.canDryRunOngoingGame !== undefined && !toValue(props.canDryRunOngoingGame)) return
+      props.dryRunOngoingGame(draftOptions.value)
     }
   })
 }
+

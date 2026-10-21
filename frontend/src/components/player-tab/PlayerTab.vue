@@ -5,89 +5,74 @@
       <PlayerTabHeader
         :profile="profile"
         :loading="isLoadingMatches"
+        :is-self="isSelfTab"
+        :self-puuid="effectiveSelfPuuid"
         @refresh="refreshData"
-      >
-        <template #actions>
-          <!-- Demo Mode Badge / Toggle if applicable -->
-          <div
-            v-if="isDemoMode"
-            class="px-2.5 py-1.5 rounded-xl border border-amber-600 bg-amber-950/80 text-amber-200 text-xs font-semibold flex items-center space-x-1.5 shadow-sm"
-          >
-            <Gamepad2 class="w-3.5 h-3.5" />
-            <span>模拟演练</span>
-          </div>
-
-          <!-- Refresh Button -->
-          <button
-            @click="refreshData"
-            class="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition active:scale-95 shadow-md flex items-center space-x-1.5 text-xs font-semibold"
-            title="重新扫描并同步对局数据"
-          >
-            <RotateCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isLoadingMatches }" />
-            <span>刷新</span>
-          </button>
-        </template>
-      </PlayerTabHeader>
+        @tag-saved="loadPlayerTags"
+      />
     </div>
 
     <!-- Main Content Area: Responsive Grid (Left Sidebar + Right Matches List) -->
     <div class="flex-1 overflow-y-auto p-4 lg:p-6" ref="scrollContainer">
-      <div class="max-w-[1580px] mx-auto grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-5 items-start">
-        <!-- Left Sidebar Sticky Content -->
-        <div class="sticky top-0 space-y-3">
-          <NormalTagBlock :privacy="profile?.privacy" :tags="tags" @delete-tag="handleDeleteTag" />
-          <SummaryPane
-            :analysis="analysis"
-            :profile-summary="profile?.recent_summary"
-            :queue="activeQueue"
-            :sample-count="analysis?.count || matches?.length"
-            :current-page="currentPage"
-          />
-          <PlayerChallenges :challenges-data="challengesData" />
-          <ChampionMasteryPane
-            :masteries-list="masteriesList"
-            :raw-masteries-list="realMasteries"
-            @refresh="reloadMasteries"
-          />
-          <RecentlyPlayers
-            side="ally"
-            :matches="matches"
-            :self-puuid="profile?.puuid"
-            @select-summoner="handleSelectSummoner"
-          />
-          <RecentlyPlayers
-            side="enemy"
-            :matches="matches"
-            :self-puuid="profile?.puuid"
-            @select-summoner="handleSelectSummoner"
-          />
-          <EncounteredGames
-            :encountered-list="encounteredGames"
-            @select-game="$emit('selectGame', $event)"
-          />
-        </div>
+      <div ref="layoutContainerEl" class="max-w-[1580px] mx-auto">
+        <!-- Anti-Flicker Freeze Sentinel -->
+        <div ref="stickySentinelEl" class="h-0 w-full pointer-events-none"></div>
 
-        <!-- Right Main Column: Pagination & Filters + Match Cards List -->
-        <div class="flex flex-col gap-3 min-w-0">
-          <!-- Queue and Pagination Filter Bar -->
-          <div class="sticky top-0 z-20">
-            <MatchHistoryPagination
-              :queue="activeQueue"
-              :page="currentPage"
-              :page-size="pageSize"
-              :has-next-page="hasNextPage"
-              :disabled="isLoadingMatches || isCollecting"
-              :has-active-filter="isFilterActive"
-              @open-filters="showFilterModal = true"
-              @update:queue="handleQueueChange"
-              @update:page-size="handlePageSizeChange"
-              @update:page="handleGoToPage"
-              @prev-page="handlePrevPage"
-              @next-page="handleNextPage"
-              @go-to-page="handleGoToPage"
-              @first-page="handleFirstPage"
+        <div class="grid grid-cols-1 items-start gap-5" :class="isCompactLayout ? '' : 'lg:grid-cols-[340px_minmax(0,1fr)]'">
+          <!-- Desktop Sidebar (>= 1064px) wrapped in StickyBox -->
+          <StickyBox v-if="!isCompactLayout" class="w-[340px] shrink-0" :offset-top="8" :offset-bottom="8">
+            <PlayerTabSidebarContent
+              :profile="profile"
+              :analysis="analysis"
+              :challenges-data="challengesData"
+              :masteries-list="masteriesList"
+              :matches="matches"
+              :encountered-games="encounteredGames"
+              :tags="tags"
+              :self-puuid="effectiveSelfPuuid"
+              :is-self-tab="isSelfTab"
+              @select-summoner="handleSelectSummoner"
+              @select-game="$emit('selectGame', $event)"
+              @tag-deleted="loadPlayerTags"
+              @reload-masteries="reloadMasteries"
             />
-          </div>
+          </StickyBox>
+
+          <!-- Right Main Column: Pagination & Filters + Match Cards List -->
+          <div class="flex flex-col gap-3 min-w-0">
+            <!-- Queue and Pagination Filter Bar -->
+            <div class="sticky top-0 z-20 flex min-w-0 items-center gap-2">
+              <NTooltip v-if="isCompactLayout" placement="bottom-start">
+                <template #trigger>
+                  <button
+                    class="shrink-0 p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition active:scale-95 shadow-md flex items-center justify-center"
+                    title="打开侧边栏数据"
+                    @click="showSidebarDrawer = true"
+                  >
+                    <PanelLeft class="w-4 h-4 text-cyan-400" />
+                  </button>
+                </template>
+                打开侧边栏数据
+              </NTooltip>
+
+              <MatchHistoryPagination
+                class="min-w-0 flex-1"
+                :queue="activeQueue"
+                :page="currentPage"
+                :page-size="pageSize"
+                :has-next-page="hasNextPage"
+                :disabled="isLoadingMatches || isCollecting"
+                :has-active-filter="isFilterActive"
+                @open-filters="showFilterModal = true"
+                @update:queue="handleQueueChange"
+                @update:page-size="handlePageSizeChange"
+                @update:page="handleGoToPage"
+                @prev-page="handlePrevPage"
+                @next-page="handleNextPage"
+                @go-to-page="handleGoToPage"
+                @first-page="handleFirstPage"
+              />
+            </div>
 
           <!-- Matches Loading State: Card-level Skeleton Loaders -->
           <div v-if="isLoadingMatches" class="flex flex-col gap-3">
@@ -167,13 +152,61 @@
               :details="detailsMap[item.gameId]"
               :puuid="profile?.puuid"
               :loading-details="loadingGameIds.has(item.gameId)"
+              :can-dry-run-ongoing-game="true"
               @load-details="handleLoadDetails"
               @navigate-to-summoner-by-puuid="handleSelectSummoner"
+              @dry-run-ongoing-game="handleDryRunOngoingGame"
             />
           </div>
         </div>
       </div>
     </div>
+  </div>
+
+    <!-- Compact Drawer (< 1064px) -->
+    <NDrawer
+      v-if="isCompactLayout"
+      v-model:show="showSidebarDrawer"
+      width="min(340px, calc(100% - 32px))"
+      placement="left"
+      class="bg-[#0b1120]/95! backdrop-blur-xl border-r border-slate-800"
+    >
+      <NDrawerContent :native-scrollbar="false" body-content-style="padding: 12px">
+        <PlayerTabSidebarContent
+          :profile="profile"
+          :analysis="analysis"
+          :challenges-data="challengesData"
+          :masteries-list="masteriesList"
+          :matches="matches"
+          :encountered-games="encounteredGames"
+          :tags="tags"
+          :self-puuid="effectiveSelfPuuid"
+          :is-self-tab="isSelfTab"
+          @select-summoner="handleSelectSummoner"
+          @select-game="$emit('selectGame', $event)"
+          @tag-deleted="loadPlayerTags"
+          @reload-masteries="reloadMasteries"
+        />
+      </NDrawerContent>
+    </NDrawer>
+
+    <!-- Floating Scroll-To-Top Button with 50ms Freeze Sentinel -->
+    <div
+      :class="{
+        'pointer-events-auto opacity-80': shouldShowScrollToTopButton,
+        'pointer-events-none opacity-0': !shouldShowScrollToTopButton
+      }"
+      class="absolute! right-8 bottom-8 z-30 transition-opacity duration-200 hover:opacity-100"
+    >
+      <button
+        class="w-10 h-10 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white shadow-xl flex items-center justify-center transition active:scale-95 border border-cyan-400/40"
+        title="回到顶部"
+        @click="scrollToTop"
+      >
+        <ArrowUp class="w-5 h-5" />
+      </button>
+    </div>
+
 
     <!-- Floating Collect Mode Progress Indicator -->
     <CollectModeProgress
@@ -200,8 +233,14 @@
 
 <script setup lang="ts">
 import { ref, shallowRef, markRaw, computed, onMounted, onUnmounted, watch } from 'vue'
-import { Inbox, RotateCw, Gamepad2 } from 'lucide-vue-next'
-import type { SummonerProfile, MatchHistoryItem } from '../../api/types'
+import { Inbox, RotateCw, Gamepad2, ArrowUp, PanelLeft } from 'lucide-vue-next'
+import { NDrawer, NDrawerContent, NTooltip } from 'naive-ui'
+import { useElementSize, useElementVisibility, useTimeoutFn } from '@vueuse/core'
+import StickyBox from '../widgets/StickyBox.vue'
+import PlayerTabSidebarContent from './PlayerTabSidebarContent.vue'
+import { PLAYER_TAB_WIDE_MIN_WIDTH } from './constants'
+import { useFreezeValue } from './utils/freeze'
+import type { SummonerProfile, MatchHistoryItem, SavedPlayerTagItem } from '../../api/types'
 import {
   getSummonerProfile,
   getRawMatchHistory,
@@ -211,7 +250,9 @@ import {
   getPlayerChallenges,
   getMatchDetail,
   getMatchTimeline,
-  getMockSummonerProfile
+  getMockSummonerProfile,
+  getPlayerTags,
+  deletePlayerTag
 } from '../../api/tauri'
 import { getMockRawMatchHistory, getMockRawMatchTimeline } from '../../api/mockData'
 import type { LcuOrSgpGameSummary, LcuOrSgpGameDetails } from '@shared/data-adapter/wrapper'
@@ -253,14 +294,67 @@ provideMatchHistoryCardViewport({
 
 const playerTabsStore = usePlayerTabsStore()
 const effectiveSelfPuuid = computed(() => props.selfPuuid || playerTabsStore.tabs.find(t => t.isSelf)?.puuid || '')
+const isSelfTab = computed(() => Boolean(props.tab.isSelf || (effectiveSelfPuuid.value && (profile.value.puuid === effectiveSelfPuuid.value || props.tab.puuid === effectiveSelfPuuid.value))))
+
+const scrollContainer = ref<HTMLElement | null>(null)
+const layoutContainerEl = ref<HTMLElement | null>(null)
+const stickySentinelEl = ref<HTMLElement | null>(null)
+const showSidebarDrawer = ref(false)
+
+const { width: layoutWidth } = useElementSize(layoutContainerEl)
+const isCompactLayout = computed(() => (layoutWidth.value > 0 ? layoutWidth.value < PLAYER_TAB_WIDE_MIN_WIDTH : false))
+
+const isSentinelVisible = useElementVisibility(stickySentinelEl, {
+  scrollTarget: scrollContainer,
+  initialValue: true
+} as any)
+const {
+  value: frozenSentinelVisible,
+  freeze: freezeSentinel,
+  unfreeze: unfreezeSentinel
+} = useFreezeValue(isSentinelVisible)
+
+const shouldShowScrollToTopButton = computed(() => !frozenSentinelVisible.value)
+
+const scrollToTop = () => {
+  scrollContainer.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+const { start: startSentinelUnfreeze, stop: stopSentinelUnfreeze } = useTimeoutFn(() => {
+  unfreezeSentinel()
+}, 50)
+
+watch(
+  () => props.isActive,
+  (active) => {
+    if (active === false) {
+      stopSentinelUnfreeze()
+      freezeSentinel()
+      showSidebarDrawer.value = false
+    } else {
+      startSentinelUnfreeze()
+    }
+  },
+  { immediate: true }
+)
+
+watch(isCompactLayout, (compact) => {
+  if (!compact) {
+    showSidebarDrawer.value = false
+  }
+})
+
 
 const emit = defineEmits<{
   selectSummoner: [puuid: string]
   selectGame: [gameId: number]
   profileUpdated: [profile: SummonerProfile]
+  dryRunOngoingGame: [draft: any]
 }>()
 
-const scrollContainer = ref<HTMLElement | null>(null)
+const handleDryRunOngoingGame = (draft: any) => {
+  emit('dryRunOngoingGame', draft)
+}
 
 const isDemoMode = computed(() => Boolean(props.tab.isMock || props.tab.puuid.startsWith('mock_')))
 const profile = ref<SummonerProfile>({
@@ -989,27 +1083,18 @@ async function loadData() {
   }
 }
 
-function loadPlayerTags() {
+async function loadPlayerTags() {
   const targetPuuid = profile.value.puuid || props.tab.puuid
   if (!targetPuuid) {
     tags.value = []
     return
   }
 
-  const customTags: Array<{ tag: string; isCustom?: boolean }> = []
+  let sqliteTags: SavedPlayerTagItem[] = []
   try {
-    const key = `hexbrain_player_tags_${targetPuuid}`
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          if (item?.tag) customTags.push({ tag: item.tag, isCustom: true })
-        }
-      }
-    }
-  } catch {
-    // ignore
+    sqliteTags = await getPlayerTags(targetPuuid, effectiveSelfPuuid.value)
+  } catch (err) {
+    console.warn('Failed to load player tags from SQLite IPC:', err)
   }
 
   const tacticalList: Array<{ tag: string }> = []
@@ -1029,18 +1114,18 @@ function loadPlayerTags() {
     }
   }
 
-  tags.value = [...customTags, ...tacticalList]
+  tags.value = [...(sqliteTags || []), ...tacticalList]
 }
 
-function handleDeleteTag(idx: number) {
+async function handleDeleteTag(idx: number) {
   const targetPuuid = profile.value.puuid || props.tab.puuid
+  const item = tags.value[idx] as any
   tags.value.splice(idx, 1)
-  if (targetPuuid) {
+  if (targetPuuid && (item?.puuid || item?.markedBySelf !== undefined)) {
     try {
-      const remainingCustom = tags.value.filter((t: any) => t.isCustom)
-      localStorage.setItem(`hexbrain_player_tags_${targetPuuid}`, JSON.stringify(remainingCustom))
-    } catch {
-      // ignore
+      await deletePlayerTag(targetPuuid, effectiveSelfPuuid.value)
+    } catch (err) {
+      console.warn('Failed to delete player tag via SQLite IPC:', err)
     }
   }
 }

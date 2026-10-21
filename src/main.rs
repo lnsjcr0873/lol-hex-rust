@@ -8,6 +8,7 @@ mod lcu;
 mod overlay;
 mod runtime;
 mod sgp;
+mod storage;
 mod vision;
 mod web;
 

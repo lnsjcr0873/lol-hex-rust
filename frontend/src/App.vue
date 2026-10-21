@@ -58,10 +58,17 @@ const updateOverlayState = () => {
   isOverlayWindow.value = checkOverlay();
 };
 
+const handleSwitchTabEvent = (e: any) => {
+  if (e?.detail) {
+    handleTabChange(e.detail as Tab);
+  }
+};
+
 onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', updateOverlayState);
     window.addEventListener('popstate', updateOverlayState);
+    window.addEventListener('hexbrain-switch-tab', handleSwitchTabEvent);
   }
 });
 
@@ -69,6 +76,7 @@ onUnmounted(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('hashchange', updateOverlayState);
     window.removeEventListener('popstate', updateOverlayState);
+    window.removeEventListener('hexbrain-switch-tab', handleSwitchTabEvent);
   }
 });
 

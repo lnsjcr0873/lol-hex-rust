@@ -79,7 +79,9 @@ export const POSITION_DISPLAY_NAMES: Record<string, string> = {
 export const WIN_RATE_TEAM_MIN_MATCHES = 13
 export const WIN_RATE_TEAM_MIN_SIZE = 3
 export const LOSS_RATE_TEAM_MIN_SIZE = 2
-export const WIN_RATE_TEAM_MIN_WIN_RATE = 0.9
+export const WIN_RATE_TEAM_MIN_WIN_RATE = 0.8
 export const LOSS_RATE_TEAM_MAX_WIN_RATE = 0.25
+export const WIN_RATE_TEAM_OTHER_MEMBER_WIN_STREAK = 4
+export const LOSS_RATE_TEAM_MIN_LOSS_STREAK = 5
 
 export const STARRED_CHAMPION_LEVEL = 60

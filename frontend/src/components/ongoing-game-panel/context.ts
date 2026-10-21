@@ -6,6 +6,10 @@ export interface OngoingGamePanelContext {
   selfPuuid: Ref<string>
   streamerMode: Ref<boolean>
   premadeTeamIdMap: Ref<Record<string, string>>
+  columnsNeed: Ref<number>
+  linesPerTeam: Ref<number>
+  contentWidth: Ref<number>
+  contentHeight: Ref<number>
   selectPlayer: (player: EnhancedPlayerCard) => void
   inspectPlayer: (puuid: string) => void
   previewGame?: (gameId: number, puuid?: string) => void

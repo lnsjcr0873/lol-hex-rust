@@ -82,23 +82,24 @@
         <div class="bg-[#080e1b] p-3 rounded-xl border border-[#152238] space-y-2">
           <div class="flex items-center justify-between">
             <span class="text-slate-200 font-semibold">选人聊天广播偏好</span>
-            <span class="text-[#0ac8b9] font-mono">{{ preferences.broadcastFormat === 'concise' ? '精简格式' : '详细格式' }}</span>
+            <span class="text-[#0ac8b9] font-mono">{{ getPresetLabel(preferences.broadcastFormat) }}</span>
           </div>
-          <p class="text-slate-400 text-[11px]">点击一键广播时默认发送的战绩排版风格</p>
-          <div class="flex items-center space-x-2 pt-1">
+          <p class="text-slate-400 text-[11px]">点击一键广播时默认发送的战术话术风格</p>
+          <div class="grid grid-cols-2 gap-2 pt-1">
             <button
-              @click="setBroadcastFormat('concise')"
-              class="px-3 py-1 rounded text-xs border transition"
-              :class="preferences.broadcastFormat === 'concise' ? 'bg-[#0f233a] text-[#0ac8b9] border-[#0ac8b9]' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'"
+              v-for="preset in broadcastPresets"
+              :key="preset.id"
+              @click="setBroadcastFormat(preset.id)"
+              class="p-2 rounded-lg text-left border transition flex flex-col justify-between"
+              :class="preferences.broadcastFormat === preset.id ? 'bg-[#0f233a] text-[#0ac8b9] border-[#0ac8b9]' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'"
             >
-              精简版 (胜率与常用)
-            </button>
-            <button
-              @click="setBroadcastFormat('detailed')"
-              class="px-3 py-1 rounded text-xs border transition"
-              :class="preferences.broadcastFormat === 'detailed' ? 'bg-[#0f233a] text-[#0ac8b9] border-[#0ac8b9]' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'"
-            >
-              详细版 (含车队标签)
+              <div class="font-bold flex items-center space-x-1 text-xs">
+                <span>{{ preset.icon }}</span>
+                <span>{{ preset.name }}</span>
+              </div>
+              <div class="text-[10px] text-slate-400 mt-1 leading-tight line-clamp-2">
+                {{ preset.desc }}
+              </div>
             </button>
           </div>
         </div>
@@ -230,17 +231,28 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { Check, RotateCw } from 'lucide-vue-next';
 import { getSummonerProfile, getAutomationConfig, updateAutomationConfig } from '../api/tauri';
-import type { AutomationConfig } from '../api/types';
+import type { AutomationConfig, BroadcastPreset } from '../api/types';
 
 interface UserPreferences {
   defaultPageSize: number;
-  broadcastFormat: 'concise' | 'detailed';
+  broadcastFormat: BroadcastPreset;
 }
 
 const defaultPreferences: UserPreferences = {
   defaultPageSize: 20,
   broadcastFormat: 'concise'
 };
+
+const broadcastPresets: { id: BroadcastPreset; name: string; icon: string; desc: string }[] = [
+  { id: 'concise', name: '精简战绩', icon: '⚡', desc: '单行整合我方 5 人分路、常用英雄及近期胜率' },
+  { id: 'detailed', name: '详细战绩', icon: '📋', desc: '逐行展示排位段位、样本场次、核心胜率与车队标记' },
+  { id: 'jungle', name: '打野路径警示', icon: '🌲', desc: '预测打野开野路线、前期 Gank 偏好与控龙节奏' },
+  { id: 'premade', name: '车队开黑警示', icon: '🚨', desc: '揭示双方多排阵容，标明胜率队与掉分车队' }
+];
+
+function getPresetLabel(id: BroadcastPreset) {
+  return broadcastPresets.find(p => p.id === id)?.name || '精简战绩';
+}
 
 const preferences = ref<UserPreferences>({ ...defaultPreferences });
 const automation = ref<AutomationConfig>({
@@ -282,7 +294,7 @@ const setPageSize = (size: number) => {
   savePreferences();
 };
 
-const setBroadcastFormat = (fmt: 'concise' | 'detailed') => {
+const setBroadcastFormat = (fmt: BroadcastPreset) => {
   preferences.value.broadcastFormat = fmt;
   savePreferences();
 };
@@ -333,7 +345,9 @@ onMounted(async () => {
       const parsed = JSON.parse(saved);
       preferences.value = {
         defaultPageSize: [10, 20, 50, 100].includes(parsed.defaultPageSize) ? parsed.defaultPageSize : 20,
-        broadcastFormat: parsed.broadcastFormat === 'detailed' ? 'detailed' : 'concise'
+        broadcastFormat: (['concise', 'detailed', 'jungle', 'premade'] as BroadcastPreset[]).includes(parsed.broadcastFormat)
+          ? parsed.broadcastFormat
+          : 'concise'
       };
     }
   } catch (err) {

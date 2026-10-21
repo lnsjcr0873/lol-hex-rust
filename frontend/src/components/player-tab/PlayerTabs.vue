@@ -29,6 +29,7 @@
           :ref="(el) => setTabRef(tab.id, el)"
           @select-summoner="handleSelectSummoner"
           @select-game="handleSelectGame"
+          @dry-run-ongoing-game="handleDryRunOngoingGame"
           @profile-updated="handleProfileUpdated(tab.id, $event)"
         />
       </template>
@@ -47,7 +48,9 @@
       v-model:show="showPreviewModal"
       :game-id="previewGameId"
       :puuid="playerTabsStore.currentTab?.puuid"
+      :can-dry-run-ongoing-game="true"
       @navigate-to-summoner-by-puuid="handleSelectSummoner"
+      @dry-run-ongoing-game="handleDryRunOngoingGame"
     />
   </div>
 </template>
@@ -56,6 +59,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { usePlayerTabsStore, type PlayerTabItem } from '../../stores/player-tabs'
 import { useLcuStore } from '../../stores/lcu'
+import { useOngoingMatchStore } from '../../stores/ongoing-match'
 import PlayerTabStrip from './widgets/PlayerTabStrip.vue'
 import PlayerTab from './PlayerTab.vue'
 
@@ -85,10 +89,17 @@ function setTabRef(tabId: string, el: any) {
 
 const showPreviewModal = ref(false)
 const previewGameId = ref(0)
+const ongoingMatchStore = useOngoingMatchStore()
 
 function handleSelectGame(gameId: number) {
   previewGameId.value = gameId
   showPreviewModal.value = true
+}
+
+function handleDryRunOngoingGame(draft: any) {
+  showPreviewModal.value = false
+  ongoingMatchStore.setDraft(draft)
+  window.dispatchEvent(new CustomEvent('hexbrain-switch-tab', { detail: 'ongoing' }))
 }
 
 function handleActivateTab(id: string) {

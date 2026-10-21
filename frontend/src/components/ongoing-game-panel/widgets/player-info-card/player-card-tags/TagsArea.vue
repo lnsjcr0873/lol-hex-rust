@@ -169,6 +169,16 @@ const tags = computed<EvaluatedTag[]>(() => {
     }
   }
 
+  if (props.player.is_autofilled && !result.some((r) => r.id === 'autofill' || r.label.includes('补位'))) {
+    result.unshift({
+      id: 'autofill',
+      label: '🔄 自动补位',
+      tagClass: 'bg-purple-950/90 text-purple-300 border border-purple-600/50',
+      description: '系统自动补位分配位置',
+      priority: 85
+    })
+  }
+
   // Mutual exclusion filtering
   const winStreakVal = analysis.winLoss?.all?.winningStreak ?? 0
   const lossStreakVal = analysis.winLoss?.all?.losingStreak ?? 0

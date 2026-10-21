@@ -5,7 +5,19 @@ import {
   MatchHistoryItem, 
   MatchDetailFull, 
   AutomationConfig,
-  MatchTimelineData
+  MatchTimelineData,
+  SavedPlayerTagRecord,
+  SavedPlayerTagItem,
+  PaginatedPlayerTags,
+  UpdatePlayerTagDto,
+  QueryAllPlayerTagsDto,
+  EncounteredGameRecord,
+  PaginatedEncounteredGames,
+  QueryEncounteredGamesDto,
+  GenericResult,
+  DraftOptions,
+  BroadcastPreset,
+  ChatBroadcastResponse
 } from './types';
 import type { MatchHistory, GameTimeline } from '@shared/types/league-client/match-history';
 import { 
@@ -261,8 +273,16 @@ export function getMockMatchDetail(): MatchDetailFull {
   return mockMatchDetail;
 }
 
-export async function sendChatRecords(roomId: string, format: 'concise' | 'detailed'): Promise<{ success: boolean; message: string }> {
+export async function sendChatRecords(roomId: string, format: BroadcastPreset = 'concise'): Promise<ChatBroadcastResponse> {
   return safeInvoke('send_chat_records', { roomId, format }, { success: false, message: '客户端未连接，无法发送战绩' });
+}
+
+export async function generateTacticalBroadcast(preset: BroadcastPreset = 'concise'): Promise<string[]> {
+  return safeInvoke('generate_tactical_broadcast', { preset }, []);
+}
+
+export async function getGsmLiveGame(): Promise<any> {
+  return safeInvoke('get_gsm_live_game', undefined, null);
 }
 
 export async function getAutomationConfig(): Promise<AutomationConfig> {
@@ -325,4 +345,67 @@ export async function isOngoingOverlayVisible(): Promise<boolean> {
 }
 
 export { getMockChampionMastery } from './mockData';
+
+// --- Milestone 2: Player Tags & Encountered Games SQLite IPC ---
+
+export async function listSavedPlayerTags(query?: QueryAllPlayerTagsDto): Promise<PaginatedPlayerTags> {
+  return safeInvoke<PaginatedPlayerTags>('list_saved_player_tags', {
+    puuid: query?.puuid ?? null,
+    selfPuuid: query?.selfPuuid ?? null,
+    region: query?.region ?? null,
+    rsoPlatformId: query?.rsoPlatformId ?? null,
+    page: query?.page ?? 1,
+    pageSize: query?.pageSize ?? 20,
+    timeOrder: query?.timeOrder ?? 'desc'
+  }, { data: [], page: 1, pageSize: 20, total: 0, totalPages: 0 });
+}
+
+export async function getPlayerTags(puuid: string, selfPuuid?: string): Promise<SavedPlayerTagItem[]> {
+  if (!puuid) return [];
+  return safeInvoke<SavedPlayerTagItem[]>('get_player_tag', { puuid, selfPuuid: selfPuuid ?? null }, []);
+}
+
+export async function savePlayerTag(dto: UpdatePlayerTagDto): Promise<SavedPlayerTagRecord> {
+  return safeInvoke<SavedPlayerTagRecord>('save_player_tag', {
+    puuid: dto.puuid,
+    selfPuuid: dto.selfPuuid ?? null,
+    tag: dto.tag ?? null,
+    region: dto.region ?? null,
+    rsoPlatformId: dto.rsoPlatformId ?? null
+  });
+}
+
+export async function deletePlayerTag(puuid: string, selfPuuid?: string): Promise<GenericResult> {
+  return safeInvoke<GenericResult>('delete_player_tag', { puuid, selfPuuid: selfPuuid ?? null }, { success: true });
+}
+
+export async function getPlayerTagPhrases(): Promise<string[]> {
+  return safeInvoke<string[]>('get_player_tag_phrases', undefined, [
+    '绝活哥', '通天代', '连胜中', '容易被抓', '单杀怪', '心态好', '车队打手', '带崩全队'
+  ]);
+}
+
+export async function updatePlayerTagPhrases(phrases: string[]): Promise<string[]> {
+  return safeInvoke<string[]>('update_player_tag_phrases', { phrases }, phrases);
+}
+
+export async function setPlayerTagPhrasePanelExpanded(expanded: boolean): Promise<boolean> {
+  return safeInvoke<boolean>('set_player_tag_phrase_panel_expanded', { expanded }, expanded);
+}
+
+export async function queryEncounteredGames(query: QueryEncounteredGamesDto): Promise<PaginatedEncounteredGames> {
+  return safeInvoke<PaginatedEncounteredGames>('query_encountered_games', {
+    puuid: query.puuid,
+    selfPuuid: query.selfPuuid ?? null,
+    queueType: query.queueType ?? null,
+    page: query.page ?? 1,
+    pageSize: query.pageSize ?? 10,
+    timeOrder: query.timeOrder ?? 'desc'
+  }, { data: [], page: 1, pageSize: query.pageSize ?? 10, total: 0, totalPages: 0 });
+}
+
+export async function deleteEncounteredGame(id: number): Promise<GenericResult> {
+  return safeInvoke<GenericResult>('delete_encountered_game', { id }, { success: true });
+}
+
 

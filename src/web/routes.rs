@@ -599,7 +599,7 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
         "https://game.gtimg.cn/images/lol/act/img/skinloading/142000.jpg".to_string()
     };
 
-    let badges_json: Vec<Value> = card
+    let mut badges_json: Vec<Value> = card
         .tactical_analysis
         .badges
         .iter()
@@ -624,6 +624,16 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
             })
         })
         .collect();
+
+    if card.is_autofilled {
+        badges_json.push(json!({
+            "id": format!("b_autofill_{}", card.slot_index),
+            "label": "自动补位",
+            "icon": "🔄",
+            "color": "purple",
+            "description": "系统自动补位分配位置"
+        }));
+    }
 
     let premade_party = card.premade_group.map(|gid| {
         json!({
@@ -651,6 +661,8 @@ pub fn convert_ongoing_card(card: &crate::engine::player_history::OngoingPlayerC
         "team": team_str,
         "cell_id": card.slot_index,
         "assigned_position": card.position,
+        "is_autofilled": card.is_autofilled,
+        "team_participant_id": card.team_participant_id,
         "champion_id": card.champion_id,
         "champion_name": cname,
         "champion_title": "",
@@ -737,61 +749,12 @@ pub fn build_chat_broadcast_lines(
     my_team: &[crate::engine::player_history::OngoingPlayerCard],
     format: Option<&str>,
 ) -> Vec<String> {
-    let mut lines = Vec::new();
-    if format == Some("concise") {
-        lines.push("⚡【HexBrain 战绩简报】".to_string());
-        let mut summaries = Vec::new();
-        for p in my_team.iter().take(5) {
-            let pos = match p.position.to_uppercase().as_str() {
-                "TOP" => "上",
-                "JUNGLE" => "野",
-                "MID" | "MIDDLE" => "中",
-                "BOTTOM" | "BOT" | "ADC" => "下",
-                "UTILITY" | "SUPPORT" => "辅",
-                _ => "",
-            };
-            let cname = if !p.champion_name.is_empty() && p.champion_name != "选择中..." {
-                p.champion_name.clone()
-            } else {
-                p.summoner_name.clone()
-            };
-            let prefix = if !pos.is_empty() { format!("{}:", pos) } else { String::new() };
-            if p.tactical_analysis.recent_count > 0 {
-                summaries.push(format!("{}{}({}%胜)", prefix, cname, p.tactical_analysis.recent_win_rate_pct));
-            } else {
-                summaries.push(format!("{}{}", prefix, cname));
-            }
-        }
-        lines.push(summaries.join(" | "));
-    } else {
-        lines.push("⚡【HexBrain 智脑战绩透视】⚡".to_string());
-
-        for (idx, p) in my_team.iter().take(5).enumerate() {
-            let pos = match p.position.to_uppercase().as_str() {
-                "TOP" => "上路",
-                "JUNGLE" => "打野",
-                "MID" | "MIDDLE" => "中路",
-                "BOTTOM" | "BOT" | "ADC" => "射手",
-                "UTILITY" | "SUPPORT" => "辅助",
-                _ => "",
-            };
-            let pos_str = if !pos.is_empty() { format!("{} ", pos) } else { String::new() };
-            let wr = p.tactical_analysis.recent_win_rate_pct;
-            let tag = p.premade_tag.as_deref().unwrap_or("");
-            let tag_suffix = if !tag.is_empty() { format!(" [{}]", tag) } else { String::new() };
-            lines.push(format!(
-                "{}. {}[{}] {} (近{}场胜率{}%){}",
-                idx + 1,
-                pos_str,
-                p.summoner_name,
-                p.tactical_analysis.tier_str,
-                p.tactical_analysis.recent_count,
-                wr,
-                tag_suffix
-            ));
-        }
-    }
-    lines
+    crate::engine::player_history::generate_tactical_broadcast(
+        format.unwrap_or("concise"),
+        my_team,
+        &[],
+        None,
+    )
 }
 
 fn resolve_participant_role(p: &Value, pid: i64) -> String {

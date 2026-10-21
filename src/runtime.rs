@@ -14,6 +14,7 @@ use crate::overlay::{
     win32_hud, BenchOverlay, HotkeyManager, InGameOverlay, ItemOverlay, RankedOverlay, TextToSpeech,
 };
 use crate::sgp::SgpClient;
+use crate::storage::StorageManager;
 use crate::web::WsBroadcaster;
 
 #[derive(Clone, Default)]
@@ -39,6 +40,7 @@ pub struct BackgroundEngine {
     pub ws_broadcaster: Option<Arc<WsBroadcaster>>,
     pub is_aram_active: Arc<AtomicBool>,
     pub is_hextech_active: Arc<AtomicBool>,
+    pub storage: Arc<StorageManager>,
 }
 
 /// Initializes and starts the unified HexBrain background engine:
@@ -72,6 +74,7 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
     });
 
     // 2. Initialize Subsystems
+    let storage = Arc::new(StorageManager::new().expect("Failed to initialize SQLite storage layer"));
     let config = Arc::new(ConfigManager::new("recommendation_config.json"));
     let lcu = Arc::new(LcuClient::new());
     let live = Arc::new(LiveClientDataReader::new());
@@ -163,6 +166,7 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
     player_history.set_database(db.clone()).await;
     let sgp_client = Arc::new(SgpClient::new(lcu.clone()));
     player_history.set_sgp_client(sgp_client.clone()).await;
+    player_history.set_storage(storage.clone()).await;
     lcu.set_opgg(opgg.clone()).await;
     if let Ok(mut gh) = win32_hud::GLOBAL_HISTORY.write() {
         *gh = Some(player_history.clone());
@@ -199,6 +203,8 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
     let is_hextech_bg = is_hextech_active.clone();
     let config_bg = config.clone();
     let ws_bg = options.ws_broadcaster.clone();
+    let storage_bg = storage.clone();
+    let sgp_bg = sgp_client.clone();
 
     tokio::spawn(async move {
         let mut last_level = 0i32;
@@ -208,6 +214,12 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
         let mut _last_swapped_champion_id = 0i64;
         let mut last_swap_instant = Instant::now() - Duration::from_secs(10);
         let ready_check_accepting = Arc::new(AtomicBool::new(false));
+        let mut recorded_game_ids = std::collections::HashSet::<i64>::new();
+        let mut last_recorded_game_id: Option<i64> = None;
+        let mut champ_select_alerted_puuids = std::collections::HashSet::<String>::new();
+        let mut active_champ_select_room = String::new();
+        let mut last_champ_select_snapshot_sig = String::new();
+        let mut last_gsm_game_id: i64 = 0;
 
         loop {
             tokio::time::sleep(Duration::from_millis(800)).await;
@@ -262,6 +274,120 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
             if phase == "ChampSelect" {
                 let session = lcu_bg.get_champ_select_session().await;
                 if !session.is_null() {
+                    // Capture champ-select handoff snapshot in background 800ms loop
+                    let snapshot_sig = format!("{}:{}:{:?}",
+                        session.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0),
+                        session.get("localPlayerCellId").and_then(|v| v.as_i64()).unwrap_or(0),
+                        session.get("myTeam")
+                    );
+                    if snapshot_sig != last_champ_select_snapshot_sig {
+                        last_champ_select_snapshot_sig = snapshot_sig;
+                        history_bg.capture_and_save_champ_select_snapshot(&session, &lcu_bg, &db_bg, Some(&storage_bg)).await;
+                    }
+
+                    // Champ-Select Tagged Player Notification Hook
+                    let chat_details = session.get("chatDetails");
+                    let chat_room_id = chat_details
+                        .and_then(|c| c.get("multiUserChatId").or_else(|| c.get("chatRoomId")).or_else(|| c.get("chatRoomName")))
+                        .and_then(|v| v.as_str())
+                        .or_else(|| session.get("chatRoomId").and_then(|v| v.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+
+                    if !chat_room_id.is_empty() && chat_room_id != active_champ_select_room {
+                        champ_select_alerted_puuids.clear();
+                        active_champ_select_room = chat_room_id.clone();
+                    }
+
+                    let (self_puuid_opt, _) = history_bg.sync_local_summoner(&lcu_bg).await;
+                    if let Some(ref self_puuid) = self_puuid_opt {
+                        let mut lobby_players: Vec<(String, String)> = Vec::new();
+
+                        // 1. Extract from session myTeam
+                        if let Some(my_team) = session.get("myTeam").and_then(|v| v.as_array()) {
+                            for member in my_team {
+                                let puuid = member.get("puuid").and_then(|v| v.as_str()).unwrap_or("");
+                                let name = member.get("gameName")
+                                    .or_else(|| member.get("summonerName"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if !puuid.is_empty() && puuid != self_puuid {
+                                    lobby_players.push((puuid.to_string(), name.to_string()));
+                                }
+                            }
+                        }
+
+                        // 2. Extract from chat conversation participants (for anonymous Ranked Solo/Duo deobfuscation)
+                        if !chat_room_id.is_empty() {
+                            let chat_participants = lcu_bg.get_chat_conversation_participants(&chat_room_id).await;
+                            for p in chat_participants {
+                                let puuid = p.get("puuid")
+                                    .or_else(|| p.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let name = p.get("gameName")
+                                    .or_else(|| p.get("name"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if !puuid.is_empty() && puuid != self_puuid {
+                                    if !lobby_players.iter().any(|(existing_p, _)| existing_p == puuid) {
+                                        lobby_players.push((puuid.to_string(), name.to_string()));
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Check for active tags in storage
+                        for (puuid, display_name) in lobby_players {
+                            if champ_select_alerted_puuids.contains(&puuid) {
+                                continue;
+                            }
+
+                            if let Ok(tags) = storage_bg.get_player_tags(&puuid, self_puuid) {
+                                if let Some(active_tag) = tags.into_iter().find(|t| !t.tag.trim().is_empty()) {
+                                    champ_select_alerted_puuids.insert(puuid.clone());
+
+                                    let player_label = if !display_name.is_empty() {
+                                        display_name.clone()
+                                    } else {
+                                        let prefix: String = puuid.chars().take(6).collect();
+                                        format!("队友 ({})", prefix)
+                                    };
+
+                                    info!(
+                                        "⚡ [HexBrain ChampSelect Alert] 发现已标记玩家: {} -> 备注: {}",
+                                        player_label, active_tag.tag
+                                    );
+
+                                    let alert_payload = serde_json::json!({
+                                        "puuid": puuid,
+                                        "summonerName": player_label,
+                                        "tag": active_tag.tag,
+                                        "lastMetAt": active_tag.last_met_at,
+                                        "markedBySelf": active_tag.marked_by_self,
+                                    });
+
+                                    if let Some(ws) = &ws_bg {
+                                        ws.send_event("tagged_player_alert", alert_payload.clone());
+                                    }
+
+                                    crate::overlay::tts::TextToSpeech::speak(
+                                        &format!("发现已标记玩家: {}", player_label)
+                                    );
+
+                                    if storage_bg.is_champ_select_alert_enabled().unwrap_or(true) && !chat_room_id.is_empty() {
+                                        let chat_line = format!("[已标记玩家: {}]: {}", player_label, active_tag.tag);
+                                        let lcu_chat = lcu_bg.clone();
+                                        let room = chat_room_id.clone();
+                                        tokio::spawn(async move {
+                                            lcu_chat.send_chat_message(&room, &chat_line).await;
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Check ARAM mode vs Summoner's Rift
                     let is_aram = session.get("benchEnabled").and_then(|v| v.as_bool()).unwrap_or(false)
                         || session.get("benchChampions").and_then(|b| b.as_array()).map_or(false, |b| !b.is_empty());
@@ -451,7 +577,38 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
 
                 let gf_session = lcu_bg.get_gameflow_session().await;
                 if !gf_session.is_null() {
-                    if let Some((my_team_info, their_team_info)) = history_bg.resolve_gameflow_10_players(&gf_session, &lcu_bg).await {
+                    let game_id = gf_session.get("gameData").and_then(|g| g.get("gameId")).and_then(|v| v.as_i64()).unwrap_or(0);
+                    let (self_puuid_opt, _) = history_bg.sync_local_summoner(&lcu_bg).await;
+                    if let Some(ref self_puuid) = self_puuid_opt {
+                        if game_id != 0 && game_id != last_gsm_game_id {
+                            last_gsm_game_id = game_id;
+                            let _ = history_bg.query_and_enrich_from_gsm(&sgp_bg, self_puuid).await;
+                        }
+                    }
+
+                    let resolved_teams = if let Some((mut my_team_info, mut their_team_info)) = history_bg.resolve_gameflow_10_players(&gf_session, &lcu_bg).await {
+                        if let Some(snap) = history_bg.get_valid_champ_select_snapshot(if game_id > 0 { Some(game_id) } else { None }, Some(&storage_bg)).await {
+                            history_bg.stitch_team_with_snapshot(&mut my_team_info, &snap.my_team);
+                            history_bg.stitch_team_with_snapshot(&mut their_team_info, &snap.their_team);
+                        }
+                        Some((my_team_info, their_team_info))
+                    } else if cached_ranked_data.is_none() {
+                        if let Some(snap) = history_bg.get_valid_champ_select_snapshot(if game_id > 0 { Some(game_id) } else { None }, Some(&storage_bg)).await {
+                            let my_slots = crate::engine::player_history::convert_ongoing_cards_to_slots(&snap.my_team);
+                            let their_slots = crate::engine::player_history::convert_ongoing_cards_to_slots(&snap.their_team);
+                            if !my_slots.is_empty() {
+                                Some((my_slots, their_slots))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some((my_team_info, their_team_info)) = resolved_teams {
                         let mut my_slots = Vec::new();
                         for (idx, s) in my_team_info.into_iter().enumerate() {
                             let cname = if s.champion_id > 0 {
@@ -522,6 +679,14 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                 // In-Game Live 2999 Port Monitoring Workflow: Always stop Ranked Draft HUD when entering match
                 if ranked_bg.is_showing.load(Ordering::SeqCst) && !ranked_bg.is_in_test_mode() {
                     ranked_bg.stop();
+                }
+
+                if last_gsm_game_id <= 0 {
+                    let (self_puuid_opt, _) = history_bg.sync_local_summoner(&lcu_bg).await;
+                    if let Some(ref self_puuid) = self_puuid_opt {
+                        let _ = history_bg.query_and_enrich_from_gsm(&sgp_bg, self_puuid).await;
+                        last_gsm_game_id = -1;
+                    }
                 }
 
                 let mut live_stats = live_bg.get_live_stats().await;
@@ -602,11 +767,134 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
                     ).await;
                 }
             } else {
+                // Left ChampSelect: reset alert tracker
+                if !champ_select_alerted_puuids.is_empty() {
+                    champ_select_alerted_puuids.clear();
+                    active_champ_select_room.clear();
+                }
+
+                // End-Of-Game 9-Peer Encounter Recording Hook
+                let is_eog_phase = phase == "PreEndOfGame" || phase == "EndOfGame" || phase == "WaitingForStats";
+                if is_eog_phase {
+                    let gf_session = lcu_bg.get_gameflow_session().await;
+                    if !gf_session.is_null() {
+                        if let Some(game_data) = gf_session.get("gameData") {
+                            let game_id = game_data.get("gameId").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if game_id > 0 && !recorded_game_ids.contains(&game_id) && last_recorded_game_id != Some(game_id) {
+                                recorded_game_ids.insert(game_id);
+                                last_recorded_game_id = Some(game_id);
+                                if recorded_game_ids.len() > 200 {
+                                    let to_drain: Vec<_> = recorded_game_ids.iter().take(100).copied().collect();
+                                    for old_id in to_drain {
+                                        recorded_game_ids.remove(&old_id);
+                                    }
+                                }
+
+                                let queue_type = game_data
+                                    .get("queue")
+                                    .and_then(|q| q.get("type"))
+                                    .or_else(|| game_data.get("queueTypeName"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| {
+                                        let qid = game_data.get("queue").and_then(|q| q.get("id"))
+                                            .or_else(|| game_data.get("queueId"))
+                                            .and_then(|v| v.as_i64())
+                                            .unwrap_or(0);
+                                        match qid {
+                                            420 => "RANKED_SOLO_5x5".to_string(),
+                                            440 => "RANKED_FLEX_SR".to_string(),
+                                            450 => "ARAM".to_string(),
+                                            490 => "NORMAL".to_string(),
+                                            1700 => "CHERRY".to_string(),
+                                            _ => String::new(),
+                                        }
+                                    });
+
+                                let (self_puuid_opt, _) = history_bg.sync_local_summoner(&lcu_bg).await;
+
+                                if let Some(self_puuid) = self_puuid_opt {
+                                    if !self_puuid.is_empty() {
+                                        let (region, platform_id) = lcu_bg.get_region_and_platform().await;
+                                        let rso_platform_id = platform_id.unwrap_or_default();
+
+                                        let mut all_players = Vec::new();
+                                        if let Some(t1) = game_data.get("teamOne").and_then(|v| v.as_array()) {
+                                            for p in t1 {
+                                                if let Some(p_str) = p.get("puuid").and_then(|v| v.as_str()) {
+                                                    if !p_str.is_empty() {
+                                                        all_players.push(p_str.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if let Some(t2) = game_data.get("teamTwo").and_then(|v| v.as_array()) {
+                                            for p in t2 {
+                                                if let Some(p_str) = p.get("puuid").and_then(|v| v.as_str()) {
+                                                    if !p_str.is_empty() {
+                                                        all_players.push(p_str.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        let is_participant = all_players.iter().any(|p| p == &self_puuid);
+                                        if !is_participant {
+                                            info!(
+                                                "⚡ [HexBrain Storage] Local player {} is not a participant in game {}, skipping encounter recording",
+                                                self_puuid, game_id
+                                            );
+                                        } else {
+                                            let peer_puuids: Vec<String> = all_players
+                                                .into_iter()
+                                                .filter(|p| p != &self_puuid)
+                                                .collect();
+
+                                            if !peer_puuids.is_empty() {
+                                                let storage = storage_bg.clone();
+                                                tokio::task::spawn_blocking(move || {
+                                                    let res = storage.record_encountered_game(
+                                                        game_id,
+                                                        &self_puuid,
+                                                        &peer_puuids,
+                                                        &region,
+                                                        &rso_platform_id,
+                                                        &queue_type,
+                                                    );
+                                                    match res {
+                                                        Ok(_) => {
+                                                            info!(
+                                                                "⚡ [HexBrain Storage] Successfully recorded {} peer encounters for game {}",
+                                                                peer_puuids.len(),
+                                                                game_id
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!(
+                                                                "❌ [HexBrain Storage] Failed to record encounters for game {}: {}",
+                                                                game_id,
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Out of match: Lobby, Matchmaking, EndOfGame, etc. -> Clean up!
                 last_applied_runes_cid = 0;
                 _last_swapped_champion_id = 0;
                 last_draft_sig.clear();
+                last_champ_select_snapshot_sig.clear();
+                last_gsm_game_id = 0;
                 cached_ranked_data = None;
+                history_bg.clear_champ_select_snapshot(Some(&storage_bg)).await;
                 {
                     let mut d = draft_bg.write().await;
                     if !d.manual_positions.is_empty() {
@@ -645,5 +933,56 @@ pub async fn start_background_engine(options: BackgroundEngineOptions) -> Backgr
         ws_broadcaster: options.ws_broadcaster,
         is_aram_active,
         is_hextech_active,
+        storage,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_puuid_char_safe_prefix_formatting() {
+        let empty_puuid = "";
+        let prefix: String = empty_puuid.chars().take(6).collect();
+        assert_eq!(format!("队友 ({})", prefix), "队友 ()");
+
+        let short_puuid = "abc";
+        let prefix: String = short_puuid.chars().take(6).collect();
+        assert_eq!(format!("队友 ({})", prefix), "队友 (abc)");
+
+        let long_puuid = "1234567890abcdef";
+        let prefix: String = long_puuid.chars().take(6).collect();
+        assert_eq!(format!("队友 ({})", prefix), "队友 (123456)");
+
+        // Multi-byte Unicode chars: ensure no panic or split boundary
+        let unicode_puuid = "中文测试账号abcdef";
+        let prefix: String = unicode_puuid.chars().take(6).collect();
+        assert_eq!(prefix, "中文测试账号");
+        assert_eq!(format!("队友 ({})", prefix), "队友 (中文测试账号)");
+    }
+
+    #[test]
+    fn test_spectator_mode_participant_guard() {
+        let self_puuid = "spectator_puuid_123";
+        let all_players = vec![
+            "p1".to_string(), "p2".to_string(), "p3".to_string(), "p4".to_string(), "p5".to_string(),
+            "p6".to_string(), "p7".to_string(), "p8".to_string(), "p9".to_string(), "p10".to_string(),
+        ];
+
+        // Guard condition in runtime.rs
+        let is_participant = all_players.iter().any(|p| p == self_puuid);
+        assert!(!is_participant, "Spectator must not be identified as participant");
+
+        // When local player is in participants:
+        let mut match_players = all_players.clone();
+        match_players[0] = self_puuid.to_string();
+        let is_participant_active = match_players.iter().any(|p| p == self_puuid);
+        assert!(is_participant_active, "Active participant must be detected");
+
+        let peer_puuids: Vec<String> = match_players
+            .into_iter()
+            .filter(|p| p != self_puuid)
+            .collect();
+        assert_eq!(peer_puuids.len(), 9, "Should record exactly 9 peer encounters");
+    }
+}
+

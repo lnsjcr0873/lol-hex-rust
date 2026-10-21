@@ -25,17 +25,28 @@
           <Tag class="w-3.5 h-3.5 text-cyan-400" />
           <span>召唤师标记备注</span>
         </div>
-        <button
+
+        <NPopconfirm
           v-if="allowDelete"
-          @click="removeTag(idx)"
-          class="text-blue-400 hover:text-rose-400 transition"
-          title="移除标记"
+          positive-text="确认删除"
+          negative-text="取消"
+          :positive-button-props="{ type: 'warning', size: 'tiny' }"
+          :negative-button-props="{ size: 'tiny' }"
+          @positive-click="removeTag(tagItem, idx)"
         >
-          <X class="w-3.5 h-3.5" />
-        </button>
+          <template #trigger>
+            <button
+              class="text-blue-400 hover:text-rose-400 transition"
+              title="移除标记"
+            >
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </template>
+          确定删除该玩家的标记备注吗？
+        </NPopconfirm>
       </div>
 
-      <div class="text-[11px] text-blue-100 bg-blue-900/40 p-2 rounded-lg border border-blue-800/50">
+      <div class="text-[11px] text-blue-100 bg-blue-900/40 p-2 rounded-lg border border-blue-800/50 break-words whitespace-pre-wrap">
         {{ tagItem.tag }}
       </div>
     </div>
@@ -45,11 +56,15 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { AlertTriangle, Tag, X } from 'lucide-vue-next'
+import { NPopconfirm, useMessage } from 'naive-ui'
+import { deletePlayerTag } from '../../api/tauri'
+import type { SavedPlayerTagItem } from '../../api/types'
 
 const props = withDefaults(
   defineProps<{
     privacy?: string
-    tags?: Array<{ tag: string; selfPuuid?: string }>
+    tags?: (SavedPlayerTagItem | { tag: string; puuid?: string; selfPuuid?: string; markedBySelf?: boolean })[]
+    selfPuuid?: string
     allowDelete?: boolean
   }>(),
   {
@@ -60,8 +75,10 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   deleteTag: [index: number]
+  tagDeleted: []
 }>()
 
+const message = useMessage()
 const tagsList = ref(props.tags || [])
 
 watch(
@@ -72,8 +89,17 @@ watch(
   { deep: true }
 )
 
-function removeTag(idx: number) {
+async function removeTag(tagItem: any, idx: number) {
+  if (tagItem.puuid) {
+    try {
+      await deletePlayerTag(tagItem.puuid, tagItem.selfPuuid || props.selfPuuid)
+      message.success('已移除玩家标记')
+    } catch (err) {
+      console.warn('Failed to delete player tag via SQLite IPC:', err)
+    }
+  }
   tagsList.value.splice(idx, 1)
   emit('deleteTag', idx)
+  emit('tagDeleted')
 }
 </script>

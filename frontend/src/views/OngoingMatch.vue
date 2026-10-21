@@ -8,16 +8,23 @@
             class="w-2.5 h-2.5 rounded-full"
             :class="[
               isDemoMode ? 'bg-amber-400 animate-pulse' :
-              (matchData?.lcu_connected ? (matchData?.is_active ? 'bg-[#0ac8b9] animate-pulse' : 'bg-emerald-400') : 'bg-yellow-500/70')
+              (ongoingMatchStore.isDryRunActive ? 'bg-cyan-400 animate-pulse' :
+              (matchData?.lcu_connected ? (matchData?.is_active ? 'bg-[#0ac8b9] animate-pulse' : 'bg-emerald-400') : 'bg-yellow-500/70'))
             ]"
           ></span>
           <h2 class="text-base font-bold text-slate-100 tracking-wide">
-            {{ isDemoMode ? '模拟演练对局 (5v5 严格分路对位演示)' : (matchData?.queue_name || '实时对局侦查') }}
+            {{ ongoingMatchStore.isDryRunActive ? (ongoingMatchStore.customOngoingData?.queue_name || '历史对局战术推演') : (isDemoMode ? '模拟演练对局 (5v5 严格分路对位演示)' : (matchData?.queue_name || '实时对局侦查')) }}
           </h2>
         </div>
 
         <span
-          v-if="isDemoMode"
+          v-if="ongoingMatchStore.isDryRunActive"
+          class="px-2 py-0.5 rounded text-xs bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 font-medium"
+        >
+          草稿演练中
+        </span>
+        <span
+          v-else-if="isDemoMode"
           class="px-2 py-0.5 rounded text-xs bg-amber-950/80 border border-amber-600/50 text-amber-300 font-medium"
         >
           演练模式
@@ -44,26 +51,31 @@
 
       <!-- Quick Actions -->
       <div class="flex items-center space-x-3">
-        <!-- Chat Record Broadcast Options -->
-        <div v-if="(matchData?.is_active || isDemoMode)" class="flex items-center space-x-1.5">
+        <!-- Chat Record Broadcast Options (4 Presets) -->
+        <div v-if="(matchData?.is_active || isDemoMode)" class="flex items-center space-x-2">
           <button
             @click="sendChat(preferredBroadcastFormat)"
             :disabled="isBroadcasting"
             class="px-3 py-1.5 rounded-lg bg-[#0e273c] hover:bg-[#143452] border border-[#1b4366] text-[#38bdf8] text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 disabled:opacity-50 shadow-sm"
-            :title="preferredBroadcastFormat === 'detailed' ? '发送包含段位、胜率与车队标记的详细战绩' : '将我方 5 人近期胜率与战绩以精简格式发送到选人聊天室'"
+            :title="`发送【${getPresetName(preferredBroadcastFormat)}】至选人聊天室`"
           >
             <MessageSquare class="w-3.5 h-3.5" />
-            <span>{{ isBroadcasting ? '广播中...' : (preferredBroadcastFormat === 'detailed' ? '广播详细战绩' : '广播精简战绩') }}</span>
+            <span>{{ isBroadcasting ? '广播中...' : `一键广播【${getPresetName(preferredBroadcastFormat)}】` }}</span>
           </button>
 
-          <button
-            @click="sendChat(alternateBroadcastFormat)"
-            :disabled="isBroadcasting"
-            class="px-2.5 py-1.5 rounded-lg bg-[#0d2133] hover:bg-[#122e47] border border-[#183955] text-slate-300 hover:text-white text-xs font-medium transition active:scale-95 disabled:opacity-50"
-            :title="alternateBroadcastFormat === 'detailed' ? '发送包含段位、胜率与车队标记的详细战绩' : '将我方 5 人近期胜率与战绩以精简格式发送到选人聊天室'"
-          >
-            <span>{{ alternateBroadcastFormat === 'detailed' ? '详细版' : '精简版' }}</span>
-          </button>
+          <div class="flex items-center space-x-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800">
+            <button
+              v-for="preset in (['concise', 'detailed', 'jungle', 'premade'] as const)"
+              :key="preset"
+              @click="sendChat(preset)"
+              :disabled="isBroadcasting"
+              class="px-2 py-1 rounded text-[11px] font-medium transition"
+              :class="preferredBroadcastFormat === preset ? 'bg-[#102a42] text-cyan-300 font-bold' : 'text-slate-400 hover:text-slate-200'"
+              :title="`立即广播：${getPresetName(preset)}`"
+            >
+              {{ getPresetShortName(preset) }}
+            </button>
+          </div>
         </div>
 
         <!-- Demo Mode Toggle -->
@@ -107,7 +119,7 @@
 
     <!-- State 1: Offline / Lobby Empty State View -->
     <div
-      v-if="!isDemoMode && (!matchData?.lcu_connected || !matchData?.is_active)"
+      v-if="!ongoingMatchStore.isDryRunActive && !isDemoMode && (!matchData?.lcu_connected || !matchData?.is_active)"
       class="flex-1 flex flex-col items-center justify-center p-8 text-center"
     >
       <div class="max-w-md p-8 rounded-2xl bg-[#0c1424]/90 border border-[#192b4a] shadow-2xl flex flex-col items-center relative overflow-hidden backdrop-blur">
@@ -157,9 +169,26 @@
 
     <!-- State 2: Active 5v5 Ongoing Game Panel View -->
     <div v-else class="flex-1 flex flex-col overflow-hidden">
+      <!-- Dry Run / Draft Mode Banner -->
+      <div
+        v-if="ongoingMatchStore.isDryRunActive"
+        class="h-8 px-6 bg-cyan-950/80 border-b border-cyan-500/40 flex items-center justify-between text-xs text-cyan-300 shrink-0"
+      >
+        <span class="flex items-center space-x-1.5 font-medium">
+          <Gamepad2 class="w-3.5 h-3.5 text-cyan-400" />
+          <span>正在进行【历史战绩模拟演练】：已根据历史对局构建 5v5 战术推断面板</span>
+        </span>
+        <button
+          @click="ongoingMatchStore.clearDraft()"
+          class="text-[11px] px-2 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 border border-cyan-600/40 transition active:scale-95"
+        >
+          退出演练回到实时监听
+        </button>
+      </div>
+
       <!-- Demo Mode Banner -->
       <div
-        v-if="isDemoMode"
+        v-else-if="isDemoMode"
         class="h-8 px-6 bg-amber-950/60 border-b border-amber-600/30 flex items-center justify-between text-xs text-amber-300/90 shrink-0"
       >
         <span class="flex items-center space-x-1.5">
@@ -179,11 +208,13 @@
         <OngoingGamePanel
           :blue-team="activeBlueTeam"
           :red-team="activeRedTeam"
-          :self-puuid="matchData?.my_puuid || (isDemoMode ? 'p-blue-1' : '')"
+          :self-puuid="ongoingMatchStore.isDryRunActive ? (ongoingMatchStore.customOngoingData?.my_puuid || '') : (matchData?.my_puuid || (isDemoMode ? 'p-blue-1' : ''))"
           :selected-puuid="selectedPlayer?.puuid"
+          :is-draft="ongoingMatchStore.isDryRunActive"
           @select-player="handlePlayerSelect"
           @inspect-player="handlePlayerInspect"
           @preview-game="handlePreviewGame"
+          @exit-draft="ongoingMatchStore.clearDraft()"
         />
       </div>
     </div>
@@ -218,13 +249,16 @@ import {
   Sparkles,
   ExternalLink
 } from 'lucide-vue-next'
-import type { OngoingMatchData, PlayerCard } from '../api/types'
+import type { OngoingMatchData, PlayerCard, BroadcastPreset } from '../api/types'
 import { getOngoingMatch, sendChatRecords, toggleOngoingOverlay } from '../api/tauri'
 import { mockOngoingMatch } from '../api/mockData'
 import OngoingGamePanel from '../components/ongoing-game-panel/OngoingGamePanel.vue'
 import PlayerDetailDrawer from '../components/PlayerDetailDrawer.vue'
 import ConnectedMatchPreviewer from '../components/match-preview/ConnectedMatchPreviewer.vue'
 import type { EnhancedPlayerCard } from '../components/ongoing-game-panel/types'
+import { useOngoingMatchStore } from '../stores/ongoing-match'
+
+const ongoingMatchStore = useOngoingMatchStore()
 
 const props = withDefaults(defineProps<{
   isActive?: boolean
@@ -232,12 +266,30 @@ const props = withDefaults(defineProps<{
   isActive: true
 })
 
-function getPreferredBroadcastFormat(): 'concise' | 'detailed' {
+function getPresetName(preset: BroadcastPreset): string {
+  switch (preset) {
+    case 'concise': return '精简战绩'
+    case 'detailed': return '详细战绩'
+    case 'jungle': return '打野路径警示'
+    case 'premade': return '车队开黑警示'
+  }
+}
+
+function getPresetShortName(preset: BroadcastPreset): string {
+  switch (preset) {
+    case 'concise': return '精简'
+    case 'detailed': return '详细'
+    case 'jungle': return '打野'
+    case 'premade': return '车队'
+  }
+}
+
+function getPreferredBroadcastFormat(): BroadcastPreset {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('hexbrain_preferences') : null
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (parsed?.broadcastFormat === 'detailed' || parsed?.broadcastFormat === 'concise') {
+      if (['concise', 'detailed', 'jungle', 'premade'].includes(parsed?.broadcastFormat)) {
         return parsed.broadcastFormat
       }
     }
@@ -247,10 +299,7 @@ function getPreferredBroadcastFormat(): 'concise' | 'detailed' {
   return 'concise'
 }
 
-const preferredBroadcastFormat = ref<'concise' | 'detailed'>(getPreferredBroadcastFormat())
-const alternateBroadcastFormat = computed(() =>
-  preferredBroadcastFormat.value === 'detailed' ? 'concise' : 'detailed'
-)
+const preferredBroadcastFormat = ref<BroadcastPreset>(getPreferredBroadcastFormat())
 
 const matchData = ref<OngoingMatchData | null>(null)
 const isDemoMode = ref(false)
@@ -270,6 +319,9 @@ const handlePreviewGame = (payload: { gameId: number; puuid?: string }) => {
 }
 
 const activeBlueTeam = computed<PlayerCard[]>(() => {
+  if (ongoingMatchStore.isDryRunActive && ongoingMatchStore.customOngoingData) {
+    return ongoingMatchStore.customOngoingData.blue_team
+  }
   if (isDemoMode.value) {
     return mockOngoingMatch.blue_team
   }
@@ -277,6 +329,9 @@ const activeBlueTeam = computed<PlayerCard[]>(() => {
 })
 
 const activeRedTeam = computed<PlayerCard[]>(() => {
+  if (ongoingMatchStore.isDryRunActive && ongoingMatchStore.customOngoingData) {
+    return ongoingMatchStore.customOngoingData.red_team
+  }
   if (isDemoMode.value) {
     return mockOngoingMatch.red_team
   }
@@ -324,13 +379,18 @@ const toggleDemoMode = () => {
   }
 }
 
-const sendChat = async (format: 'concise' | 'detailed') => {
+const sendChat = async (format: BroadcastPreset) => {
   if (isBroadcasting.value) return
   isBroadcasting.value = true
   try {
     const roomId = matchData.value?.chat_room_id || ''
+    if (isDemoMode.value) {
+      await new Promise((r) => setTimeout(r, 600))
+      showToast(`[演练演示] 已成功广播【${getPresetName(format)}】至模拟聊天室！`)
+      return
+    }
     const res = await sendChatRecords(roomId, format)
-    showToast(res.message || '战绩已广播至聊天室')
+    showToast(res.message || `战绩【${getPresetName(format)}】已广播至聊天室`)
   } catch (err) {
     console.error('Chat broadcast error:', err)
     showToast('战绩广播发送失败，请确认是否处于选人阶段')

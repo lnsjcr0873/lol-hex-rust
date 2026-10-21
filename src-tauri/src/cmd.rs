@@ -1,5 +1,5 @@
 use lol_hex_rust::web::routes::{
-    build_chat_broadcast_lines, build_mock_match_detail, build_mock_match_timeline,
+    build_mock_match_detail, build_mock_match_timeline,
     convert_ongoing_card, parse_riot_match_detail,
 };
 use serde::{Deserialize, Serialize};
@@ -171,7 +171,13 @@ pub async fn send_chat_records(
     }
 
     let ongoing = state.history.get_ongoing_match(&state.lcu, &state.db).await;
-    let lines = build_chat_broadcast_lines(&ongoing.my_team, format.as_deref());
+    let preset_fmt = format.as_deref().unwrap_or("concise");
+    let lines = lol_hex_rust::engine::player_history::generate_tactical_broadcast(
+        preset_fmt,
+        &ongoing.my_team,
+        &ongoing.their_team,
+        None,
+    );
 
     if !target_room.is_empty() {
         let mut any_ok = false;
@@ -196,6 +202,36 @@ pub async fn send_chat_records(
             message: "未检测到活跃选人聊天室，请在英雄选择阶段重试".to_string(),
         })
     }
+}
+
+#[tauri::command]
+pub async fn generate_tactical_broadcast(
+    state: State<'_, TauriAppState>,
+    preset: Option<String>,
+) -> Result<Vec<String>, String> {
+    let ongoing = state.history.get_ongoing_match(&state.lcu, &state.db).await;
+    let fmt = preset.as_deref().unwrap_or("concise");
+    let lines = lol_hex_rust::engine::player_history::generate_tactical_broadcast(
+        fmt,
+        &ongoing.my_team,
+        &ongoing.their_team,
+        None,
+    );
+    Ok(lines)
+}
+
+#[tauri::command]
+pub async fn get_gsm_live_game(
+    state: State<'_, TauriAppState>,
+) -> Result<Value, String> {
+    let sum = state.lcu.get_current_summoner().await;
+    let puuid = sum.and_then(|s| s.get("puuid").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .ok_or_else(|| "Local summoner not available".to_string())?;
+    let sgp = state.history.get_sgp_client().await
+        .ok_or_else(|| "SGP client not initialized".to_string())?;
+    let gsm = sgp.get_gsm_by_puuid(&puuid).await
+        .map_err(|e| format!("Failed to query GSM: {}", e))?;
+    Ok(serde_json::to_value(gsm).unwrap_or(Value::Null))
 }
 
 #[tauri::command]
@@ -1065,5 +1101,259 @@ pub async fn is_ongoing_overlay_visible(app: AppHandle) -> Result<bool, String> 
     } else {
         Ok(false)
     }
+}
+
+// =========================================================================
+// F17 SQLite Storage, Tags & Encounter History Commands
+// =========================================================================
+
+#[tauri::command]
+pub async fn list_saved_player_tags(
+    state: State<'_, TauriAppState>,
+    puuid: Option<String>,
+    self_puuid: Option<String>,
+    region: Option<String>,
+    rso_platform_id: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    time_order: Option<String>,
+) -> Result<lol_hex_rust::storage::models::PaginatedPlayerTags, String> {
+    let query = lol_hex_rust::storage::models::QueryAllPlayerTagsDto {
+        puuid,
+        self_puuid,
+        region,
+        rso_platform_id,
+        page,
+        page_size,
+        time_order,
+    };
+    state.storage.query_all_player_tags(&query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_all_player_tags(
+    state: State<'_, TauriAppState>,
+    puuid: Option<String>,
+    self_puuid: Option<String>,
+    region: Option<String>,
+    rso_platform_id: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    time_order: Option<String>,
+) -> Result<lol_hex_rust::storage::models::PaginatedPlayerTags, String> {
+    list_saved_player_tags(state, puuid, self_puuid, region, rso_platform_id, page, page_size, time_order).await
+}
+
+#[tauri::command]
+pub async fn get_player_tag(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+) -> Result<Vec<lol_hex_rust::storage::models::SavedPlayerTagItem>, String> {
+    if puuid.trim().is_empty() {
+        return Err("Target PUUID cannot be empty".to_string());
+    }
+
+    let effective_self_puuid = match self_puuid {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            let (sp, _) = state.history.sync_local_summoner(&state.lcu).await;
+            sp.unwrap_or_default()
+        }
+    };
+
+    state.storage.get_player_tags(puuid.trim(), &effective_self_puuid)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_player_tags(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+) -> Result<Vec<lol_hex_rust::storage::models::SavedPlayerTagItem>, String> {
+    get_player_tag(state, puuid, self_puuid).await
+}
+
+#[tauri::command]
+pub async fn save_player_tag(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+    tag: Option<String>,
+    region: Option<String>,
+    rso_platform_id: Option<String>,
+) -> Result<lol_hex_rust::storage::models::SavedPlayerTagRecord, String> {
+    if puuid.trim().is_empty() {
+        return Err("Target PUUID cannot be empty".to_string());
+    }
+
+    let effective_self_puuid = match self_puuid {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            let (sp, _) = state.history.sync_local_summoner(&state.lcu).await;
+            sp.ok_or_else(|| "Local summoner PUUID cannot be determined".to_string())?
+        }
+    };
+
+    let cleaned_tag = tag.and_then(|t| {
+        let trimmed = t.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.chars().take(500).collect::<String>())
+        }
+    });
+
+    let dto = lol_hex_rust::storage::models::UpdatePlayerTagDto {
+        puuid: puuid.trim().to_string(),
+        self_puuid: effective_self_puuid,
+        region,
+        rso_platform_id,
+        tag: cleaned_tag,
+    };
+
+    state.storage.update_player_tag(&dto).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_player_tag(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+    tag: Option<String>,
+    region: Option<String>,
+    rso_platform_id: Option<String>,
+) -> Result<lol_hex_rust::storage::models::SavedPlayerTagRecord, String> {
+    save_player_tag(state, puuid, self_puuid, tag, region, rso_platform_id).await
+}
+
+#[tauri::command]
+pub async fn delete_player_tag(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+) -> Result<GenericResult, String> {
+    if puuid.trim().is_empty() {
+        return Err("Target PUUID cannot be empty".to_string());
+    }
+
+    let effective_self_puuid = match self_puuid {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            let (sp, _) = state.history.sync_local_summoner(&state.lcu).await;
+            sp.unwrap_or_default()
+        }
+    };
+
+    let deleted = state.storage.delete_saved_player(puuid.trim(), &effective_self_puuid)
+        .map_err(|e| e.to_string())?;
+
+    Ok(GenericResult {
+        success: deleted,
+        message: if deleted { None } else { Some("Tag record not found".to_string()) },
+    })
+}
+
+#[tauri::command]
+pub async fn delete_saved_player(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+) -> Result<GenericResult, String> {
+    delete_player_tag(state, puuid, self_puuid).await
+}
+
+#[tauri::command]
+pub async fn query_encountered_games(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+    queue_type: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    time_order: Option<String>,
+) -> Result<lol_hex_rust::storage::models::PaginatedEncounteredGames, String> {
+    if puuid.trim().is_empty() {
+        return Err("Target PUUID cannot be empty".to_string());
+    }
+
+    let effective_self_puuid = match self_puuid {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            let (sp, _) = state.history.sync_local_summoner(&state.lcu).await;
+            sp.unwrap_or_default()
+        }
+    };
+
+    let query = lol_hex_rust::storage::models::EncounteredGamesQueryDto {
+        puuid: puuid.trim().to_string(),
+        self_puuid: effective_self_puuid,
+        queue_type,
+        page,
+        page_size,
+        time_order,
+    };
+
+    state.storage.query_encountered_games(&query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_encountered_game(
+    state: State<'_, TauriAppState>,
+    id: i64,
+) -> Result<GenericResult, String> {
+    let deleted = state.storage.delete_encountered_game(id).map_err(|e| e.to_string())?;
+    Ok(GenericResult {
+        success: deleted,
+        message: if deleted { None } else { Some("Encounter record not found".to_string()) },
+    })
+}
+
+#[tauri::command]
+pub async fn query_saved_player_with_games(
+    state: State<'_, TauriAppState>,
+    puuid: String,
+    self_puuid: Option<String>,
+    queue_type: Option<String>,
+) -> Result<lol_hex_rust::storage::models::SavedPlayerWithGamesResult, String> {
+    if puuid.trim().is_empty() {
+        return Err("Target PUUID cannot be empty".to_string());
+    }
+
+    let effective_self_puuid = match self_puuid {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            let (sp, _) = state.history.sync_local_summoner(&state.lcu).await;
+            sp.unwrap_or_default()
+        }
+    };
+
+    state.storage.query_saved_player_with_games(puuid.trim(), &effective_self_puuid, queue_type.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_player_tag_phrases(
+    state: State<'_, TauriAppState>,
+) -> Result<Vec<String>, String> {
+    state.storage.get_player_tag_phrases().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_player_tag_phrases(
+    state: State<'_, TauriAppState>,
+    phrases: Vec<String>,
+) -> Result<Vec<String>, String> {
+    state.storage.update_player_tag_phrases(&phrases).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_player_tag_phrase_panel_expanded(
+    state: State<'_, TauriAppState>,
+    expanded: bool,
+) -> Result<bool, String> {
+    state.storage.set_phrase_panel_expanded(expanded).map_err(|e| e.to_string())
 }
 

@@ -58,6 +58,15 @@ export interface PlayerCard {
   badges: TacticalBadge[];
   premade_party?: PremadeParty;
   radar: RadarStat;
+  is_autofilled?: boolean;
+  team_participant_id?: number | null;
+}
+
+export type BroadcastPreset = 'concise' | 'detailed' | 'jungle' | 'premade';
+
+export interface ChatBroadcastResponse {
+  success: boolean;
+  message: string;
 }
 
 export interface TopChampItem {
@@ -257,3 +266,100 @@ export interface AutomationConfig {
   auto_apply_runes: boolean;
   bench_preferred_champions: string[];
 }
+
+export interface SavedPlayerTagRecord {
+  puuid: string;
+  selfPuuid: string;
+  region: string;
+  rsoPlatformId: string;
+  tag: string | null;
+  updateAt: number;
+  lastMetAt?: number | null;
+}
+
+export interface SavedPlayerTagItem {
+  puuid: string;
+  selfPuuid: string;
+  region: string;
+  rsoPlatformId: string;
+  tag: string;
+  updateAt: number;
+  lastMetAt?: number | null;
+  markedBySelf: boolean;
+}
+
+export interface PaginatedPlayerTags {
+  data: SavedPlayerTagRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages?: number;
+}
+
+export interface UpdatePlayerTagDto {
+  puuid: string;
+  selfPuuid?: string;
+  tag?: string | null;
+  region?: string | null;
+  rsoPlatformId?: string | null;
+}
+
+export interface QueryAllPlayerTagsDto {
+  puuid?: string;
+  selfPuuid?: string;
+  region?: string;
+  rsoPlatformId?: string;
+  page?: number;
+  pageSize?: number;
+  timeOrder?: 'asc' | 'desc';
+}
+
+export interface EncounteredGameRecord {
+  id: number;
+  gameId: number;
+  puuid: string;
+  selfPuuid: string;
+  region: string;
+  rsoPlatformId: string;
+  updateAt: number;
+  queueType: string;
+}
+
+export interface PaginatedEncounteredGames {
+  data: EncounteredGameRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages?: number;
+}
+
+export interface QueryEncounteredGamesDto {
+  puuid: string;
+  selfPuuid?: string;
+  queueType?: string;
+  page?: number;
+  pageSize?: number;
+  timeOrder?: 'asc' | 'desc';
+}
+
+export interface GenericResult {
+  success: boolean;
+  message?: string | null;
+}
+
+export interface DraftOptions {
+  gameModeKind: 'cherry' | 'normal';
+  queueId: number;
+  puuid: string | null;
+  teams: Record<string, string[]>;
+  championSelections: Record<string, number>;
+  positions: Record<
+    string,
+    {
+      selected: string;
+      primary: string;
+      secondary: string;
+    }
+  > | null;
+}
+

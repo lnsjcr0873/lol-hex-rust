@@ -14,6 +14,21 @@
 
       <!-- Action buttons -->
       <div class="flex items-center space-x-2 shrink-0">
+        <!-- Dry-Run Ongoing Game Simulation Action -->
+        <NTooltip v-if="canDryRunOngoingGame">
+          <template #trigger>
+            <button
+              @click="dryRunOngoingGame"
+              class="px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/50 text-emerald-300 flex items-center space-x-1.5 transition active:scale-95 shadow-sm"
+              title="在对局页模拟演练"
+            >
+              <NIcon size="14"><Games24Filled /></NIcon>
+              <span>模拟演练</span>
+            </button>
+          </template>
+          在对局页模拟演练 (构建 5v5 战术推断面板)
+        </NTooltip>
+
         <button
           v-if="details"
           @click="loadDetails(basicInfo.gameId)"
@@ -47,6 +62,8 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { Games24Filled } from '@vicons/fluent'
+import { NIcon, NTooltip } from 'naive-ui'
 import { useMatchCard } from './context'
 import { useCardBorderClass } from './utils/theme'
 import TabSwitch from './widgets/TabSwitch.vue'
@@ -58,7 +75,8 @@ import MatchCardBuildsTab from './tabs/MatchCardBuildsTab.vue'
 import MatchCardEventsTab from './tabs/MatchCardEventsTab.vue'
 import MatchCardTimelineTab from './tabs/MatchCardTimelineTab.vue'
 
-const { team, basicInfo, participant, details, loadDetails } = useMatchCard()
+const { team, basicInfo, participant, details, loadDetails, canDryRunOngoingGame, dryRunOngoingGame } = useMatchCard()
+
 
 const selectedTab = ref('summary')
 

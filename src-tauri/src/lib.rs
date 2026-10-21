@@ -7,6 +7,7 @@ use lol_hex_rust::config::ConfigManager;
 use lol_hex_rust::data::loader::Database;
 use lol_hex_rust::engine::PlayerHistoryManager;
 use lol_hex_rust::lcu::LcuClient;
+use lol_hex_rust::storage::StorageManager;
 use lol_hex_rust::runtime::{start_background_engine, BackgroundEngineOptions};
 
 use tauri::Manager;
@@ -16,6 +17,7 @@ pub struct TauriAppState {
     pub history: Arc<PlayerHistoryManager>,
     pub db: Arc<Database>,
     pub config: Arc<ConfigManager>,
+    pub storage: Arc<StorageManager>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,11 +40,14 @@ pub fn run() {
             history: engine.history.clone(),
             db: engine.db.clone(),
             config: engine.config.clone(),
+            storage: engine.storage.clone(),
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             cmd::get_ongoing_match,
             cmd::send_chat_records,
+            cmd::generate_tactical_broadcast,
+            cmd::get_gsm_live_game,
             cmd::get_lcu_status,
             cmd::get_summoner_profile,
             cmd::get_match_history,
@@ -60,7 +65,22 @@ pub fn run() {
             cmd::toggle_ongoing_overlay,
             cmd::set_ongoing_overlay_visible,
             cmd::set_ongoing_overlay_always_on_top,
-            cmd::is_ongoing_overlay_visible
+            cmd::is_ongoing_overlay_visible,
+            // F17 SQLite Storage & Career History Commands
+            cmd::list_saved_player_tags,
+            cmd::get_player_tag,
+            cmd::save_player_tag,
+            cmd::delete_player_tag,
+            cmd::query_encountered_games,
+            cmd::delete_encountered_game,
+            cmd::query_saved_player_with_games,
+            cmd::get_player_tag_phrases,
+            cmd::update_player_tag_phrases,
+            cmd::set_player_tag_phrase_panel_expanded,
+            cmd::get_all_player_tags,
+            cmd::get_player_tags,
+            cmd::update_player_tag,
+            cmd::delete_saved_player
         ])
         .on_window_event(|window, event| {
             match event {

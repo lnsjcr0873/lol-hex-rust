@@ -22,13 +22,19 @@
       />
     </div>
 
-    <!-- Players Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 items-stretch">
+    <!-- Dynamic Multi-Column Grid (3~8 Columns) -->
+    <div
+      class="grid gap-2.5 items-stretch"
+      :style="{
+        gridTemplateColumns: `repeat(${columnsNeed}, minmax(0, 1fr))`
+      }"
+    >
       <PlayerInfoCard
         v-for="player of players"
         :key="player.puuid"
         :player="player"
         :selected="selectedPuuid === player.puuid"
+        :style="linesPerTeam === 1 ? { minHeight: '380px' } : { minHeight: '340px' }"
       />
     </div>
   </div>
@@ -38,6 +44,7 @@
 import type { EnhancedPlayerCard, PremadeGroup } from '../types'
 import TeamTagsArea from './TeamTagsArea.vue'
 import PlayerInfoCard from './player-info-card/PlayerInfoCard.vue'
+import { useOngoingGamePanel } from '../context'
 
 defineProps<{
   teamId: 'blue' | 'red'
@@ -45,4 +52,6 @@ defineProps<{
   premadeGroups: PremadeGroup[]
   selectedPuuid?: string
 }>()
+
+const { columnsNeed, linesPerTeam } = useOngoingGamePanel()
 </script>
